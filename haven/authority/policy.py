@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from haven.core.domain import (
     ActionKind,
     ActionRequest,
     AuthorityDecision,
+    ChangeOrigin,
     DecisionCode,
     DecisionStatus,
     Principal,
@@ -17,6 +18,21 @@ from haven.core.domain import (
     RuleStatus,
     WorldSnapshot,
 )
+from haven.devices import ControlClass, DeviceRegistry, UnknownCapability, UnknownDevice
+
+
+# "A recent explicit human action beats automation." 90 minutes is a starting
+# default, not a tuned value -- pass a different `human_override_window` to
+# AuthorityEngine to change it per household or per deployment.
+HUMAN_OVERRIDE_WINDOW = timedelta(minutes=90)
+
+# Fail closed by default: evidence below full confidence (1.0) -- e.g. a
+# vision or IR observation, which is inherently probabilistic rather than a
+# device's own reported state -- cannot authorize an action unless a
+# household explicitly lowers this via `minimum_confidence`. This keeps
+# probabilistic perception an opt-in capability rather than a silent
+# default, matching Haven Core working with zero cameras.
+DEFAULT_MINIMUM_CONFIDENCE = 1.0
 
 
 SAFE_AUTOMATIC = frozenset(
@@ -37,6 +53,18 @@ CONFIRMATION_REQUIRED = frozenset(
 )
 FORBIDDEN = frozenset({ActionKind.UNSCOPED_EXECUTION})
 
+# A device's declared ControlClass maps onto the same RiskTier vocabulary
+# used for the closed ActionKind set below, so both paths are judged by the
+# same AuthorityEngine branches. READ never reaches AuthorityEngine.decide()
+# (only a write action produces an ActionRequest), but it is mapped for
+# completeness rather than left to raise.
+CONTROL_CLASS_RISK = {
+    ControlClass.READ: RiskTier.SAFE_AUTOMATIC,
+    ControlClass.LOW_RISK: RiskTier.SAFE_AUTOMATIC,
+    ControlClass.MEDIUM: RiskTier.CONDITIONAL,
+    ControlClass.GUARDED: RiskTier.CONFIRMATION_REQUIRED,
+}
+
 
 def risk_for(action_kind: ActionKind) -> RiskTier:
     if action_kind in SAFE_AUTOMATIC:
@@ -50,8 +78,45 @@ def risk_for(action_kind: ActionKind) -> RiskTier:
     return RiskTier.FORBIDDEN
 
 
+def risk_for_request(request: ActionRequest, *, device_registry: DeviceRegistry | None) -> tuple[RiskTier, DecisionCode | None]:
+    """Resolve risk from a device's declared capability when one is named.
+
+    A request that names no capability is classified by the closed
+    `ActionKind` set, exactly as before. A request that does name a
+    capability is classified from that device's manifest instead -- and if
+    the device or capability cannot be resolved, the result is FORBIDDEN
+    with UNKNOWN_CAPABILITY rather than silently falling back to
+    `ActionKind`, since a caller that names a capability is asserting the
+    manifest is authoritative for this decision.
+    """
+
+    if request.capability is None:
+        return risk_for(request.action_kind), None
+    if device_registry is None:
+        return RiskTier.FORBIDDEN, DecisionCode.UNKNOWN_CAPABILITY
+    try:
+        manifest = device_registry.get(request.target_device_id)
+        capability = manifest.capability(request.capability)
+    except (UnknownDevice, UnknownCapability):
+        return RiskTier.FORBIDDEN, DecisionCode.UNKNOWN_CAPABILITY
+    if not capability.writable:
+        return RiskTier.FORBIDDEN, DecisionCode.UNKNOWN_CAPABILITY
+    return CONTROL_CLASS_RISK[capability.control_class], None
+
+
 class AuthorityEngine:
     """Evaluate a request against scope, evidence, lifecycle, and risk."""
+
+    def __init__(
+        self,
+        *,
+        device_registry: DeviceRegistry | None = None,
+        human_override_window: timedelta = HUMAN_OVERRIDE_WINDOW,
+        minimum_confidence: float = DEFAULT_MINIMUM_CONFIDENCE,
+    ) -> None:
+        self.device_registry = device_registry
+        self.human_override_window = human_override_window
+        self.minimum_confidence = minimum_confidence
 
     def decide(
         self,
@@ -114,10 +179,23 @@ class AuthorityEngine:
                 DecisionCode.NEEDS_CLARIFICATION,
                 "the approved rule still contains unresolved interpretation items",
             )
+        if rule.draft.expires_at is not None and now > rule.draft.expires_at:
+            return AuthorityDecision(
+                DecisionStatus.DENY,
+                DecisionCode.RULE_EXPIRED,
+                "this rule's expires_at has passed; it can no longer authorize an action",
+            )
+        if rule.draft.target_selector is not None:
+            resolved = self.device_registry.resolve(rule.draft.target_selector) if self.device_registry else ()
+            device_matches = request.target_device_id in resolved
+        else:
+            device_matches = request.target_device_id == rule.draft.target_device_id
+
         if (
             request.action_kind != rule.draft.action_kind
-            or request.target_device_id != rule.draft.target_device_id
+            or not device_matches
             or request.parameters != rule.draft.parameters
+            or request.capability != rule.draft.capability
         ):
             return AuthorityDecision(
                 DecisionStatus.DENY,
@@ -125,7 +203,13 @@ class AuthorityEngine:
                 "the requested action must match the approved rule exactly",
             )
 
-        risk = risk_for(request.action_kind)
+        risk, risk_code = risk_for_request(request, device_registry=self.device_registry)
+        if risk_code is not None:
+            return AuthorityDecision(
+                DecisionStatus.DENY,
+                risk_code,
+                "the request names a capability that its device manifest does not authorize",
+            )
         if risk == RiskTier.FORBIDDEN:
             return AuthorityDecision(
                 DecisionStatus.DENY,
@@ -141,7 +225,12 @@ class AuthorityEngine:
                     "a brightness action requires an explicit brightness_pct parameter",
                 )
 
-        trigger_active, trigger_code = world.evaluate_trigger(rule.draft, at=now)
+        trigger_active, trigger_code = world.evaluate_trigger(
+            rule.draft,
+            at=now,
+            target_device_id=request.target_device_id,
+            minimum_confidence=self.minimum_confidence,
+        )
         if not trigger_active:
             if trigger_code == DecisionCode.EVIDENCE_UNAVAILABLE:
                 return AuthorityDecision(
@@ -161,11 +250,32 @@ class AuthorityEngine:
                     trigger_code,
                     "required household evidence is missing",
                 )
+            if trigger_code == DecisionCode.LOW_CONFIDENCE_EVIDENCE:
+                return AuthorityDecision(
+                    DecisionStatus.UNAVAILABLE,
+                    trigger_code,
+                    "required household evidence is below this engine's minimum_confidence",
+                )
             return AuthorityDecision(
                 DecisionStatus.DENY,
                 trigger_code,
                 "the approved rule trigger is not active",
             )
+
+        # A human who just touched this device directly outranks automation,
+        # regardless of risk tier: this is checked before CONFIRMATION_REQUIRED
+        # so a fresh manual change suspends a rule outright rather than merely
+        # asking for confirmation to override it.
+        device_state = world.device_for(request.target_device_id)
+        if device_state is not None and device_state.changed_by == ChangeOrigin.HUMAN:
+            since_change = now - device_state.observed_at
+            if since_change <= self.human_override_window:
+                return AuthorityDecision(
+                    DecisionStatus.DENY,
+                    DecisionCode.HUMAN_OVERRIDE_ACTIVE,
+                    "a household member changed this device directly within the "
+                    "override window; automation is suspended until it expires",
+                )
 
         if risk == RiskTier.CONFIRMATION_REQUIRED:
             token = request.confirmation_token
@@ -197,7 +307,11 @@ class AuthorityEngine:
 __all__ = [
     "AuthorityEngine",
     "CONFIRMATION_REQUIRED",
+    "CONTROL_CLASS_RISK",
+    "DEFAULT_MINIMUM_CONFIDENCE",
     "FORBIDDEN",
+    "HUMAN_OVERRIDE_WINDOW",
     "SAFE_AUTOMATIC",
     "risk_for",
+    "risk_for_request",
 ]

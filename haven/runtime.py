@@ -272,8 +272,77 @@ class HavenRuntime:
         now: datetime,
         confirmation_token: ConfirmationToken | None = None,
     ) -> ActionReceipt:
-        now = require_aware_utc(now, name="action time")
+        """Run a single-device rule against its one `target_device_id`.
+
+        A selector-based rule has no single device to run this way; use
+        `run_rule_for_group()` instead.
+        """
+
         rule = self.store.get_rule(rule_id)
+        if rule.draft.target_device_id is None:
+            raise ValueError(
+                f"rule {rule_id} targets a device selector, not one device_id; "
+                "use run_rule_for_group() instead"
+            )
+        return self._execute_against_device(
+            rule,
+            rule.draft.target_device_id,
+            principal=principal,
+            world=world,
+            justification=justification,
+            now=now,
+            confirmation_token=confirmation_token,
+        )
+
+    def run_rule_for_group(
+        self,
+        rule_id: str,
+        *,
+        principal: Principal,
+        world: WorldSnapshot,
+        justification: str,
+        now: datetime,
+    ) -> tuple[ActionReceipt, ...]:
+        """Run a selector-based rule once per device it currently resolves to.
+
+        Each resolved device gets its own independent request, decision, and
+        receipt -- a GUARDED device blocking on confirmation does not hold up
+        a LOW_RISK device in the same group, and vice versa. Confirmation
+        tokens are not supported here yet: a resolved device with a
+        CONFIRMATION_REQUIRED capability will come back blocked, the same as
+        calling `run_rule()` with no token.
+        """
+
+        rule = self.store.get_rule(rule_id)
+        if rule.draft.target_selector is None:
+            raise ValueError(f"rule {rule_id} targets one device_id, not a selector; use run_rule() instead")
+        registry = self.authority.device_registry
+        device_ids = registry.resolve(rule.draft.target_selector) if registry is not None else ()
+        return tuple(
+            self._execute_against_device(
+                rule,
+                device_id,
+                principal=principal,
+                world=world,
+                justification=justification,
+                now=now,
+                confirmation_token=None,
+            )
+            for device_id in device_ids
+        )
+
+    def _execute_against_device(
+        self,
+        rule: Rule,
+        target_device_id: str,
+        *,
+        principal: Principal,
+        world: WorldSnapshot,
+        justification: str,
+        now: datetime,
+        confirmation_token: ConfirmationToken | None,
+    ) -> ActionReceipt:
+        now = require_aware_utc(now, name="action time")
         request_id = confirmation_token.request_id if confirmation_token is not None else _new_id("request")
         request = ActionRequest(
             request_id=request_id,
@@ -281,12 +350,13 @@ class HavenRuntime:
             requested_by=principal.actor_id,
             rule_id=rule.rule_id,
             action_kind=rule.draft.action_kind,
-            target_device_id=rule.draft.target_device_id,
+            target_device_id=target_device_id,
             parameters=rule.draft.parameters,
             justification=justification,
             evidence_snapshot_id=world.snapshot_id,
             requested_at=now,
             confirmation_token=confirmation_token,
+            capability=rule.draft.capability,
         )
         decision = self.authority.decide(
             request,
@@ -300,7 +370,7 @@ class HavenRuntime:
             ),
         )
         evidence = (
-            world.evidence_for_rule(rule.draft)
+            world.evidence_for_rule(rule.draft, target_device_id=target_device_id, at=now)
             if world.household_id == self.store.household_id and principal.household_id == self.store.household_id
             else ()
         )
@@ -352,7 +422,7 @@ class HavenRuntime:
         command = DeviceCommand(
             request_id=request.request_id,
             target_device_id=request.target_device_id,
-            service=self._service_for(rule.draft.action_kind),
+            service=self._service_for_device(rule.draft, target_device_id),
             parameters=request.parameters,
             requested_at=now,
         )
@@ -380,6 +450,25 @@ class HavenRuntime:
             device_result=result,
             event_ids=(authorized_event.event_id, executed_event.event_id),
         )
+
+    def _service_for_device(self, draft: RuleDraft, target_device_id: str) -> str:
+        """Route an approved draft to a provider service for one device.
+
+        A capability draft is routed through the device manifest that
+        `AuthorityEngine` already used to authorize it -- by the time this
+        runs, `decide()` has already returned ALLOW for this same device and
+        `draft.capability` against `self.authority.device_registry`, so the
+        device, capability, and its declared `service` are known to resolve.
+        `target_device_id` is passed explicitly rather than read from
+        `draft.target_device_id`, since a selector-based draft has none of
+        its own. A draft with no capability keeps the original ActionKind
+        mapping, which does not vary per device.
+        """
+
+        if draft.capability is None:
+            return self._service_for(draft.action_kind)
+        manifest = self.authority.device_registry.get(target_device_id)
+        return manifest.capability(draft.capability).service
 
     @staticmethod
     def _service_for(action_kind) -> str:
