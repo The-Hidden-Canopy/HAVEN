@@ -80,6 +80,7 @@ class ActionReceipt:
                 "rule_id": request.rule_id,
                 "action_kind": request.action_kind.value,
                 "target_device_id": request.target_device_id,
+                "capability": request.capability,
                 "parameters": {key: _json_value(value) for key, value in request.parameters},
                 "justification": request.justification,
                 "evidence_snapshot_id": request.evidence_snapshot_id,

@@ -20,6 +20,11 @@ def _require_text(value: str, *, name: str) -> str:
     return value.strip()
 
 
+def _require_confidence(value: float, *, name: str) -> None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0.0 <= value <= 1.0:
+        raise ValueError(f"{name} must be a number between 0.0 and 1.0")
+
+
 def _normalize_parameters(
     parameters: Mapping[str, Any] | Iterable[tuple[str, Any]],
 ) -> tuple[tuple[str, Any], ...]:
@@ -88,12 +93,16 @@ class DecisionCode(str, Enum):
     NEEDS_CLARIFICATION = "needs_clarification"
     RULE_NOT_APPROVED = "rule_not_approved"
     RULE_APPROVAL_INSUFFICIENT = "rule_approval_insufficient"
+    RULE_EXPIRED = "rule_expired"
     ACTION_MISMATCH = "action_mismatch"
     CLARIFICATION_MISMATCH = "clarification_mismatch"
     FORBIDDEN_ACTION = "forbidden_action"
+    UNKNOWN_CAPABILITY = "unknown_capability"
+    HUMAN_OVERRIDE_ACTIVE = "human_override_active"
     STALE_EVIDENCE = "stale_evidence"
     EVIDENCE_UNAVAILABLE = "evidence_unavailable"
     EVIDENCE_MISSING = "evidence_missing"
+    LOW_CONFIDENCE_EVIDENCE = "low_confidence_evidence"
     TRIGGER_NOT_ACTIVE = "trigger_not_active"
     CONFIRMATION_REQUIRED = "confirmation_required"
     CONFIRMATION_REUSED = "confirmation_reused"
@@ -120,6 +129,20 @@ class TransitionKind(str, Enum):
     RECORD_EXECUTION = "record_execution"
     RECORD_BLOCK = "record_block"
     RECORD_RULE_DECISION = "record_rule_decision"
+
+
+class ChangeOrigin(str, Enum):
+    """Who last changed a device's observed state.
+
+    This is deliberately binary rather than an exhaustive actor taxonomy:
+    the only thing `AuthorityEngine` needs to decide is whether a household
+    member just touched this device directly, which should suspend
+    automation for a window, versus everything else (an automation, the
+    initial/unknown state), which should not.
+    """
+
+    HUMAN = "human"
+    SYSTEM = "system"
 
 
 class EventType(str, Enum):
@@ -171,12 +194,14 @@ class PresenceState:
     observed_at: datetime
     source: str
     status: EvidenceStatus = EvidenceStatus.OBSERVED
+    confidence: float = 1.0
 
     def __post_init__(self) -> None:
         _require_text(self.person_id, name="person_id")
         _require_text(self.room_id, name="room_id")
         if not isinstance(self.status, EvidenceStatus):
             raise ValueError("presence status must be an EvidenceStatus")
+        _require_confidence(self.confidence, name="presence confidence")
         object.__setattr__(self, "observed_at", require_aware_utc(self.observed_at, name="observed_at"))
         _require_text(self.source, name="presence source")
 
@@ -188,11 +213,13 @@ class ContextState:
     observed_at: datetime
     source: str
     status: EvidenceStatus = EvidenceStatus.OBSERVED
+    confidence: float = 1.0
 
     def __post_init__(self) -> None:
         _require_text(self.context_id, name="context_id")
         if not isinstance(self.status, EvidenceStatus):
             raise ValueError("context status must be an EvidenceStatus")
+        _require_confidence(self.confidence, name="context confidence")
         object.__setattr__(self, "observed_at", require_aware_utc(self.observed_at, name="observed_at"))
         _require_text(self.source, name="context source")
 
@@ -207,6 +234,8 @@ class DeviceState:
     observed_at: datetime
     source: str
     status: EvidenceStatus = EvidenceStatus.OBSERVED
+    changed_by: ChangeOrigin = ChangeOrigin.SYSTEM
+    confidence: float = 1.0
 
     def __post_init__(self) -> None:
         _require_text(self.device_id, name="device_id")
@@ -214,10 +243,90 @@ class DeviceState:
         _require_text(self.room_id, name="device room_id")
         if not isinstance(self.status, EvidenceStatus):
             raise ValueError("device status must be an EvidenceStatus")
+        if not isinstance(self.changed_by, ChangeOrigin):
+            raise ValueError("changed_by must be a ChangeOrigin")
+        _require_confidence(self.confidence, name="device confidence")
         if self.brightness_pct is not None and not 0 <= self.brightness_pct <= 100:
             raise ValueError("brightness_pct must be between 0 and 100")
         object.__setattr__(self, "observed_at", require_aware_utc(self.observed_at, name="observed_at"))
         _require_text(self.source, name="device source")
+
+
+@dataclass(frozen=True)
+class DeviceSelector:
+    """A resolvable request for "every device like this", not one device_id.
+
+    A rule normally names one `target_device_id`. A selector lets it instead
+    say "every light in the bedroom" and have that resolved against the
+    device registry at run time -- so "turn off all the bedroom lights"
+    fans out to whichever concrete devices currently match, including a
+    switch wired to a lamp, without the rule being rewritten when a device
+    is added or renamed.
+    """
+
+    role: str | None = None
+    room: str | None = None
+    device_type: str | None = None
+    requires_capability: str | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in ("role", "room", "device_type", "requires_capability"):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(self, field_name, _require_text(value, name=field_name))
+        if self.role is None and self.room is None and self.device_type is None and self.requires_capability is None:
+            raise ValueError("a device selector must constrain at least one of role, room, device_type, requires_capability")
+
+
+@dataclass(frozen=True)
+class Prediction:
+    """A declared, explainable forecast from a prediction provider.
+
+    Nothing in Haven Core produces predictions; this is the contract a
+    prediction engine (a world model, Ghost Teacher) plugs into. A
+    prediction is not an observation -- it can only authorize an action
+    through a rule that explicitly declared a `PredictionTrigger` for it,
+    and the receipt records it as DECLARED evidence rather than observed
+    fact.
+    """
+
+    event: str
+    subject_id: str
+    confidence: float
+    explanation: str
+    observed_at: datetime
+    source: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "event", _require_text(self.event, name="prediction event"))
+        object.__setattr__(self, "subject_id", _require_text(self.subject_id, name="prediction subject_id"))
+        _require_confidence(self.confidence, name="prediction confidence")
+        object.__setattr__(self, "explanation", _require_text(self.explanation, name="prediction explanation"))
+        object.__setattr__(self, "observed_at", require_aware_utc(self.observed_at, name="observed_at"))
+        object.__setattr__(self, "source", _require_text(self.source, name="prediction source"))
+
+
+@dataclass(frozen=True)
+class PredictionTrigger:
+    """A rule trigger that fires on a predicted event, not observed presence.
+
+    The rule declares the bar it trusts: a prediction of this event must
+    meet `min_confidence` before it can authorize anything. Predictions are
+    inherently probabilistic, so they are judged by this declared bar
+    rather than by the engine's `minimum_confidence` for observed evidence
+    (which defaults to fail-closed at 1.0). `subject_id` optionally pins the
+    trigger to predictions about one room or device.
+    """
+
+    event: str
+    min_confidence: float
+    subject_id: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "event", _require_text(self.event, name="prediction trigger event"))
+        _require_confidence(self.min_confidence, name="prediction trigger min_confidence")
+        if self.subject_id is not None:
+            object.__setattr__(self, "subject_id", _require_text(self.subject_id, name="prediction trigger subject_id"))
 
 
 @dataclass(frozen=True)
@@ -227,14 +336,18 @@ class RuleDraft:
     proposed_by: str
     source_text: str
     interpretation: str
-    trigger_person_id: str
-    trigger_room_id: str
-    required_context: str | None
     action_kind: ActionKind
-    target_device_id: str
+    trigger_person_id: str | None = None
+    trigger_room_id: str | None = None
+    required_context: str | None = None
+    prediction_trigger: PredictionTrigger | None = None
+    target_device_id: str | None = None
     parameters: tuple[tuple[str, Any], ...] = ()
     assumptions: tuple[str, ...] = ()
     unresolved: tuple[str, ...] = ()
+    capability: str | None = None
+    target_selector: DeviceSelector | None = None
+    expires_at: datetime | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -243,15 +356,33 @@ class RuleDraft:
             "proposed_by",
             "source_text",
             "interpretation",
-            "trigger_person_id",
-            "trigger_room_id",
-            "target_device_id",
         ):
             _require_text(getattr(self, field_name), name=field_name)
         if not isinstance(self.action_kind, ActionKind):
             raise ValueError("action_kind must be an ActionKind")
+        has_person = self.trigger_person_id is not None
+        has_room = self.trigger_room_id is not None
+        if has_person != has_room:
+            raise ValueError("a presence trigger requires both trigger_person_id and trigger_room_id")
+        if has_person == (self.prediction_trigger is not None):
+            raise ValueError("a rule draft must set exactly one of a presence trigger or a prediction_trigger")
+        if self.trigger_person_id is not None:
+            object.__setattr__(self, "trigger_person_id", _require_text(self.trigger_person_id, name="trigger_person_id"))
+            object.__setattr__(self, "trigger_room_id", _require_text(self.trigger_room_id, name="trigger_room_id"))
+        if self.prediction_trigger is not None and not isinstance(self.prediction_trigger, PredictionTrigger):
+            raise ValueError("prediction_trigger must be a PredictionTrigger")
         if self.required_context is not None:
             _require_text(self.required_context, name="required_context")
+        if self.expires_at is not None:
+            object.__setattr__(self, "expires_at", require_aware_utc(self.expires_at, name="expires_at"))
+        if self.capability is not None:
+            object.__setattr__(self, "capability", _require_text(self.capability, name="capability"))
+        if self.target_selector is not None and not isinstance(self.target_selector, DeviceSelector):
+            raise ValueError("target_selector must be a DeviceSelector")
+        if (self.target_device_id is None) == (self.target_selector is None):
+            raise ValueError("a rule draft must set exactly one of target_device_id or target_selector")
+        if self.target_device_id is not None:
+            object.__setattr__(self, "target_device_id", _require_text(self.target_device_id, name="target_device_id"))
         object.__setattr__(self, "parameters", _normalize_parameters(self.parameters))
         object.__setattr__(self, "assumptions", tuple(_require_text(v, name="assumption") for v in self.assumptions))
         object.__setattr__(self, "unresolved", tuple(_require_text(v, name="unresolved item") for v in self.unresolved))
@@ -286,6 +417,7 @@ class WorldSnapshot:
     presence: tuple[PresenceState, ...] = ()
     contexts: tuple[ContextState, ...] = ()
     devices: tuple[DeviceState, ...] = ()
+    predictions: tuple[Prediction, ...] = ()
 
     def __post_init__(self) -> None:
         _require_text(self.snapshot_id, name="snapshot_id")
@@ -299,6 +431,7 @@ class WorldSnapshot:
         object.__setattr__(self, "presence", tuple(self.presence))
         object.__setattr__(self, "contexts", tuple(self.contexts))
         object.__setattr__(self, "devices", tuple(self.devices))
+        object.__setattr__(self, "predictions", tuple(self.predictions))
         for state in (*self.presence, *self.contexts, *self.devices):
             if not isinstance(state, (PresenceState, ContextState, DeviceState)):
                 raise ValueError("world snapshot collections contain an invalid state value")
@@ -306,6 +439,11 @@ class WorldSnapshot:
                 continue
             if state.observed_at > valid_until:
                 raise ValueError("evidence cannot be observed after snapshot validity")
+        for prediction in self.predictions:
+            if not isinstance(prediction, Prediction):
+                raise ValueError("world snapshot predictions contain an invalid value")
+            if prediction.observed_at > valid_until:
+                raise ValueError("a prediction cannot be made after snapshot validity")
 
     def _fresh_observation(self, *, status: EvidenceStatus, observed_at: datetime, at: datetime) -> bool:
         at = require_aware_utc(at, name="decision time")
@@ -315,61 +453,158 @@ class WorldSnapshot:
             and observed_at <= at
         )
 
-    def _evidence_problem(self, *, status: EvidenceStatus, observed_at: datetime, at: datetime) -> DecisionCode | None:
+    def evidence_problem(
+        self, *, status: EvidenceStatus, observed_at: datetime, confidence: float, at: datetime, minimum_confidence: float
+    ) -> DecisionCode | None:
         at = require_aware_utc(at, name="decision time")
         if status == EvidenceStatus.UNAVAILABLE:
             return DecisionCode.EVIDENCE_UNAVAILABLE
+        if confidence < minimum_confidence:
+            return DecisionCode.LOW_CONFIDENCE_EVIDENCE
         if not self._fresh_observation(status=status, observed_at=observed_at, at=at):
             return DecisionCode.STALE_EVIDENCE
         return None
 
-    def evaluate_trigger(self, draft: RuleDraft, *, at: datetime) -> tuple[bool, DecisionCode]:
-        """Evaluate the rule trigger without treating missing evidence as false."""
+    def _matching_prediction(self, trigger: PredictionTrigger, *, at: datetime) -> Prediction | None:
+        candidates = [
+            prediction
+            for prediction in self.predictions
+            if prediction.event == trigger.event
+            and (trigger.subject_id is None or prediction.subject_id == trigger.subject_id)
+            and prediction.observed_at <= at
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda prediction: prediction.observed_at)
+
+    def _prediction_problem(self, trigger: PredictionTrigger, *, at: datetime) -> DecisionCode | None:
+        """Judge a prediction trigger against its own declared min_confidence.
+
+        This is deliberately separate from `evidence_problem`: a prediction
+        is judged against the bar the rule itself declared when it was
+        approved, not against `AuthorityEngine.minimum_confidence` (which
+        governs observed evidence and defaults to fail-closed at 1.0). A
+        household approves a prediction-triggered rule precisely because it
+        has already decided what confidence bar that specific rule should
+        run at.
+        """
+
+        prediction = self._matching_prediction(trigger, at=at)
+        if prediction is None:
+            return DecisionCode.EVIDENCE_MISSING
+        if prediction.confidence < trigger.min_confidence:
+            return DecisionCode.LOW_CONFIDENCE_EVIDENCE
+        return None
+
+    def prediction_evidence(self, trigger: PredictionTrigger, *, at: datetime) -> Prediction | None:
+        return self._matching_prediction(trigger, at=at)
+
+    def device_for(self, device_id: str) -> DeviceState | None:
+        return next((item for item in self.devices if item.device_id == device_id), None)
+
+    def presence_for(self, person_id: str, room_id: str) -> PresenceState | None:
+        return next(
+            (item for item in self.presence if item.person_id == person_id and item.room_id == room_id), None
+        )
+
+    def context_for(self, context_id: str) -> ContextState | None:
+        return next((item for item in self.contexts if item.context_id == context_id), None)
+
+    def evaluate_trigger(
+        self,
+        draft: RuleDraft,
+        *,
+        at: datetime,
+        target_device_id: str,
+        minimum_confidence: float = 0.0,
+    ) -> tuple[bool, DecisionCode]:
+        """Evaluate the rule trigger without treating missing evidence as false.
+
+        `target_device_id` is passed explicitly rather than read from
+        `draft.target_device_id`, since a selector-based draft has no single
+        device of its own -- the caller resolves the selector to a concrete
+        device first and evaluates the trigger once per resolved device.
+
+        `minimum_confidence` defaults to 0.0 (accept anything): a probabilistic
+        observation -- from a vision or IR provider, say -- carries a
+        `confidence` below 1.0, and a caller that wants to require a higher
+        bar before trusting it (e.g. `AuthorityEngine.minimum_confidence`)
+        passes that threshold in explicitly rather than this method assuming
+        one.
+        """
 
         at = require_aware_utc(at, name="decision time")
-        presence = next(
-            (
-                item
-                for item in self.presence
-                if item.person_id == draft.trigger_person_id and item.room_id == draft.trigger_room_id
-            ),
-            None,
-        )
-        if presence is None:
-            return False, DecisionCode.EVIDENCE_MISSING
-        issue = self._evidence_problem(status=presence.status, observed_at=presence.observed_at, at=at)
-        if issue is not None:
-            return False, issue
-        if not presence.present:
-            return False, DecisionCode.TRIGGER_NOT_ACTIVE
 
-        if draft.required_context is not None:
-            context = next((item for item in self.contexts if item.context_id == draft.required_context), None)
-            if context is None:
-                return False, DecisionCode.EVIDENCE_MISSING
-            issue = self._evidence_problem(status=context.status, observed_at=context.observed_at, at=at)
+        if draft.prediction_trigger is not None:
+            issue = self._prediction_problem(draft.prediction_trigger, at=at)
             if issue is not None:
                 return False, issue
-            if not context.active:
+        else:
+            presence = self.presence_for(draft.trigger_person_id, draft.trigger_room_id)
+            if presence is None:
+                return False, DecisionCode.EVIDENCE_MISSING
+            issue = self.evidence_problem(
+                status=presence.status,
+                observed_at=presence.observed_at,
+                confidence=presence.confidence,
+                at=at,
+                minimum_confidence=minimum_confidence,
+            )
+            if issue is not None:
+                return False, issue
+            if not presence.present:
                 return False, DecisionCode.TRIGGER_NOT_ACTIVE
 
-        device = next((item for item in self.devices if item.device_id == draft.target_device_id), None)
+            if draft.required_context is not None:
+                context = self.context_for(draft.required_context)
+                if context is None:
+                    return False, DecisionCode.EVIDENCE_MISSING
+                issue = self.evidence_problem(
+                    status=context.status,
+                    observed_at=context.observed_at,
+                    confidence=context.confidence,
+                    at=at,
+                    minimum_confidence=minimum_confidence,
+                )
+                if issue is not None:
+                    return False, issue
+                if not context.active:
+                    return False, DecisionCode.TRIGGER_NOT_ACTIVE
+
+        device = self.device_for(target_device_id)
         if device is None:
             return False, DecisionCode.EVIDENCE_MISSING
-        issue = self._evidence_problem(status=device.status, observed_at=device.observed_at, at=at)
+        issue = self.evidence_problem(
+            status=device.status,
+            observed_at=device.observed_at,
+            confidence=device.confidence,
+            at=at,
+            minimum_confidence=minimum_confidence,
+        )
         if issue is not None:
             return False, issue
         return True, DecisionCode.ALLOWED
 
-    def evidence_for_rule(self, draft: RuleDraft) -> tuple[EvidenceRef, ...]:
+    def evidence_for_rule(
+        self, draft: RuleDraft, *, target_device_id: str, at: datetime | None = None
+    ) -> tuple[EvidenceRef, ...]:
         refs: list[EvidenceRef] = []
-        presence = next(
-            (
-                item
-                for item in self.presence
-                if item.person_id == draft.trigger_person_id and item.room_id == draft.trigger_room_id
-            ),
-            None,
+        if draft.prediction_trigger is not None:
+            prediction = self._matching_prediction(draft.prediction_trigger, at=at or self.valid_until)
+            if prediction is not None:
+                refs.append(
+                    EvidenceRef(
+                        kind="prediction",
+                        subject_id=f"{prediction.event}:{prediction.subject_id}",
+                        status=EvidenceStatus.DECLARED,
+                        observed_at=prediction.observed_at,
+                        source=prediction.source,
+                    )
+                )
+        presence = (
+            self.presence_for(draft.trigger_person_id, draft.trigger_room_id)
+            if draft.trigger_person_id is not None
+            else None
         )
         if presence is not None:
             refs.append(
@@ -382,7 +617,7 @@ class WorldSnapshot:
                 )
             )
         if draft.required_context is not None:
-            context = next((item for item in self.contexts if item.context_id == draft.required_context), None)
+            context = self.context_for(draft.required_context)
             if context is not None:
                 refs.append(
                     EvidenceRef(
@@ -393,7 +628,7 @@ class WorldSnapshot:
                         source=context.source,
                     )
                 )
-        device = next((item for item in self.devices if item.device_id == draft.target_device_id), None)
+        device = self.device_for(target_device_id)
         if device is not None:
             refs.append(
                 EvidenceRef(
@@ -461,6 +696,7 @@ class ActionRequest:
     evidence_snapshot_id: str
     requested_at: datetime
     confirmation_token: ConfirmationToken | None = None
+    capability: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -478,6 +714,8 @@ class ActionRequest:
             raise ValueError("justification must be a string")
         if self.confirmation_token is not None and not isinstance(self.confirmation_token, ConfirmationToken):
             raise ValueError("confirmation_token must be a ConfirmationToken")
+        if self.capability is not None:
+            object.__setattr__(self, "capability", _require_text(self.capability, name="capability"))
         object.__setattr__(self, "parameters", _normalize_parameters(self.parameters))
         object.__setattr__(self, "requested_at", require_aware_utc(self.requested_at, name="requested_at"))
 
