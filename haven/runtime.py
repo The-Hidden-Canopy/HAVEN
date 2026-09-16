@@ -1,0 +1,410 @@
+"""Orchestration for the first HAVEN vertical slice."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from datetime import datetime
+from uuid import uuid4
+
+from haven.audit.receipts import ActionReceipt
+from haven.authority.policy import AuthorityEngine
+from haven.core.domain import (
+    ActionRecord,
+    ActionRequest,
+    ActionStatus,
+    AuthorityDecision,
+    ConfirmationToken,
+    DecisionCode,
+    DecisionStatus,
+    DeviceCommand,
+    DomainEvent,
+    EventType,
+    Principal,
+    Rule,
+    RuleDraft,
+    RuleStatus,
+    RoleTier,
+    Transition,
+    TransitionKind,
+    WorldSnapshot,
+)
+from haven.core.store import HavenStore, RuleApproval, RuleClarification, RuleDecision
+from haven.core.time import require_aware_utc
+from haven.integrations.home_assistant.adapter import HomeAssistantAdapter
+from haven.intelligence.gateway import ModelGateway
+
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}-{uuid4().hex}"
+
+
+def _decision(
+    status: DecisionStatus,
+    code: DecisionCode,
+    explanation: str,
+    *,
+    required_role: RoleTier | None = None,
+) -> AuthorityDecision:
+    return AuthorityDecision(status, code, explanation, required_role=required_role)
+
+
+@dataclass(frozen=True)
+class RuleApprovalResult:
+    rule: Rule
+    decision: AuthorityDecision
+    event: DomainEvent
+
+
+@dataclass(frozen=True)
+class RuleClarificationResult:
+    rule: Rule
+    decision: AuthorityDecision
+    event: DomainEvent
+
+
+class HavenRuntime:
+    """Keep model interpretation, authority, execution, and receipts separate."""
+
+    def __init__(
+        self,
+        *,
+        store: HavenStore,
+        model_gateway: ModelGateway,
+        home_assistant: HomeAssistantAdapter,
+        authority: AuthorityEngine | None = None,
+    ) -> None:
+        self.store = store
+        self.model_gateway = model_gateway
+        self.home_assistant = home_assistant
+        self.authority = authority or AuthorityEngine()
+
+    def propose_from_text(self, text: str, *, principal: Principal, now: datetime) -> Rule:
+        draft = self.model_gateway.interpret(text, principal=principal, now=now)
+        return self.propose_draft(draft, principal=principal, now=now)
+
+    def propose_draft(self, draft: RuleDraft, *, principal: Principal, now: datetime) -> Rule:
+        if draft.household_id != principal.household_id:
+            raise ValueError("a proposal must be created in the principal's household")
+        if draft.proposed_by != principal.actor_id:
+            raise ValueError("a proposal actor must match the principal")
+        rule = Rule(rule_id=_new_id("rule"), draft=draft)
+        self.store.execute_transition(
+            Transition(
+                kind=TransitionKind.PROPOSE_RULE,
+                household_id=self.store.household_id,
+                actor_id=principal.actor_id,
+                payload=rule,
+                correlation_id=rule.rule_id,
+            ),
+            now=now,
+        )
+        return rule
+
+    def clarify_rule(
+        self,
+        rule_id: str,
+        draft: RuleDraft,
+        *,
+        principal: Principal,
+        justification: str,
+        now: datetime,
+    ) -> RuleClarificationResult:
+        now = require_aware_utc(now, name="clarification time")
+        rule = self.store.get_rule(rule_id)
+        if principal.household_id != rule.draft.household_id or draft.household_id != principal.household_id:
+            decision = _decision(
+                DecisionStatus.DENY,
+                DecisionCode.CROSS_HOUSEHOLD,
+                "the clarifying principal and draft must belong to the rule household",
+            )
+        elif principal.role_tier < RoleTier.MEMBER:
+            decision = _decision(
+                DecisionStatus.DENY,
+                DecisionCode.WRONG_ROLE_TIER,
+                "a household member or higher role is required to clarify a rule",
+                required_role=RoleTier.MEMBER,
+            )
+        elif not justification.strip():
+            decision = _decision(
+                DecisionStatus.DENY,
+                DecisionCode.MISSING_JUSTIFICATION,
+                "rule clarification requires a non-empty justification",
+            )
+        elif rule.status != RuleStatus.PROPOSED:
+            decision = _decision(
+                DecisionStatus.DENY,
+                DecisionCode.INVALID_STATE_TRANSITION,
+                "only a proposed rule can be clarified",
+            )
+        elif draft.proposed_by != rule.draft.proposed_by or draft.draft_id == rule.draft.draft_id:
+            decision = _decision(
+                DecisionStatus.DENY,
+                DecisionCode.CLARIFICATION_MISMATCH,
+                "clarification must retain the original proposer and use a new draft identity",
+            )
+        else:
+            decision = _decision(
+                DecisionStatus.ALLOW,
+                DecisionCode.ALLOWED,
+                "the scoped clarification is valid for owner review",
+            )
+
+        if decision.status != DecisionStatus.ALLOW:
+            event = self.store.execute_transition(
+                Transition(
+                    kind=TransitionKind.RECORD_RULE_DECISION,
+                    household_id=self.store.household_id,
+                    actor_id=principal.actor_id,
+                    payload=RuleDecision(
+                        rule_id=rule_id,
+                        decision=decision,
+                        justification=justification,
+                        blocked_event_type=EventType.RULE_CLARIFICATION_BLOCKED,
+                    ),
+                    correlation_id=rule_id,
+                ),
+                now=now,
+            )
+            return RuleClarificationResult(rule=self.store.get_rule(rule_id), decision=decision, event=event)
+
+        event = self.store.execute_transition(
+            Transition(
+                kind=TransitionKind.CLARIFY_RULE,
+                household_id=self.store.household_id,
+                actor_id=principal.actor_id,
+                payload=RuleClarification(
+                    rule_id=rule_id,
+                    draft=draft,
+                    clarified_by=principal.actor_id,
+                    justification=justification,
+                ),
+                correlation_id=rule_id,
+            ),
+            now=now,
+        )
+        return RuleClarificationResult(rule=self.store.get_rule(rule_id), decision=decision, event=event)
+
+    def approve_rule(
+        self,
+        rule_id: str,
+        *,
+        principal: Principal,
+        justification: str,
+        now: datetime,
+    ) -> RuleApprovalResult:
+        now = require_aware_utc(now, name="approval time")
+        rule = self.store.get_rule(rule_id)
+        if principal.household_id != rule.draft.household_id:
+            decision = _decision(
+                DecisionStatus.DENY,
+                DecisionCode.CROSS_HOUSEHOLD,
+                "the approving principal must belong to the rule household",
+            )
+        elif principal.role_tier < RoleTier.OWNER:
+            decision = _decision(
+                DecisionStatus.DENY,
+                DecisionCode.WRONG_ROLE_TIER,
+                "only a household owner can approve an autonomous rule",
+                required_role=RoleTier.OWNER,
+            )
+        elif not justification.strip():
+            decision = _decision(
+                DecisionStatus.DENY,
+                DecisionCode.MISSING_JUSTIFICATION,
+                "rule approval requires a non-empty justification",
+            )
+        elif rule.status != RuleStatus.PROPOSED:
+            decision = _decision(
+                DecisionStatus.DENY,
+                DecisionCode.INVALID_STATE_TRANSITION,
+                "only a proposed rule can be approved",
+            )
+        elif rule.draft.unresolved:
+            decision = _decision(
+                DecisionStatus.NEEDS_CLARIFICATION,
+                DecisionCode.NEEDS_CLARIFICATION,
+                "the interpretation must be clarified before approval",
+            )
+        else:
+            decision = _decision(
+                DecisionStatus.ALLOW,
+                DecisionCode.ALLOWED,
+                "owner approval is valid for this scoped rule",
+            )
+
+        if decision.status != DecisionStatus.ALLOW:
+            event = self.store.execute_transition(
+                Transition(
+                    kind=TransitionKind.RECORD_RULE_DECISION,
+                    household_id=self.store.household_id,
+                    actor_id=principal.actor_id,
+                    payload=RuleDecision(rule_id=rule_id, decision=decision, justification=justification),
+                    correlation_id=rule_id,
+                ),
+                now=now,
+            )
+            return RuleApprovalResult(rule=self.store.get_rule(rule_id), decision=decision, event=event)
+
+        event = self.store.execute_transition(
+            Transition(
+                kind=TransitionKind.APPROVE_RULE,
+                household_id=self.store.household_id,
+                actor_id=principal.actor_id,
+                payload=RuleApproval(
+                    rule_id=rule_id,
+                    approved_by=principal.actor_id,
+                    approved_by_role=principal.role_tier,
+                    justification=justification,
+                ),
+                correlation_id=rule_id,
+            ),
+            now=now,
+        )
+        return RuleApprovalResult(rule=self.store.get_rule(rule_id), decision=decision, event=event)
+
+    def run_rule(
+        self,
+        rule_id: str,
+        *,
+        principal: Principal,
+        world: WorldSnapshot,
+        justification: str,
+        now: datetime,
+        confirmation_token: ConfirmationToken | None = None,
+    ) -> ActionReceipt:
+        now = require_aware_utc(now, name="action time")
+        rule = self.store.get_rule(rule_id)
+        request_id = confirmation_token.request_id if confirmation_token is not None else _new_id("request")
+        request = ActionRequest(
+            request_id=request_id,
+            household_id=self.store.household_id,
+            requested_by=principal.actor_id,
+            rule_id=rule.rule_id,
+            action_kind=rule.draft.action_kind,
+            target_device_id=rule.draft.target_device_id,
+            parameters=rule.draft.parameters,
+            justification=justification,
+            evidence_snapshot_id=world.snapshot_id,
+            requested_at=now,
+            confirmation_token=confirmation_token,
+        )
+        decision = self.authority.decide(
+            request,
+            principal=principal,
+            rule=rule,
+            world=world,
+            now=now,
+            confirmation_consumed=(
+                confirmation_token is not None
+                and self.store.is_confirmation_consumed(confirmation_token.token_id)
+            ),
+        )
+        evidence = (
+            world.evidence_for_rule(rule.draft)
+            if world.household_id == self.store.household_id and principal.household_id == self.store.household_id
+            else ()
+        )
+        action_id = _new_id("action")
+        if decision.status != DecisionStatus.ALLOW:
+            blocked = ActionRecord(
+                action_id=action_id,
+                request=request,
+                status=ActionStatus.BLOCKED,
+                decision=decision,
+            )
+            event = self.store.execute_transition(
+                Transition(
+                    kind=TransitionKind.RECORD_BLOCK,
+                    household_id=self.store.household_id,
+                    actor_id=principal.actor_id,
+                    payload=blocked,
+                    correlation_id=rule.rule_id,
+                ),
+                now=now,
+            )
+            return ActionReceipt(
+                receipt_id=_new_id("receipt"),
+                requested_action=request,
+                interpretation=rule.draft.interpretation,
+                evidence=evidence,
+                decision=decision,
+                device_result=None,
+                event_ids=(event.event_id,),
+            )
+
+        authorized = ActionRecord(
+            action_id=action_id,
+            request=request,
+            status=ActionStatus.AUTHORIZED,
+            decision=decision,
+        )
+        authorized_event = self.store.execute_transition(
+            Transition(
+                kind=TransitionKind.AUTHORIZE_ACTION,
+                household_id=self.store.household_id,
+                actor_id=principal.actor_id,
+                payload=authorized,
+                correlation_id=rule.rule_id,
+            ),
+            now=now,
+        )
+
+        command = DeviceCommand(
+            request_id=request.request_id,
+            target_device_id=request.target_device_id,
+            service=self._service_for(rule.draft.action_kind),
+            parameters=request.parameters,
+            requested_at=now,
+        )
+        try:
+            result = self.home_assistant.execute(command)
+        except Exception as exc:  # pragma: no cover - defensive integration boundary
+            result = self._integration_failure(exc, at=now)
+        executed = replace(authorized, status=ActionStatus.EXECUTED, executed_at=now, result=result)
+        executed_event = self.store.execute_transition(
+            Transition(
+                kind=TransitionKind.RECORD_EXECUTION,
+                household_id=self.store.household_id,
+                actor_id=principal.actor_id,
+                payload=executed,
+                correlation_id=rule.rule_id,
+            ),
+            now=now,
+        )
+        return ActionReceipt(
+            receipt_id=_new_id("receipt"),
+            requested_action=request,
+            interpretation=rule.draft.interpretation,
+            evidence=evidence,
+            decision=decision,
+            device_result=result,
+            event_ids=(authorized_event.event_id, executed_event.event_id),
+        )
+
+    @staticmethod
+    def _service_for(action_kind) -> str:
+        services = {
+            "turn_light_off": "light.turn_off",
+            "set_light_brightness": "light.turn_on",
+            "activate_scene": "scene.turn_on",
+            "set_thermostat": "climate.set_temperature",
+            "open_garage": "cover.open_cover",
+            "unlock_door": "lock.unlock",
+            "purchase": "haven.purchase",
+            "change_alarm": "alarm_control_panel.alarm",
+        }
+        return services.get(action_kind.value, "haven.unmapped")
+
+    @staticmethod
+    def _integration_failure(exc: Exception, *, at: datetime):
+        from haven.core.domain import DeviceResult
+
+        return DeviceResult(
+            success=False,
+            detail=f"integration_error:{type(exc).__name__}",
+            observed_at=at,
+            source="haven.runtime",
+        )
+
+
+__all__ = ["HavenRuntime", "RuleApprovalResult", "RuleClarificationResult"]
