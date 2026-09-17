@@ -32,7 +32,7 @@ from haven.core.store import HavenStore, RuleApproval, RuleClarification, RuleDe
 from haven.core.time import require_aware_utc
 from haven.execution import ExecutionAdapter, ExecutionProviderRegistry, UnknownExecutionProvider
 from haven.integrations.home_assistant.adapter import HomeAssistantAdapter
-from haven.intelligence.gateway import ModelGateway
+from haven.intelligence.gateway import IntelligenceProvider
 
 
 def _new_id(prefix: str) -> str:
@@ -64,27 +64,33 @@ class RuleClarificationResult:
 
 
 class HavenRuntime:
-    """Keep model interpretation, authority, execution, and receipts separate."""
+    """Keep interpretation proposals, authority, execution, and receipts separate.
+
+    The intelligence provider is proposal-only: it never receives the store,
+    execution adapters, or the device registry.
+    """
 
     def __init__(
         self,
         *,
         store: HavenStore,
-        model_gateway: ModelGateway,
+        intelligence_provider: IntelligenceProvider | None = None,
         home_assistant: HomeAssistantAdapter | None = None,
         authority: AuthorityEngine | None = None,
         execution_providers: ExecutionProviderRegistry | None = None,
     ) -> None:
         if home_assistant is None and execution_providers is None:
             raise ValueError("HavenRuntime requires home_assistant, execution_providers, or both")
+        if intelligence_provider is None:
+            raise ValueError("HavenRuntime requires an intelligence_provider")
         self.store = store
-        self.model_gateway = model_gateway
+        self.intelligence_provider = intelligence_provider
         self.home_assistant = home_assistant
         self.authority = authority or AuthorityEngine()
         self.execution_providers = execution_providers
 
     def propose_from_text(self, text: str, *, principal: Principal, now: datetime) -> Rule:
-        draft = self.model_gateway.interpret(text, principal=principal, now=now)
+        draft = self.intelligence_provider.interpret(text, principal=principal, now=now)
         return self.propose_draft(draft, principal=principal, now=now)
 
     def propose_draft(self, draft: RuleDraft, *, principal: Principal, now: datetime) -> Rule:

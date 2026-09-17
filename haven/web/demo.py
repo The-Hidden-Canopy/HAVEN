@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
@@ -31,14 +32,17 @@ from haven.core.domain import (
     PresenceState,
     Principal,
     RoleTier,
+    Rule,
     RuleDraft,
+    RuleStatus,
     ScheduleTrigger,
     WorldSnapshot,
 )
 from haven.core.store import HavenStore
 from haven.devices import CapabilityDescriptor, ControlClass, DeviceManifest, DeviceRegistry
 from haven.execution import ExecutionProviderRegistry
-from haven.intelligence.gateway import FixtureModelGateway
+from haven.intelligence.gateway import ScriptedIntelligenceProvider
+from haven.providers import CapabilityRegistry, build_default_registry
 from haven.runtime import HavenRuntime
 
 from . import serialize
@@ -73,6 +77,13 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex}"
 
 
+def _rule_recency_key(rule: Rule) -> tuple[int, float]:
+    # Approved rules first, newest approval first; the rest keep store order.
+    if rule.approved_at is not None:
+        return (0, -rule.approved_at.timestamp())
+    return (1, 0.0)
+
+
 @dataclass(frozen=True)
 class PendingRequest:
     request_id: str
@@ -80,6 +91,161 @@ class PendingRequest:
     title: str
     detail: str
     expires_at: datetime
+
+
+VOICE_DORMANT = "dormant"
+VOICE_WAKE = "wake"
+VOICE_LISTENING = "listening"
+VOICE_INTERPRETING = "interpreting"
+
+# Capture runs only once the wake acknowledgement has finished, so the mic is
+# live in listening/interpreting but not during the brief wake phase.
+_MIC_STATES = (VOICE_LISTENING, VOICE_INTERPRETING)
+
+VOICE_ACK_SECONDS = 0.8
+VOICE_REFRACTORY_SECONDS = 3.0
+
+STOPPED_LINE = "Stopped."
+ALREADY_EXECUTING_LINE = "That action is already executing."
+
+# Utterances that mean "Haven, stop" rather than a chat intent.
+STOP_UTTERANCES = ("haven, stop", "stop")
+
+
+def _is_stop_utterance(text: str) -> bool:
+    normalized = " ".join(text.casefold().split()).rstrip(".!?")
+    return normalized in STOP_UTTERANCES
+
+
+class VoiceSession:
+    """Wake-word → utterance state machine owned by the ``DemoDirector``.
+
+    Dormant → wake (brief ack, then a ``threading.Timer`` advances to
+    listening) → interpreting while the text runs through the same intent path
+    as typed chat → dormant, where wake requests are refused for a refractory
+    cooldown. Every transition publishes state through the director so SSE
+    clients follow along. Timers and the refractory clock are real-time;
+    ``expire_ack``/``expire_refractory`` let tests advance them without
+    sleeping.
+    """
+
+    def __init__(
+        self,
+        director: DemoDirector,
+        *,
+        ack_seconds: float = VOICE_ACK_SECONDS,
+        refractory_seconds: float = VOICE_REFRACTORY_SECONDS,
+    ) -> None:
+        self._director = director
+        self._ack_seconds = ack_seconds
+        self._refractory_seconds = refractory_seconds
+        self._state = VOICE_DORMANT
+        self._timer: threading.Timer | None = None
+        self._refractory_until: float | None = None
+        self._lock = threading.Lock()
+
+    @property
+    def state(self) -> str:
+        return self._state
+
+    @property
+    def mic_active(self) -> bool:
+        return self._state in _MIC_STATES
+
+    def to_dict(self) -> dict[str, Any]:
+        return serialize.voice_to_dict(state=self._state, mic=self.mic_active)
+
+    def wake(self) -> bool:
+        with self._lock:
+            if self._state != VOICE_DORMANT or self._in_refractory():
+                return False
+            self._refractory_until = None
+            self._enter(VOICE_WAKE)
+            self._timer = threading.Timer(self._ack_seconds, self._ack_expired)
+            self._timer.daemon = True
+            self._timer.start()
+        return True
+
+    def utterance(self, text: str) -> bool:
+        with self._lock:
+            if self._state != VOICE_LISTENING:
+                return False
+            self._enter(VOICE_INTERPRETING)
+        self._director._say("user", text)
+        if _is_stop_utterance(text):
+            # "Haven, stop" said out loud carries the same semantics as the
+            # cancel endpoint: deny a pending request, never recall an action.
+            self._resolve_stop()
+        else:
+            # Voice and keyboard are equal input methods: the text flows
+            # through the exact chat() intent path.
+            self._director._chat_intent(text, focus=self._director.voice_focus())
+        with self._lock:
+            self._enter(VOICE_DORMANT)
+            self._start_refractory()
+        return True
+
+    def cancel(self) -> bool:
+        with self._lock:
+            if self._state not in (VOICE_LISTENING, VOICE_INTERPRETING):
+                return False
+            self._clear_timer()
+            self._enter(VOICE_DORMANT)
+            self._start_refractory()
+        self._resolve_stop()
+        return True
+
+    def _resolve_stop(self) -> None:
+        # "Haven, stop": a pending permission request is a deny; an executing
+        # action is not recalled, only acknowledged honestly.
+        if self._director.pending_requests:
+            for pending in self._director.pending_requests:
+                self._director.deny(pending.request_id)
+        elif self._director._glow == GLOW_ACTING:
+            self._director._say("haven", ALREADY_EXECUTING_LINE)
+            self._director._publish_state()
+        else:
+            self._director._say("haven", STOPPED_LINE)
+            self._director._publish_state()
+
+    def reset(self) -> None:
+        with self._lock:
+            self._clear_timer()
+            self._state = VOICE_DORMANT
+            self._refractory_until = None
+
+    def expire_ack(self) -> None:
+        """Test hook: end the wake acknowledgement window immediately."""
+        timer = self._timer
+        if timer is not None:
+            timer.cancel()
+        self._ack_expired()
+
+    def expire_refractory(self) -> None:
+        """Test hook: clear the post-interaction wake cooldown."""
+        with self._lock:
+            self._refractory_until = None
+
+    def _ack_expired(self) -> None:
+        with self._lock:
+            self._timer = None
+            if self._state == VOICE_WAKE:
+                self._enter(VOICE_LISTENING)
+
+    def _enter(self, state: str) -> None:
+        self._state = state
+        self._director._publish_state()
+
+    def _clear_timer(self) -> None:
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+
+    def _start_refractory(self) -> None:
+        self._refractory_until = time.monotonic() + self._refractory_seconds
+
+    def _in_refractory(self) -> bool:
+        return self._refractory_until is not None and time.monotonic() < self._refractory_until
 
 
 class SimulatedHouse:
@@ -321,7 +487,14 @@ class DemoDirector:
 
     CONTEXT_LABELS = {"working_late": "Working late", "vacation_mode": "Vacation mode"}
 
-    def __init__(self, *, clock: Clock | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        clock: Clock | None = None,
+        voice_ack_seconds: float = VOICE_ACK_SECONDS,
+        voice_refractory_seconds: float = VOICE_REFRACTORY_SECONDS,
+        capability_registry: CapabilityRegistry | None = None,
+    ) -> None:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         now = self._clock()
         self.house = SimulatedHouse(now=now)
@@ -330,10 +503,12 @@ class DemoDirector:
         providers = ExecutionProviderRegistry()
         providers.register(PROVIDER_ID, self.adapter)
         self.store = HavenStore(household_id=HOUSEHOLD_ID)
+        self.capability_registry = capability_registry or build_default_registry()
+        self.engine = AuthorityEngine(device_registry=self.registry)
         self.runtime = HavenRuntime(
             store=self.store,
-            model_gateway=FixtureModelGateway(),
-            authority=AuthorityEngine(device_registry=self.registry),
+            intelligence_provider=ScriptedIntelligenceProvider(),
+            authority=self.engine,
             execution_providers=providers,
         )
         self.resident = Principal(actor_id=PERSON_ID, household_id=HOUSEHOLD_ID, role_tier=RoleTier.MEMBER)
@@ -346,6 +521,11 @@ class DemoDirector:
         self._pending: dict[str, PendingRequest] = {}
         self._auto_allow: set[str] = set()
         self.receipts: list = []
+        self.voice = VoiceSession(
+            self,
+            ack_seconds=voice_ack_seconds,
+            refractory_seconds=voice_refractory_seconds,
+        )
         self.garage_rule_id = self._prepare_garage_rule(now)
         self.camera_rule_id = self._prepare_camera_rule(now)
         self.start_scenario()
@@ -503,8 +683,57 @@ class DemoDirector:
         self._publish_state()
         return True
 
+    def mark_camera_down(self) -> dict[str, Any]:
+        self.house.set_camera_down(True)
+        now = self._clock()
+        receipt = self.runtime.run_rule(
+            self.camera_rule_id,
+            principal=self.resident,
+            world=self.house.snapshot(now),
+            justification="The driveway camera stopped reporting; HAVEN checked whether it can still see.",
+            now=now,
+        )
+        self.receipts.append(receipt)
+        self._say("haven", "I can't confirm the driveway camera is up.")
+        if receipt.decision.status == DecisionStatus.UNAVAILABLE:
+            # Fail closed: the blocked receipt means no command reached the
+            # execution adapter, and the same rule runs again once evidence
+            # is back.
+            self._say("haven", "The driveway camera's evidence is unavailable; I won't act on guesswork.")
+            self._set_glow(GLOW_CRITICAL, target=DRIVEWAY_ROOM)
+        else:
+            self._record_block(receipt)
+        self._publish_state()
+        return self.state()
+
+    def mark_camera_up(self) -> dict[str, Any]:
+        self.house.set_camera_down(False)
+        now = self._clock()
+        receipt = self.runtime.run_rule(
+            self.camera_rule_id,
+            principal=self.resident,
+            world=self.house.snapshot(now),
+            justification="The driveway camera is back online; running the clip rule again.",
+            now=now,
+        )
+        self.receipts.append(receipt)
+        self._say("haven", "The driveway camera is back online.")
+        if receipt.decision.status == DecisionStatus.ALLOW:
+            self._say("haven", "Evidence restored — I recorded a driveway clip.")
+            self._set_glow(GLOW_COMPLETED, target=DRIVEWAY_ROOM)
+        else:
+            self._say("haven", f"I couldn't run the clip rule: {receipt.decision.explanation}")
+            self._set_glow(GLOW_IDLE)
+        self._publish_state()
+        return self.state()
+
     def chat(self, text: str, focus: str | None = None) -> dict[str, Any]:
         self._say("user", text)
+        self._chat_intent(text, focus=focus)
+        self._publish_state()
+        return self.state()
+
+    def _chat_intent(self, text: str, focus: str | None = None) -> None:
         normalized = " ".join(text.casefold().split()).rstrip(".!?")
         if normalized in ("close the garage", "close the garage door"):
             self._chat_close_garage()
@@ -515,8 +744,6 @@ class DemoDirector:
                 self._chat_light_off(focus)
         else:
             self._say("haven", "I can't do that yet.")
-        self._publish_state()
-        return self.state()
 
     def _chat_close_garage(self) -> None:
         now = self._clock()
@@ -562,7 +789,7 @@ class DemoDirector:
             justification=f"Owner approved turning off the {focus} light on request.",
             now=now,
         )
-        self._set_glow(GLOW_ACTING)
+        self._set_glow(GLOW_ACTING, target=focus)
         receipts = self.runtime.run_rule_for_group(
             rule.rule_id,
             principal=self.resident,
@@ -579,11 +806,32 @@ class DemoDirector:
                 if receipt.decision.status != DecisionStatus.ALLOW:
                     self._record_block(receipt)
 
+    def voice_focus(self) -> str | None:
+        """Room voice input resolves relative to: the present resident's room."""
+        for item in self.house.snapshot(self._clock()).presence:
+            if item.present:
+                return item.room_id
+        return None
+
+    def voice_wake(self) -> dict[str, Any]:
+        ok = self.voice.wake()
+        return {"ok": ok, "state": self.state()}
+
+    def voice_utterance(self, text: str) -> dict[str, Any]:
+        ok = self.voice.utterance(text)
+        return {"ok": ok, "state": self.state()}
+
+    def voice_cancel(self) -> dict[str, Any]:
+        ok = self.voice.cancel()
+        return {"ok": ok, "state": self.state()}
+
     def reset(self) -> dict[str, Any]:
+        self.voice.reset()
         self._pending.clear()
         self._conversation.clear()
         self._auto_allow.clear()
         self._glow = GLOW_IDLE
+        self._glow_target = None
         self.start_scenario()
         return self.state()
 
@@ -602,10 +850,12 @@ class DemoDirector:
             if device is not None:
                 room["devices"].append(serialize.device_to_dict(device, role=manifest.role))
             if manifest.device_type == "camera":
+                camera_state = world.device_for(manifest.device_id)
                 room["camera"] = serialize.camera_to_dict(
                     camera_id=manifest.device_id,
                     label=manifest.device_id.removesuffix("_cam").removesuffix("_camera").replace("_", " ").title(),
                     motion=self.house.motion_detected(),
+                    online=camera_state is not None and camera_state.status != EvidenceStatus.UNAVAILABLE,
                 )
         for room in rooms:
             room["people"] = sorted(
@@ -633,19 +883,74 @@ class DemoDirector:
             serialize.person_to_dict(person_id=person_id, name=self._person_name(person_id), room=room_id)
             for person_id, room_id in present.items()
         ]
-        line = ATTENTION_LINE if (self._pending or self._glow in (GLOW_PERMISSION, GLOW_CRITICAL)) else NOMINAL_LINE
+        if self._glow == GLOW_CRITICAL and self.house.camera_down():
+            line = CAMERA_BLIND_LINE
+        else:
+            line = ATTENTION_LINE if (self._pending or self._glow in (GLOW_PERMISSION, GLOW_CRITICAL)) else NOMINAL_LINE
         return serialize.state_to_dict(
             glow=self._glow,
+            glow_target=self._glow_target,
             revision=self.store.state.revision,
             rooms=rooms_payload,
             contexts=contexts,
             people=people,
             pending=[serialize.pending_to_dict(item) for item in self._pending.values()],
             conversation=[serialize.message_to_dict(sender=m["from"], text=m["text"]) for m in self._conversation],
+            activity=self._activity_payload(),
+            memory=self._memory_payload(),
+            automations=self._automations_payload(),
+            system=serialize.system_to_dict(
+                revision=self.store.state.revision,
+                event_count=len(self.store.events),
+                memory_count=len(self.store.state.memory),
+                engine=serialize.engine_to_dict(
+                    human_override_window=self.engine.human_override_window,
+                    minimum_confidence=self.engine.minimum_confidence,
+                ),
+                providers=[
+                    serialize.provider_to_dict(caps) for caps in self.capability_registry.registered()
+                ],
+            ),
+            voice=self.voice.to_dict(),
             status=serialize.status_to_dict(
                 devices=len(tuple(self.registry.all_devices())), people=len(people), line=line
             ),
         )
+
+    def _activity_payload(self) -> list[dict[str, Any]]:
+        rules_by_id = {rule.rule_id: rule.draft.source_text for rule in self.store.state.rules}
+        actions_by_id = {action.action_id: action for action in self.store.state.actions}
+        rows = []
+        for event in reversed(self.store.events[-ACTIVITY_LIMIT:]):
+            payload = dict(event.payload)
+            action = actions_by_id.get(str(payload.get("action_id")))
+            rows.append(
+                serialize.event_to_dict(
+                    event,
+                    rule_label=rules_by_id.get(str(payload.get("rule_id"))),
+                    action_device=action.request.target_device_id if action is not None else None,
+                )
+            )
+        return rows
+
+    def _automations_payload(self) -> list[dict[str, Any]]:
+        rules = sorted(self.store.state.rules, key=_rule_recency_key)
+        return [
+            serialize.rule_to_dict(
+                rule,
+                device_room=(
+                    self._device_room(rule.draft.target_device_id)
+                    if rule.draft.target_device_id is not None
+                    else None
+                ),
+            )
+            for rule in rules
+        ]
+
+    def _memory_payload(self) -> list[dict[str, Any]]:
+        return [
+            serialize.memory_to_dict(entry) for entry in reversed(self.store.state.memory[-MEMORY_LIMIT:])
+        ]
 
     @staticmethod
     def _person_name(person_id: str) -> str:
@@ -653,16 +958,36 @@ class DemoDirector:
 
     def _record_block(self, receipt) -> None:
         self._say("haven", f"I couldn't do that: {receipt.decision.explanation}")
-        self._set_glow(GLOW_CRITICAL)
+        self._set_glow(GLOW_CRITICAL, target=self._device_room(receipt.requested_action.target_device_id))
+
+    def _room_for_rule(self, rule_id: str) -> str | None:
+        try:
+            rule = self.store.get_rule(rule_id)
+        except KeyError:
+            return None
+        if rule.draft.target_device_id is not None:
+            return self._device_room(rule.draft.target_device_id)
+        selector = rule.draft.target_selector
+        return selector.room if selector is not None else None
+
+    def _device_room(self, device_id: str) -> str | None:
+        if self.registry.is_registered(device_id):
+            return self.registry.get(device_id).room
+        return None
 
     def _say(self, sender: str, text: str) -> None:
         self._conversation.append({"from": sender, "text": text})
 
-    def _set_glow(self, glow: str) -> None:
-        if glow == self._glow:
+    def _set_glow(self, glow: str, target: Any = _KEEP_TARGET) -> None:
+        if glow == GLOW_IDLE:
+            target = None
+        elif target is _KEEP_TARGET:
+            target = self._glow_target
+        if glow == self._glow and target == self._glow_target:
             return
         self._glow = glow
-        self._publish("glow", {"state": glow})
+        self._glow_target = target
+        self._publish("glow", {"state": glow, "target": target})
 
     def _publish_state(self) -> None:
         self._publish("state", self.state())
@@ -689,5 +1014,6 @@ __all__ = [
     "PendingRequest",
     "SimulatedExecutionAdapter",
     "SimulatedHouse",
+    "VoiceSession",
     "build_registry",
 ]

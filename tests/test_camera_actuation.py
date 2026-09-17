@@ -15,7 +15,7 @@ from haven.core.domain import ActionKind, ContextState, DeviceState, PresenceSta
 from haven.core.store import HavenStore
 from haven.devices import ControlClass, DeviceRegistry
 from haven.integrations.home_assistant import FixtureHomeAssistant
-from haven.intelligence.gateway import FixtureModelGateway
+from haven.intelligence.gateway import ScriptedIntelligenceProvider
 from haven.runtime import HavenRuntime
 from test_vertical_slice import BASE_TIME, RoleTier, _principal
 
@@ -130,7 +130,7 @@ def _runtime():
     adapter = FixtureHomeAssistant()
     runtime = HavenRuntime(
         store=store,
-        model_gateway=FixtureModelGateway(),
+        intelligence_provider=ScriptedIntelligenceProvider(),
         home_assistant=adapter,
         authority=AuthorityEngine(device_registry=_registry()),
     )

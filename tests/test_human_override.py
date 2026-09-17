@@ -11,7 +11,7 @@ from datetime import timedelta
 from haven.authority.policy import AuthorityEngine
 from haven.core.domain import ChangeOrigin, ContextState, DeviceState, EvidenceStatus, PresenceState, WorldSnapshot
 from haven.integrations.home_assistant import FixtureHomeAssistant
-from haven.intelligence.gateway import FixtureModelGateway
+from haven.intelligence.gateway import ScriptedIntelligenceProvider
 from haven.runtime import HavenRuntime
 from test_vertical_slice import BASE_TIME, RoleTier, HavenStore, _explicit_draft, _principal
 
@@ -23,7 +23,7 @@ def _runtime_with_window(window: timedelta):
     adapter = FixtureHomeAssistant()
     runtime = HavenRuntime(
         store=store,
-        model_gateway=FixtureModelGateway(),
+        intelligence_provider=ScriptedIntelligenceProvider(),
         home_assistant=adapter,
         authority=AuthorityEngine(human_override_window=window),
     )

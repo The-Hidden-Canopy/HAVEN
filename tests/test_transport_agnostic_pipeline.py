@@ -17,7 +17,7 @@ from haven.core.store import HavenStore
 from haven.devices import CapabilityDescriptor, ControlClass, DeviceRegistry
 from haven.discovery import DiscoveredDevice, FixtureDiscoveryProvider, enroll_device
 from haven.execution import ExecutionProviderRegistry
-from haven.intelligence.gateway import FixtureModelGateway
+from haven.intelligence.gateway import ScriptedIntelligenceProvider
 from haven.perception import FixtureObservationProvider, fuse_presence
 from haven.runtime import HavenRuntime
 from test_vertical_slice import BASE_TIME, RoleTier, _principal
@@ -78,7 +78,7 @@ def test_a_fan_reached_over_ble_runs_through_the_same_pipeline_as_any_device():
     store = HavenStore(household_id=resident.household_id)
     runtime = HavenRuntime(
         store=store,
-        model_gateway=FixtureModelGateway(),
+        intelligence_provider=ScriptedIntelligenceProvider(),
         # This household explicitly opts into trusting fused BLE+WiFi presence
         # below full confidence; AuthorityEngine still fails closed by default.
         authority=AuthorityEngine(device_registry=device_registry, minimum_confidence=0.9),

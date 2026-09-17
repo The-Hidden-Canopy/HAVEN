@@ -1,34 +1,114 @@
-"""A model gateway that can propose structure but cannot execute actions."""
+"""Proposal-only intelligence seam.
+
+Architectural rule: HAVEN is agent-agnostic. An intelligence provider is
+selected through the capability registry by kind="intelligence" and the
+capabilities a call requires (for example {"interpret"} or
+{"chat", "structured_intent"}); HAVEN never asks which vendor or repository
+provides it. The scripted fixture registered in `haven.providers.defaults` is
+the zero-config default, so HAVEN runs with no intelligence provider
+installed.
+
+Every method on this seam is proposal-only. A provider may interpret text,
+converse, propose rule drafts, and explain authority decisions, but it never
+receives devices, the store, execution adapters, or permissions, and nothing
+it returns is executable. Authority and execution stay behind the approval
+boundary.
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 from uuid import uuid4
 
-from haven.core.domain import ActionKind, Principal, RuleDraft
+from haven.core.domain import ActionKind, AuthorityDecision, Principal, RuleDraft
 from haven.core.time import require_aware_utc
 
 
 class UnsupportedIntent(ValueError):
-    """Raised when the fixture gateway has no declared interpretation."""
+    """Raised when the fixture provider has no declared interpretation."""
 
 
-class ModelGateway(Protocol):
+@dataclass(frozen=True)
+class AgentContext:
+    """Bounded, read-only context handed to an intelligence provider.
+
+    Deliberately minimal and serializable: a household, an actor summary, an
+    optional room focus, and recent conversation lines. Providers must never
+    receive the store, world internals, or device internals through this
+    object -- it carries identifiers and plain text, nothing executable.
+    """
+
+    household_id: str
+    actor_id: str
+    actor_role: str
+    room_focus: str | None = None
+    recent_lines: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for field_name in ("household_id", "actor_id", "actor_role"):
+            if not isinstance(getattr(self, field_name), str) or not getattr(self, field_name).strip():
+                raise ValueError(f"{field_name} must be a non-empty string")
+        if self.room_focus is not None and not self.room_focus.strip():
+            raise ValueError("room_focus must be a non-empty string when set")
+        object.__setattr__(
+            self,
+            "recent_lines",
+            tuple(line for line in self.recent_lines if isinstance(line, str)),
+        )
+
+
+@dataclass(frozen=True)
+class AgentResponse:
+    """A conversational reply: text only, nothing executable."""
+
+    text: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.text, str) or not self.text.strip():
+            raise ValueError("response text must be a non-empty string")
+
+
+class IntelligenceProvider(Protocol):
+    """Proposal-only intelligence seam.
+
+    HAVEN is agent-agnostic: the provider behind this protocol may be an
+    LLM, a deterministic planner, an ensemble, or nothing. Every method
+    proposes (a structured draft, a reply, an explanation); none may ever
+    reference devices, the store, execution adapters, or permissions, and
+    nothing returned here executes. Where a method has no use for a
+    parameter yet, the signature stays -- the contract is the point.
+    """
+
     def interpret(self, text: str, *, principal: Principal, now: datetime) -> RuleDraft:
         """Return a proposal-only structured interpretation."""
+
+    def chat(self, context: AgentContext, message: str) -> AgentResponse:
+        """Return a conversational reply; nothing executable."""
+
+    def propose_rule(self, context: AgentContext, message: str) -> RuleDraft:
+        """Return a proposal-only rule draft drawn from a conversation."""
+
+    def explain(self, context: AgentContext, decision: AuthorityDecision) -> AgentResponse:
+        """Return a human-facing explanation of an authority decision."""
 
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex}"
 
 
-class FixtureModelGateway:
-    """Deterministic stand-in for a local model during the first milestone.
+def _require_text(value: str, *, name: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string")
 
-    The example phrase intentionally remains unresolved because “don't blast”
+
+class ScriptedIntelligenceProvider:
+    """Deterministic zero-config stand-in for an intelligence provider.
+
+    The example phrase intentionally remains unresolved because "don't blast"
     does not specify a brightness or scene. This makes ambiguity visible to
-    the approval boundary instead of turning model fluency into authority.
+    the approval boundary instead of turning provider fluency into authority.
     """
 
     _EXAMPLE = "when i'm working late, don't blast the bedroom lights when i walk in."
@@ -37,20 +117,21 @@ class FixtureModelGateway:
     def _normalize(text: str) -> str:
         return " ".join(text.replace("’", "'").casefold().split())
 
-    def interpret(self, text: str, *, principal: Principal, now: datetime) -> RuleDraft:
-        require_aware_utc(now, name="interpretation time")
-        if self._normalize(text).rstrip(".") != self._EXAMPLE.rstrip("."):
-            raise UnsupportedIntent("the fixture gateway has no declared interpretation for this text")
+    def _matches_example(self, text: str) -> bool:
+        return self._normalize(text).rstrip(".") == self._EXAMPLE.rstrip(".")
+
+    @staticmethod
+    def _draft(*, text: str, household_id: str, actor_id: str) -> RuleDraft:
         return RuleDraft(
             draft_id=_new_id("draft"),
-            household_id=principal.household_id,
-            proposed_by=principal.actor_id,
+            household_id=household_id,
+            proposed_by=actor_id,
             source_text=text,
             interpretation=(
                 "When the requester enters the bedroom while the household "
                 "context working_late is active, apply a gentler bedroom-light setting."
             ),
-            trigger_person_id=principal.actor_id,
+            trigger_person_id=actor_id,
             trigger_room_id="bedroom",
             required_context="working_late",
             action_kind=ActionKind.SET_LIGHT_BRIGHTNESS,
@@ -64,5 +145,38 @@ class FixtureModelGateway:
             ),
         )
 
+    def interpret(self, text: str, *, principal: Principal, now: datetime) -> RuleDraft:
+        require_aware_utc(now, name="interpretation time")
+        if not self._matches_example(text):
+            raise UnsupportedIntent("the fixture provider has no declared interpretation for this text")
+        return self._draft(text=text, household_id=principal.household_id, actor_id=principal.actor_id)
 
-__all__ = ["FixtureModelGateway", "ModelGateway", "UnsupportedIntent"]
+    def chat(self, context: AgentContext, message: str) -> AgentResponse:
+        _require_text(message, name="message")
+        if not self._matches_example(message):
+            raise UnsupportedIntent("the fixture provider has no canned response for this message")
+        return AgentResponse(
+            text=(
+                "I can turn that into a proposal for a gentler bedroom-light setting "
+                "while you're working late, but I won't pick a brightness for you -- "
+                "the owner still approves anything I draft."
+            )
+        )
+
+    def propose_rule(self, context: AgentContext, message: str) -> RuleDraft:
+        _require_text(message, name="message")
+        if not self._matches_example(message):
+            raise UnsupportedIntent("the fixture provider has no declared rule proposal for this text")
+        return self._draft(text=message, household_id=context.household_id, actor_id=context.actor_id)
+
+    def explain(self, context: AgentContext, decision: AuthorityDecision) -> AgentResponse:
+        return AgentResponse(text=f"{decision.status.value}: {decision.code.value} -- {decision.explanation}")
+
+
+__all__ = [
+    "AgentContext",
+    "AgentResponse",
+    "IntelligenceProvider",
+    "ScriptedIntelligenceProvider",
+    "UnsupportedIntent",
+]

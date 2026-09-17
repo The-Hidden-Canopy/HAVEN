@@ -17,9 +17,11 @@
   --teal:          #4fd1c5;
   --amber:         #f0a05a;
   --red:           #ef6461;
+  --cyan:          #67e8f9;
   --teal-dim:      rgba(79, 209, 197, 0.30);
   --amber-dim:     rgba(240, 160, 90, 0.35);
   --red-dim:       rgba(239, 100, 97, 0.40);
+  --cyan-dim:      rgba(103, 232, 249, 0.30);
   --radius:        12px;
   --radius-sm:     8px;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -210,6 +212,10 @@ a {
 .center[data-view="world"] .view-world,
 .center[data-view="activity"] .view-activity,
 .center[data-view="memory"] .view-memory,
+.center[data-view="people"] .view-people,
+.center[data-view="automations"] .view-automations,
+.center[data-view="system"] .view-system,
+.center[data-view="models"] .view-models,
 .center[data-view="placeholder"] .view-placeholder {
   display: block;
 }
@@ -268,6 +274,253 @@ a {
   border-bottom: 1px solid var(--border);
   font-size: 12.5px;
 }
+
+/* people cards */
+.person-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.person-status.micro { align-self: flex-start; }
+
+.person-status.present { color: var(--teal); }
+
+/* automation rows */
+.feed-stamp {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.feed-target {
+  flex: none;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.auto-badge {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--muted);
+  border: 1px solid var(--border-strong);
+}
+
+.auto-badge.approved {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+  background: rgba(79, 209, 197, 0.07);
+}
+
+.auto-badge.proposed {
+  color: var(--amber);
+  border-color: var(--amber-dim);
+  background: rgba(240, 160, 90, 0.07);
+}
+
+.auto-badge.revoked { opacity: 0.6; }
+
+/* system view: quiet grouped sections in the rail CONTEXT idiom */
+.sys-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 22px;
+}
+
+.sys-section > .micro {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+
+.sys-unavailable {
+  font-size: 12.5px;
+}
+
+/* ---------- models view ---------- */
+
+.model-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.model-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.model-panel[hidden] { display: none; }
+
+.model-panel > .micro {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 5px;
+}
+
+.model-form {
+  display: flex;
+  gap: 8px;
+}
+
+.model-form input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 11px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.model-form input::placeholder { color: var(--muted); font-style: italic; }
+
+.model-form input:focus {
+  outline: none;
+  border-color: var(--border-strong);
+}
+
+.model-form button,
+.model-panel-actions .btn,
+#inspect-install {
+  background: var(--bg-raise-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.model-form button:hover,
+.model-panel-actions .btn:hover,
+#inspect-install:hover { border-color: var(--teal-dim); color: var(--teal); }
+
+#inspect-install { align-self: flex-start; padding: 6px 14px; }
+
+#inspect-install[hidden] { display: none; }
+
+.model-error {
+  color: var(--amber);
+  opacity: 0.8;
+  font-size: 12px;
+}
+
+.model-error[hidden] { display: none; }
+
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.model-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.model-id {
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-meta,
+.model-caps,
+.model-extras {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.model-badges {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.model-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.model-actions .btn {
+  padding: 3px 10px;
+  font-size: 10.5px;
+  color: var(--muted);
+  border-color: var(--border);
+  background: transparent;
+}
+
+.model-actions .btn:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+/* model badges: same quiet idiom as auto-badge / camera-badge */
+.model-badge {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--muted);
+  border: 1px solid var(--border-strong);
+}
+
+.model-badge.src-local {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+  background: rgba(79, 209, 197, 0.07);
+}
+
+.model-badge.src-endpoint {
+  color: var(--cyan);
+  border-color: var(--cyan-dim);
+  background: rgba(103, 232, 249, 0.06);
+}
+
+.model-badge.state-loaded {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+  background: rgba(79, 209, 197, 0.07);
+}
+
+.model-badge.state-amber {
+  color: var(--amber);
+  border-color: var(--amber-dim);
+  background: rgba(240, 160, 90, 0.07);
+}
+
+.model-badge.state-dim { opacity: 0.6; }
 
 /* right HAVEN rail */
 .haven-rail {
@@ -343,10 +596,33 @@ a {
   transition: color 0.25s, border-color 0.25s, background 0.25s;
 }
 
-.pill.pill-idle {
-  color: var(--teal);
-  border-color: var(--teal-dim);
-  background: rgba(79, 209, 197, 0.05);
+.pill::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-right: 7px;
+  vertical-align: 1px;
+}
+
+/* dormant: quiet, explicitly not capturing */
+.pill.pill-dormant {
+  color: var(--muted);
+  border-color: var(--border-strong);
+  background: rgba(139, 152, 169, 0.04);
+}
+
+/* voice states (wake / listening / interpreting): soft cyan */
+.pill.pill-voice {
+  color: var(--cyan);
+  border-color: var(--cyan-dim);
+  background: rgba(103, 232, 249, 0.05);
+}
+
+body[data-glow="listening"] .pill.pill-voice::before {
+  box-shadow: 0 0 8px 1px rgba(103, 232, 249, 0.7);
 }
 
 .pill.pill-attention {
@@ -402,6 +678,29 @@ a {
 
 .camera-motion { color: var(--text); }
 .camera-motion.quiet { color: var(--muted); }
+
+/* offline camera: informational amber badge, quiet — no glow, no pulse */
+.camera-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.camera-badge {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--amber);
+  border: 1px solid var(--amber-dim);
+  background: rgba(240, 160, 90, 0.07);
+}
+
+.camera-tile.offline .camera-head > span:first-child { opacity: 0.55; }
+.camera-motion.offline { color: var(--amber); }
 
 /* context rows: label .......... value */
 .ctx-row {
@@ -555,6 +854,109 @@ a {
 
 .composer button:hover { border-color: var(--teal-dim); color: var(--teal); }
 
+/* mic waveform — pure CSS, toggled by class; hidden unless voice.mic */
+.mic-wave {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 14px;
+  padding: 0 2px;
+}
+
+.mic-wave[hidden] { display: none; }
+
+.mic-wave span {
+  width: 3px;
+  height: 5px;
+  border-radius: 1.5px;
+  background: var(--cyan);
+  opacity: 0.85;
+  transform-origin: center;
+}
+
+.mic-wave.live span {
+  animation: mic-bounce 0.9s ease-in-out infinite;
+}
+
+.mic-wave.calm span {
+  animation: mic-calm 2.6s ease-in-out infinite;
+}
+
+.mic-wave span:nth-child(2) { animation-delay: 0.12s; }
+.mic-wave span:nth-child(3) { animation-delay: 0.24s; }
+.mic-wave span:nth-child(4) { animation-delay: 0.36s; }
+
+@keyframes mic-bounce {
+  0%, 100% { height: 4px; }
+  50%      { height: 13px; }
+}
+
+@keyframes mic-calm {
+  0%, 100% { height: 4px; opacity: 0.45; }
+  50%      { height: 7px; opacity: 0.7; }
+}
+
+/* voice composer row: Speak always; STT stand-in inline while listening */
+.voice-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn-speak {
+  align-self: flex-start;
+  color: var(--cyan);
+  border-color: var(--cyan-dim);
+}
+
+.btn-speak:hover { background: rgba(103, 232, 249, 0.07); }
+
+.btn-speak.active {
+  border-color: var(--cyan);
+  background: rgba(103, 232, 249, 0.08);
+}
+
+.voice-inline {
+  display: flex;
+  gap: 8px;
+}
+
+.voice-inline[hidden] { display: none; }
+
+.voice-inline input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 11px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.voice-inline input::placeholder { color: var(--muted); font-style: italic; }
+
+.voice-inline input:focus {
+  outline: none;
+  border-color: var(--cyan-dim);
+}
+
+.voice-inline button {
+  background: var(--bg-raise-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.voice-inline button:hover { border-color: var(--cyan-dim); color: var(--cyan); }
+
+.voice-inline #voice-stop:hover { border-color: var(--red-dim); color: var(--red); }
+
 /* dev overlay */
 .dev-overlay {
   position: fixed;
@@ -680,6 +1082,45 @@ body[data-glow="completed"] .brand-dot {
   100% {
     border-color: var(--border);
     box-shadow: 0 0 0 0 rgba(79, 209, 197, 0);
+  }
+}
+
+/* ---------- voice glow states ---------- */
+/* listening / interpreting: soft cyan bloom, ambient 4s cadence.
+   data-glow is single-valued, so these selectors can never fire while
+   permission/critical is active — amber always wins by construction. */
+body[data-glow="listening"] .brand-dot,
+body[data-glow="interpreting"] .brand-dot {
+  background: var(--cyan);
+  animation: cyan-mark-pulse 4s ease-in-out infinite;
+}
+
+body[data-glow="listening"] .wordmark,
+body[data-glow="interpreting"] .wordmark {
+  animation: cyan-word-pulse 4s ease-in-out infinite;
+}
+
+body[data-glow="listening"] .haven-rail,
+body[data-glow="interpreting"] .haven-rail {
+  animation: cyan-rail-halo 4s ease-in-out infinite;
+}
+
+@keyframes cyan-mark-pulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(103, 232, 249, 0.35); }
+  50%      { box-shadow: 0 0 14px 2px rgba(103, 232, 249, 0.55); }
+}
+
+@keyframes cyan-word-pulse {
+  0%, 100% { text-shadow: 0 0 0 rgba(103, 232, 249, 0); }
+  50%      { text-shadow: 0 0 14px rgba(103, 232, 249, 0.45); }
+}
+
+@keyframes cyan-rail-halo {
+  0%, 100% {
+    box-shadow: inset 0 0 0 0 rgba(103, 232, 249, 0);
+  }
+  50% {
+    box-shadow: inset 0 0 34px -18px rgba(103, 232, 249, 0.35);
   }
 }
 

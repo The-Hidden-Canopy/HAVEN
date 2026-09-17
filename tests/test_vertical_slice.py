@@ -18,7 +18,7 @@ from haven.core.domain import (
 )
 from haven.core.store import HavenStore
 from haven.integrations.home_assistant import FixtureHomeAssistant
-from haven.intelligence.gateway import FixtureModelGateway
+from haven.intelligence.gateway import ScriptedIntelligenceProvider
 from haven.runtime import HavenRuntime
 
 
@@ -104,7 +104,7 @@ def _runtime():
     adapter = FixtureHomeAssistant()
     runtime = HavenRuntime(
         store=store,
-        model_gateway=FixtureModelGateway(),
+        intelligence_provider=ScriptedIntelligenceProvider(),
         home_assistant=adapter,
     )
     return runtime, store, adapter, principal, owner
