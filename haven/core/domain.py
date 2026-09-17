@@ -7,7 +7,7 @@ They describe what was observed, what was proposed, and what was authorized.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from enum import Enum, IntEnum
 from typing import Any, Iterable, Mapping
 
@@ -63,6 +63,7 @@ class ActionKind(str, Enum):
     ACTIVATE_SCENE = "activate_scene"
     SET_THERMOSTAT = "set_thermostat"
     OPEN_GARAGE = "open_garage"
+    CLOSE_GARAGE = "close_garage"
     UNLOCK_DOOR = "unlock_door"
     PURCHASE = "purchase"
     CHANGE_ALARM = "change_alarm"
@@ -330,6 +331,47 @@ class PredictionTrigger:
 
 
 @dataclass(frozen=True)
+class ScheduleTrigger:
+    """A rule trigger that fires at a time of day, on given weekdays.
+
+    This answers "is `at` inside this schedule's window right now" -- a
+    pure, stateless check, the same shape as every other trigger. It does
+    not track whether it already fired today: Haven Core has no scheduler
+    daemon (the same way it has no polling loop for `HomeAssistantObserver`),
+    so avoiding a duplicate run within one day is a caller's job, not this
+    engine's. `time_of_day` and `at` are compared as given -- there is no
+    household timezone concept yet, so a caller is responsible for passing
+    `at` in whatever wall-clock meaning `time_of_day` was declared against.
+
+    `weekdays` uses `datetime.weekday()`'s convention (Monday=0..Sunday=6);
+    an empty set means every day. `window` is how long after `time_of_day`
+    the schedule is still considered due, to tolerate a caller that checks
+    periodically rather than at the exact instant.
+    """
+
+    time_of_day: time
+    weekdays: frozenset[int] = frozenset()
+    window: timedelta = timedelta(minutes=5)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.time_of_day, time):
+            raise ValueError("time_of_day must be a datetime.time")
+        weekdays = frozenset(self.weekdays)
+        if any(not isinstance(day, int) or not 0 <= day <= 6 for day in weekdays):
+            raise ValueError("weekdays must be integers 0 (Monday) through 6 (Sunday)")
+        object.__setattr__(self, "weekdays", weekdays)
+        if self.window <= timedelta(0):
+            raise ValueError("window must be positive")
+
+    def is_due(self, at: datetime) -> bool:
+        at = require_aware_utc(at, name="schedule check time")
+        if self.weekdays and at.weekday() not in self.weekdays:
+            return False
+        today_start = datetime.combine(at.date(), self.time_of_day, tzinfo=at.tzinfo)
+        return today_start <= at < today_start + self.window
+
+
+@dataclass(frozen=True)
 class RuleDraft:
     draft_id: str
     household_id: str
@@ -341,6 +383,7 @@ class RuleDraft:
     trigger_room_id: str | None = None
     required_context: str | None = None
     prediction_trigger: PredictionTrigger | None = None
+    schedule_trigger: ScheduleTrigger | None = None
     target_device_id: str | None = None
     parameters: tuple[tuple[str, Any], ...] = ()
     assumptions: tuple[str, ...] = ()
@@ -364,13 +407,18 @@ class RuleDraft:
         has_room = self.trigger_room_id is not None
         if has_person != has_room:
             raise ValueError("a presence trigger requires both trigger_person_id and trigger_room_id")
-        if has_person == (self.prediction_trigger is not None):
-            raise ValueError("a rule draft must set exactly one of a presence trigger or a prediction_trigger")
+        trigger_kinds = [has_person, self.prediction_trigger is not None, self.schedule_trigger is not None]
+        if sum(trigger_kinds) != 1:
+            raise ValueError(
+                "a rule draft must set exactly one of a presence trigger, a prediction_trigger, or a schedule_trigger"
+            )
         if self.trigger_person_id is not None:
             object.__setattr__(self, "trigger_person_id", _require_text(self.trigger_person_id, name="trigger_person_id"))
             object.__setattr__(self, "trigger_room_id", _require_text(self.trigger_room_id, name="trigger_room_id"))
         if self.prediction_trigger is not None and not isinstance(self.prediction_trigger, PredictionTrigger):
             raise ValueError("prediction_trigger must be a PredictionTrigger")
+        if self.schedule_trigger is not None and not isinstance(self.schedule_trigger, ScheduleTrigger):
+            raise ValueError("schedule_trigger must be a ScheduleTrigger")
         if self.required_context is not None:
             _require_text(self.required_context, name="required_context")
         if self.expires_at is not None:
@@ -539,6 +587,9 @@ class WorldSnapshot:
             issue = self._prediction_problem(draft.prediction_trigger, at=at)
             if issue is not None:
                 return False, issue
+        elif draft.schedule_trigger is not None:
+            if not draft.schedule_trigger.is_due(at):
+                return False, DecisionCode.TRIGGER_NOT_ACTIVE
         else:
             presence = self.presence_for(draft.trigger_person_id, draft.trigger_room_id)
             if presence is None:
@@ -555,21 +606,24 @@ class WorldSnapshot:
             if not presence.present:
                 return False, DecisionCode.TRIGGER_NOT_ACTIVE
 
-            if draft.required_context is not None:
-                context = self.context_for(draft.required_context)
-                if context is None:
-                    return False, DecisionCode.EVIDENCE_MISSING
-                issue = self.evidence_problem(
-                    status=context.status,
-                    observed_at=context.observed_at,
-                    confidence=context.confidence,
-                    at=at,
-                    minimum_confidence=minimum_confidence,
-                )
-                if issue is not None:
-                    return False, issue
-                if not context.active:
-                    return False, DecisionCode.TRIGGER_NOT_ACTIVE
+        # required_context is a condition layered on top of any trigger kind
+        # -- "every weekday at 6:30, but not on vacation" is a schedule
+        # trigger plus a context condition, not a fourth trigger kind.
+        if draft.required_context is not None:
+            context = self.context_for(draft.required_context)
+            if context is None:
+                return False, DecisionCode.EVIDENCE_MISSING
+            issue = self.evidence_problem(
+                status=context.status,
+                observed_at=context.observed_at,
+                confidence=context.confidence,
+                at=at,
+                minimum_confidence=minimum_confidence,
+            )
+            if issue is not None:
+                return False, issue
+            if not context.active:
+                return False, DecisionCode.TRIGGER_NOT_ACTIVE
 
         device = self.device_for(target_device_id)
         if device is None:

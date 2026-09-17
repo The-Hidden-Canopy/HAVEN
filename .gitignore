@@ -6,6 +6,12 @@ venv/
 dist/
 build/
 *.egg-info/
+
+# Compiled native-library artifacts are build output, not source.
+native/haven-bt/build/
+*.so
+*.dll
+*.dylib
 .env
 .env.*
 !.env.example

@@ -46,6 +46,7 @@ SAFE_AUTOMATIC = frozenset(
 CONFIRMATION_REQUIRED = frozenset(
     {
         ActionKind.OPEN_GARAGE,
+        ActionKind.CLOSE_GARAGE,
         ActionKind.UNLOCK_DOOR,
         ActionKind.PURCHASE,
         ActionKind.CHANGE_ALARM,

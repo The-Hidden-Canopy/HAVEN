@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HAVEN</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body data-glow="idle">
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-dot" aria-hidden="true"></span>
+        <span class="wordmark">HAVEN</span>
+        <span class="brand-sub">Home&nbsp;&middot;&nbsp;<span id="local-time">&mdash;</span></span>
+      </div>
+      <div class="topbar-right">
+        <span id="state-pill" class="pill pill-idle">&#9679; LISTENING</span>
+      </div>
+    </header>
+
+    <nav class="rail-nav" aria-label="Primary">
+      <ul>
+        <li class="active" data-view="world">
+          <a href="#">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7 8 2l5.5 5v6.5h-3.6V9.8H6.1v3.7H2.5z"/></svg>
+            <span class="nav-label">Home</span>
+          </a>
+        </li>
+        <li data-view="world">
+          <a href="#">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="2.5" width="7" height="11" rx="1"/><circle cx="10" cy="8" r="0.6"/></svg>
+            <span class="nav-label">Rooms</span>
+          </a>
+        </li>
+        <li data-view="placeholder">
+          <a href="#">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="5.2" r="2.5"/><path d="M2.8 13.5c.7-2.7 2.8-4 5.2-4s4.5 1.3 5.2 4"/></svg>
+            <span class="nav-label">People</span>
+          </a>
+        </li>
+        <li data-view="placeholder">
+          <a href="#">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8.8 1.8 3.6 8.6h3l-1 5.6 5.2-6.8h-3z"/></svg>
+            <span class="nav-label">Automations</span>
+          </a>
+        </li>
+        <li data-view="memory">
+          <a href="#">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><ellipse cx="8" cy="4" rx="4.5" ry="1.8"/><path d="M3.5 4v8c0 1 2 1.8 4.5 1.8s4.5-.8 4.5-1.8V4"/><path d="M3.5 8c0 1 2 1.8 4.5 1.8s4.5-.8 4.5-1.8"/></svg>
+            <span class="nav-label">Memory</span>
+          </a>
+        </li>
+        <li data-view="activity">
+          <a href="#">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 8h3l1.5-4 2.5 8 1.5-4h4"/></svg>
+            <span class="nav-label">Activity</span>
+          </a>
+        </li>
+        <li data-view="placeholder">
+          <a href="#">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.4"/><path d="M8 1.6v2.4M8 12v2.4M1.6 8h2.4M12 8h2.4M3.5 3.5l1.7 1.7M10.8 10.8l1.7 1.7M12.5 3.5l-1.7 1.7M5.2 10.8l-1.7 1.7"/></svg>
+            <span class="nav-label">System</span>
+          </a>
+        </li>
+      </ul>
+    </nav>
+
+    <main class="center" data-view="world">
+      <section class="view view-world" aria-label="World">
+        <div class="center-head">
+          <h1>HOUSE / WORLD</h1>
+          <span id="center-meta" class="muted">&mdash;</span>
+        </div>
+        <section id="rooms" class="card-grid" aria-label="Rooms"></section>
+      </section>
+
+      <section class="view view-activity" aria-label="Activity">
+        <div class="center-head">
+          <h1>ACTIVITY</h1>
+          <span id="activity-count" class="muted">&mdash;</span>
+        </div>
+        <div id="activity-list" class="feed"></div>
+      </section>
+
+      <section class="view view-memory" aria-label="Memory">
+        <div class="center-head">
+          <h1>MEMORY</h1>
+          <span id="memory-count" class="muted">&mdash;</span>
+        </div>
+        <div id="memory-list" class="feed"></div>
+      </section>
+
+      <section class="view view-placeholder" aria-label="Placeholder">
+        <p id="placeholder-note" class="placeholder-note muted">Not in this slice</p>
+      </section>
+    </main>
+
+    <aside class="haven-rail">
+      <div class="rail-head">
+        <h2>HAVEN</h2>
+        <span id="focus-label" class="muted">Focused: none</span>
+      </div>
+
+      <section class="rail-section">
+        <h3 class="micro">CONTEXT</h3>
+        <div id="context-list"></div>
+      </section>
+
+      <section class="rail-section rail-section-grow">
+        <h3 class="micro">CONVERSATION</h3>
+        <div id="conversation" class="conversation" aria-live="polite"></div>
+      </section>
+
+      <section id="pending-slot"></section>
+
+      <form id="chat-form" class="composer">
+        <input id="chat-input" type="text" placeholder="Ask HAVEN&hellip;" autocomplete="off" spellcheck="false">
+        <button type="submit" aria-label="Send">Send</button>
+      </form>
+    </aside>
+
+    <footer class="statusbar">
+      <div class="status-left">
+        <span class="status-core">&#9678; <span id="core-name">Local Core</span></span>
+        <span id="status-devices" class="muted">&mdash;</span>
+        <span id="status-people" class="muted">&mdash;</span>
+      </div>
+      <div id="status-line" class="status-right nominal">Everything nominal</div>
+    </footer>
+  </div>
+
+  <div class="dev-overlay" aria-label="Developer preview controls">
+    <span class="micro">PREVIEW STATE</span>
+    <div class="dev-buttons">
+      <button type="button" data-preview="idle">Idle</button>
+      <button type="button" data-preview="acting">Acting</button>
+      <button type="button" data-preview="permission">Permission</button>
+      <button type="button" data-preview="critical">Critical</button>
+      <button type="button" data-preview="completed">Completed</button>
+      <button type="button" id="demo-reset" title="Reset demo scenario">&#10227;</button>
+      <button type="button" id="demo-cam-down" title="Camera down — driveway critical">Cam &#9660;</button>
+      <button type="button" id="demo-cam-up" title="Camera up — clear critical">Cam &#9650;</button>
+    </div>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

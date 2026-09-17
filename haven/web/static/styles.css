@@ -1,0 +1,702 @@
+/* ============================================================
+   HAVEN — dark, quiet, architectural
+   Glow is an authority/attention signal, never decoration.
+   Organized: custom properties → base → layout → components
+   → glow states → media queries.
+   ============================================================ */
+
+/* ---------- custom properties ---------- */
+:root {
+  --bg:            #0b0f17;
+  --bg-raise:      #10161f;
+  --bg-raise-2:    #141b26;
+  --border:        #1c2532;
+  --border-strong: #2a3546;
+  --text:          #e6edf3;
+  --muted:         #8b98a9;
+  --teal:          #4fd1c5;
+  --amber:         #f0a05a;
+  --red:           #ef6461;
+  --teal-dim:      rgba(79, 209, 197, 0.30);
+  --amber-dim:     rgba(240, 160, 90, 0.35);
+  --red-dim:       rgba(239, 100, 97, 0.40);
+  --radius:        12px;
+  --radius-sm:     8px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+}
+
+/* ---------- base ---------- */
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input {
+  font: inherit;
+  color: inherit;
+}
+
+h1, h2, h3, h4, p, ul {
+  margin: 0;
+}
+
+ul { padding: 0; list-style: none; }
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.muted { color: var(--muted); }
+
+.micro {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---------- layout regions ---------- */
+.app {
+  display: grid;
+  height: 100vh;
+  grid-template-rows: 56px minmax(0, 1fr) 40px;
+  grid-template-columns: 200px minmax(0, 1fr) clamp(320px, 24vw, 380px);
+  grid-template-areas:
+    "top    top    top"
+    "nav    center rail"
+    "status status status";
+}
+
+/* top bar */
+.topbar {
+  grid-area: top;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--teal);
+  box-shadow: 0 0 4px rgba(79, 209, 197, 0.35);
+  flex: none;
+}
+
+.wordmark {
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  font-size: 13px;
+}
+
+.brand-sub {
+  color: var(--muted);
+  font-size: 12px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+}
+
+.topbar-right { display: flex; align-items: center; }
+
+/* left nav rail */
+.rail-nav {
+  grid-area: nav;
+  border-right: 1px solid var(--border);
+  padding: 14px 10px;
+  overflow: hidden;
+}
+
+.rail-nav ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rail-nav a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s;
+}
+
+.rail-nav a:hover {
+  color: var(--text);
+  background: var(--bg-raise);
+}
+
+.rail-nav li.active a {
+  color: var(--text);
+  background: var(--bg-raise-2);
+}
+
+.rail-nav li.active svg {
+  stroke: var(--teal);
+}
+
+.rail-nav svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+
+/* center */
+.center {
+  grid-area: center;
+  padding: 22px 26px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+}
+
+.center-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.center-head h1 {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--text);
+}
+
+.center-head .muted { font-size: 12px; }
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+  align-content: start;
+}
+
+/* center views: only the section matching main[data-view] is shown */
+.view { display: none; }
+
+.center[data-view="world"] .view-world,
+.center[data-view="activity"] .view-activity,
+.center[data-view="memory"] .view-memory,
+.center[data-view="placeholder"] .view-placeholder {
+  display: block;
+}
+
+/* activity & memory feeds */
+.feed {
+  display: flex;
+  flex-direction: column;
+}
+
+.feed-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.feed-time {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  flex: none;
+  width: 74px;
+}
+
+.feed-type {
+  flex: none;
+  min-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-text { color: var(--text); }
+
+.feed-actor {
+  flex: none;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.feed-empty {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+/* quiet placeholder view */
+.placeholder-note {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+/* right HAVEN rail */
+.haven-rail {
+  grid-area: rail;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.rail-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.rail-head h2 {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+}
+
+.rail-head .muted { font-size: 12px; }
+
+.rail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rail-section-grow {
+  flex: 1;
+  min-height: 0;
+}
+
+/* bottom status bar */
+.statusbar {
+  grid-area: status;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 12px;
+}
+
+.status-left {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+
+.status-core { color: var(--text); }
+
+.status-right { letter-spacing: 0.04em; }
+
+.status-right.nominal   { color: var(--teal); }
+.status-right.attention { color: var(--amber); }
+
+/* ---------- components ---------- */
+
+/* state pill */
+.pill {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 4px 13px;
+  border-radius: 999px;
+  border: 1px solid;
+  transition: color 0.25s, border-color 0.25s, background 0.25s;
+}
+
+.pill.pill-idle {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+  background: rgba(79, 209, 197, 0.05);
+}
+
+.pill.pill-attention {
+  color: var(--amber);
+  border-color: var(--amber-dim);
+  background: rgba(240, 160, 90, 0.07);
+}
+
+/* room cards */
+.room-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 16px 18px;
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s, outline-color 0.2s;
+  outline: 1px solid transparent;
+  outline-offset: 2px;
+}
+
+.room-card:hover { border-color: var(--border-strong); }
+
+.room-card.focused {
+  outline-color: rgba(79, 209, 197, 0.45);
+  border-color: rgba(79, 209, 197, 0.30);
+}
+
+.room-name {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.room-sub {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.camera-tile {
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 11px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.camera-motion { color: var(--text); }
+.camera-motion.quiet { color: var(--muted); }
+
+/* context rows: label .......... value */
+.ctx-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12.5px;
+  padding: 3px 0;
+}
+
+.ctx-label { color: var(--muted); }
+
+.ctx-dots {
+  flex: 1;
+  border-bottom: 1px dotted var(--border-strong);
+  transform: translateY(-3px);
+}
+
+.ctx-value { color: var(--text); text-align: right; }
+
+/* conversation */
+.conversation {
+  flex: 1;
+  min-height: 60px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.convo-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+}
+
+.convo-who {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.convo-entry.haven .convo-who { color: var(--teal); }
+
+.convo-text { color: var(--text); }
+
+.convo-entry.user .convo-text { color: var(--muted); }
+
+/* pending permission card */
+.pending-card {
+  border: 1px solid var(--teal-dim);
+  border-radius: var(--radius);
+  background: rgba(79, 209, 197, 0.04);
+  padding: 14px 16px;
+}
+
+.pending-title {
+  font-size: 14px;
+  font-weight: 650;
+  margin-bottom: 4px;
+}
+
+.pending-detail {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-bottom: 12px;
+}
+
+.pending-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 11px;
+}
+
+.btn {
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raise);
+  padding: 7px 15px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.btn-approve {
+  color: var(--teal);
+  border-color: rgba(79, 209, 197, 0.45);
+}
+
+.btn-approve:hover { background: rgba(79, 209, 197, 0.08); }
+
+.btn-deny {
+  color: var(--red);
+  border-color: var(--red-dim);
+}
+
+.btn-deny:hover { background: rgba(239, 100, 97, 0.07); }
+
+.pending-auto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.pending-auto input { accent-color: var(--teal); }
+
+/* chat composer */
+.composer {
+  display: flex;
+  gap: 8px;
+}
+
+.composer input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.composer input::placeholder { color: var(--muted); }
+
+.composer input:focus {
+  outline: none;
+  border-color: var(--border-strong);
+}
+
+.composer button {
+  background: var(--bg-raise-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0 14px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.composer button:hover { border-color: var(--teal-dim); color: var(--teal); }
+
+/* dev overlay */
+.dev-overlay {
+  position: fixed;
+  right: 12px;
+  bottom: 52px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(16, 22, 31, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+  z-index: 10;
+}
+
+.dev-overlay:hover { opacity: 1; }
+
+.dev-buttons {
+  display: flex;
+  gap: 5px;
+}
+
+.dev-buttons button {
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 10.5px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.dev-buttons button:hover { color: var(--text); border-color: var(--border-strong); }
+
+.dev-buttons button.active {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+}
+
+/* ---------- glow states ---------- */
+/* Idle is intentionally almost glowless. Anything more is a signal. */
+
+/* acting: subtle moving glow around the target room card only */
+body[data-glow="acting"] .room-card[data-glow-target] {
+  animation: acting-sweep 3.2s ease-in-out infinite;
+}
+
+@keyframes acting-sweep {
+  0%, 100% {
+    border-color: var(--border);
+    box-shadow: 0 0 0 0 rgba(79, 209, 197, 0);
+  }
+  50% {
+    border-color: rgba(79, 209, 197, 0.45);
+    box-shadow: 0 0 22px -6px rgba(79, 209, 197, 0.45);
+  }
+}
+
+/* permission: strong slow pulse on the HAVEN mark + halo on pending card */
+body[data-glow="permission"] .brand-dot {
+  animation: mark-pulse 2.5s ease-in-out infinite;
+}
+
+body[data-glow="permission"] .wordmark {
+  animation: word-pulse 2.5s ease-in-out infinite;
+}
+
+body[data-glow="permission"] .pending-card {
+  animation: halo-pulse 2.5s ease-in-out infinite;
+}
+
+@keyframes mark-pulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(79, 209, 197, 0.35); }
+  50%      { box-shadow: 0 0 14px 2px rgba(79, 209, 197, 0.65); }
+}
+
+@keyframes word-pulse {
+  0%, 100% { text-shadow: 0 0 0 rgba(79, 209, 197, 0); }
+  50%      { text-shadow: 0 0 14px rgba(79, 209, 197, 0.55); }
+}
+
+@keyframes halo-pulse {
+  0%, 100% {
+    border-color: var(--teal-dim);
+    box-shadow: 0 0 10px -4px rgba(79, 209, 197, 0.25);
+  }
+  50% {
+    border-color: rgba(79, 209, 197, 0.65);
+    box-shadow: 0 0 30px -4px rgba(79, 209, 197, 0.55);
+  }
+}
+
+/* critical: amber/red family — never confusable with permission teal */
+body[data-glow="critical"] .brand-dot {
+  background: var(--amber);
+  box-shadow: 0 0 12px 2px rgba(240, 160, 90, 0.6);
+}
+
+body[data-glow="critical"] .wordmark {
+  color: var(--amber);
+  text-shadow: 0 0 14px rgba(240, 160, 90, 0.45);
+}
+
+body[data-glow="critical"] .pending-card {
+  border-color: var(--red-dim);
+  background: rgba(239, 100, 97, 0.05);
+  box-shadow: 0 0 22px -6px rgba(239, 100, 97, 0.45);
+}
+
+/* completed: brief teal fade-out, then JS returns to idle */
+body[data-glow="completed"] .room-card[data-glow-target],
+body[data-glow="completed"] .brand-dot {
+  animation: completed-fade 2s ease-out forwards;
+}
+
+@keyframes completed-fade {
+  0% {
+    border-color: rgba(79, 209, 197, 0.7);
+    box-shadow: 0 0 26px -2px rgba(79, 209, 197, 0.6);
+  }
+  100% {
+    border-color: var(--border);
+    box-shadow: 0 0 0 0 rgba(79, 209, 197, 0);
+  }
+}
+
+/* ---------- media queries ---------- */
+/* Collapse the nav rail to icon-only on narrower desktop/tablet widths. */
+@media (max-width: 1280px) {
+  .app {
+    grid-template-columns: 64px minmax(0, 1fr) clamp(300px, 26vw, 360px);
+  }
+
+  .rail-nav { padding: 14px 8px; }
+
+  .rail-nav a {
+    justify-content: center;
+    padding: 10px 0;
+    gap: 0;
+  }
+
+  .rail-nav .nav-label { display: none; }
+}

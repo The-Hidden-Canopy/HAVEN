@@ -1,19 +1,17 @@
 """Home Assistant-shaped integration boundary.
 
-The first milestone has no network client. The fixture records exactly what
-would have crossed the integration boundary after authorization.
+The fixture records exactly what would have crossed the integration boundary
+after authorization. `HomeAssistantAdapter` is `haven.execution.ExecutionAdapter`
+under its original name: Home Assistant is one `ExecutionAdapter` a deployment
+can register, not a protocol Haven is specially aware of.
 """
 
 from __future__ import annotations
 
-from typing import Protocol
-
 from haven.core.domain import DeviceCommand, DeviceResult
+from haven.execution import ExecutionAdapter
 
-
-class HomeAssistantAdapter(Protocol):
-    def execute(self, command: DeviceCommand) -> DeviceResult:
-        """Execute one already-authorized command."""
+HomeAssistantAdapter = ExecutionAdapter
 
 
 class FixtureHomeAssistant:

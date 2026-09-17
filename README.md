@@ -30,8 +30,10 @@ The initial vertical slice contains:
 - a Home Assistant-shaped fixture adapter that records commands locally,
   alongside a live REST adapter (`LiveHomeAssistantAdapter`) that implements
   the same `execute(command) -> DeviceResult` contract against a real Home
-  Assistant instance -- the only network I/O in Haven, isolated to
-  `haven/integrations/home_assistant/client.py` and never touched by tests;
+  Assistant instance -- real network I/O, isolated to
+  `haven/integrations/home_assistant/client.py`, and a second real-network
+  module, `haven/integrations/wifi/ssdp.py` (SSDP/UPnP discovery); neither
+  is touched by tests, which mock the socket/HTTP boundary instead;
 - an observe side for the same integration: `fetch_states()` reads Home
   Assistant's state list and `device_states_from_ha()` maps it onto
   `DeviceState` evidence for registry-known devices only (HA's
@@ -47,7 +49,12 @@ The initial vertical slice contains:
   export that omits confirmation material;
 - adversarial tests for cross-household scope, role tier, justification,
   ambiguous interpretation, stale/fallback evidence, invalid transitions,
-  direct state mutation, confirmation gates, and naive timestamps.
+  direct state mutation, confirmation gates, and naive timestamps;
+- a zero-dependency local web surface (`haven/web`, stdlib HTTP + SSE,
+  zero-build vanilla UI) that renders the simulated household and drives its
+  glow state language directly from real `AuthorityDecision` outcomes —
+  confirmation-required decisions pulse, evidence problems read as critical,
+  and nothing glows on its own.
 
 There is no local model runtime, camera pipeline, mobile surface, scheduler,
 cloud fallback, or physical-device capability yet.
@@ -101,21 +108,51 @@ haven/
 │   └── engine.py       # deterministic, read-only correlation -> Alert
 ├── cameras/
 │   ├── manifest.py     # camera hardware capabilities (live_stream, ptz, ...)
-│   └── registry.py     # camera discovery by room or required capability
+│   ├── registry.py     # camera discovery by room or required capability
+│   └── actuation.py    # bridges a CameraManifest into an actuatable DeviceManifest
+├── perception/
+│   ├── fusion.py        # combine independent sensor readings (noisy-OR), no vision model
+│   └── observation.py   # ObservationProvider contract: any perception source, one shape
+├── discovery/
+│   ├── models.py        # DiscoveredDevice -- a candidate, never authority
+│   ├── provider.py       # DiscoveryProvider contract + local fixture
+│   └── enrollment.py     # enroll_device(): the only path to a DeviceManifest
+├── execution/
+│   └── registry.py     # ExecutionAdapter protocol + provider_id -> adapter routing
 ├── integrations/
-│   └── home_assistant/
-│       ├── adapter.py  # protocol plus local fixture adapter
-│       ├── client.py   # live REST adapter -- the only network I/O in Haven
-│       ├── observer.py # one-shot fetch -> WorldSnapshot assembly
-│       └── state.py    # maps HA state dicts onto DeviceState evidence
+│   ├── home_assistant/
+│   │   ├── adapter.py  # protocol plus local fixture adapter
+│   │   ├── client.py   # live REST adapter
+│   │   ├── observer.py # one-shot fetch -> WorldSnapshot assembly
+│   │   └── state.py    # maps HA state dicts onto DeviceState evidence
+│   ├── ir/
+│   │   └── adapter.py  # IR-blaster ExecutionAdapter + local fixture
+│   ├── wifi/
+│   │   └── ssdp.py      # real SSDP (UPnP) DiscoveryProvider, stdlib only
+│   └── bluetooth/
+│       ├── native.py    # ctypes ABI binding -- only file that touches ctypes.CDLL
+│       └── provider.py  # BluetoothProvider (DiscoveryProvider + ExecutionAdapter)
 ├── audit/
 │   └── receipts.py     # machine-readable action receipts
+├── web/
+│   ├── serialize.py    # domain -> JSON wire format (receipt conventions)
+│   ├── demo.py         # SimulatedHouse + DemoDirector: fixture world, real engine
+│   ├── server.py       # stdlib HTTP + SSE, static UI, 127.0.0.1 only
+│   └── static/         # zero-build desktop/tablet UI (Navigation | World | HAVEN)
 └── runtime.py          # narrow orchestration of the vertical slice
 ```
 
 The package does not import from a web or API layer. Integrations receive a
 command only after the authority engine returns `ALLOW`. The model gateway
 returns a `RuleDraft`; it has no reference to the adapter or the store.
+
+Outside `haven/`, `native/haven-bt/` holds the HAVEN-BT C ABI header
+(`include/haven_bt.h`) that `haven/integrations/bluetooth/native.py` binds
+against, a deterministic fixture implementation
+(`src/fixture/fixture_backend.c`), and a real Windows/WinRT platform
+backend (`src/platform/windows/winrt_backend.cpp`) verified against actual
+Bluetooth hardware. See `native/haven-bt/README.md` for exactly what does
+and does not exist there, including Linux/macOS.
 
 ## Governance invariants
 
@@ -190,9 +227,18 @@ returns a `RuleDraft`; it has no reference to the adapter or the store.
   household opts into trusting less-than-certain evidence by explicitly
   lowering `minimum_confidence`; it is never a silent default.
 - A `RuleDraft` sets exactly one of a presence trigger (`trigger_person_id`
-  + `trigger_room_id`) or a `PredictionTrigger` (`event`, `min_confidence`,
-  optional `subject_id`) -- predictions become inputs to routines through an
-  explicit, owner-approved rule, never as an unrestricted AI decision. A
+  + `trigger_room_id`), a `PredictionTrigger` (`event`, `min_confidence`,
+  optional `subject_id`), or a `ScheduleTrigger` (`time_of_day`, `weekdays`,
+  `window`) -- predictions and schedules become inputs to routines through an
+  explicit, owner-approved rule, never as an unrestricted AI decision.
+  `required_context` layers on top of *any* trigger kind rather than being a
+  fourth one, so "every weekday at 6:30, warm the downstairs, unless nobody's
+  home" is a `ScheduleTrigger` plus `required_context="someone_home"`, not a
+  new concept. `ScheduleTrigger.is_due(at)` is a pure, stateless check --
+  Haven Core has no scheduler daemon and does not track whether a schedule
+  already fired today (the same way it has no polling loop for
+  `HomeAssistantObserver`); avoiding a duplicate run within one window is a
+  caller's job. A
   `PredictionTrigger` is judged against the confidence bar *that rule*
   declared, not `AuthorityEngine.minimum_confidence` (which governs observed
   evidence and is unrelated); the most recent matching, not-yet-future
@@ -211,19 +257,143 @@ returns a `RuleDraft`; it has no reference to the adapter or the store.
   conditions is rejected at construction rather than allowed to fire on
   every evaluation. Each condition is subject to the same `evidence_problem`
   freshness/confidence check `AuthorityEngine` uses, via a `minimum_confidence`
-  the rule itself declares. Camera/vision/thermal management (discovery, PTZ,
-  recording, retention, stream health) is not part of this repo: `AlertEngine`
-  is the policy layer those observations feed once a real provider exists.
-- `haven/cameras` is discovery only, mirroring `haven/devices`: a
-  `CameraManifest` declares hardware capabilities (`live_stream`, `ptz`,
+  the rule itself declares. Camera/vision/thermal recording, retention,
+  stream health, and event clips are not part of this repo: `AlertEngine` is
+  the policy layer real observations feed once those exist.
+- `haven/cameras` discovers cameras as flat hardware booleans
+  (`CameraManifest`/`CameraCapabilities`: `live_stream`, `ptz`,
   `optical_zoom`, `microphone`, `speaker`, `infrared_mode`,
-  `privacy_shutter`, `recording`) as flat booleans, not routed actions --
-  there is no control class or service here, because nothing in this repo
-  can move a PTZ motor or start a recording yet. A provider that finds a
-  camera on the network registers it with `CameraRegistry`; nothing here
-  performs ONVIF/RTSP/NVR discovery itself.
+  `privacy_shutter`, `recording`), the same way `haven/devices` discovers
+  actuators. `camera_to_device_manifest()` is the bridge from there into
+  actuation: it turns declared `ptz`/`optical_zoom`/`privacy_shutter`
+  hardware into ordinary `CapabilityDescriptor`s (`pan_tilt`, `zoom`,
+  `privacy_shutter`) on a `DeviceManifest`, so a camera runs through the
+  exact same `AuthorityEngine`/`ExecutionProviderRegistry` pipeline as any
+  other device -- no camera-specific runtime code exists. Engaging or
+  disengaging `privacy_shutter` is `ControlClass.GUARDED`, not `LOW_RISK`
+  like pan/tilt/zoom: an automated rule cannot toggle the one hardware
+  guarantee behind "this camera cannot see us right now" without
+  confirmation. Recording start/stop, retention, and event clips are still
+  not part of this bridge -- those need a storage/retention model this repo
+  does not have. A provider that finds a camera on the network registers it
+  with `CameraRegistry`; nothing here performs ONVIF/RTSP/NVR discovery
+  itself.
+- `haven/integrations/ir` is `FixtureIrBlaster`, the IR-controlled-device
+  analogue of `FixtureHomeAssistant` -- old TVs, window AC units, fans, and
+  projectors that only accept a learned IR code, not a queryable API. It
+  satisfies the same `ExecutionAdapter` shape and registers under its own
+  `provider_id`; a real IR blaster (Broadlink, ESPHome IR, LIRC) is a drop-in
+  replacement.
+- `haven/perception/fusion.py` combines independent readings of the same
+  fact (a camera's person-detection confidence, a thermal sensor's
+  warm-body confidence) into one `PresenceState`/`ContextState`, using
+  noisy-OR (`1 - product(1 - confidence_i)`) -- the standard combination for
+  independent evidence of one claim. Sources that disagree on the fact
+  itself raise `SensorDisagreement` rather than being resolved by a
+  majority vote or highest-confidence-wins policy this module would
+  otherwise have to invent. There is no real vision, thermal, IR, BLE, or
+  WiFi provider in this repo; this is what any real one's output would be
+  combined through, via the single `ObservationProvider.observe() ->
+  tuple[PresenceState | ContextState | DeviceState, ...]` shape every
+  perception source implements -- Haven never special-cases which transport
+  an observation came from.
+- Discovery produces a candidate, never authority: a `DiscoveredDevice`
+  (from `haven.discovery`) carries only what a scan can know --
+  `suggested_device_type`, `suggested_room`, `signal_strength` -- and there
+  is no path from it to a controllable `DeviceManifest` except
+  `enroll_device()`, which requires a non-empty `approved_by` and
+  `justification` and takes `capabilities` from the household, never from
+  the candidate's own suggestion. This is what makes Bluetooth/WiFi/mDNS/SSDP
+  "device appeared on the network" incapable of becoming "Haven may control
+  it" without a deliberate human decision in between.
+- `haven.integrations.wifi.ssdp` is a real `DiscoveryProvider`: it sends a
+  standard UPnP M-SEARCH multicast and parses whatever responds --
+  `SsdpDiscoveryProvider.discover()` is the only method that touches a
+  socket, and `parse_ssdp_response()` (what tests exercise, with fixed
+  response text) is pure. It only ever returns `DiscoveredDevice`s under
+  `provider_id="wifi-ssdp"`; SSDP's `ST`/`USN` headers give a naming-pattern
+  guess at `suggested_device_type` (e.g. `ZonePlayer` -> `"zoneplayer"`),
+  never a capability -- SSDP cannot tell Haven what an M-SEARCH response
+  can actually do, only that something answered. mDNS/SSDP-for-non-UPnP/
+  HTTP-vendor-specific/ESPHome/Matter-IP discovery are not part of this
+  repo yet.
+- Bluetooth is a native ABI (`native/haven-bt/include/haven_bt.h`), not a
+  Python Bluetooth library -- there is deliberately no Bleak, or any other
+  Bluetooth package, anywhere in `pyproject.toml`. The header **compiles
+  clean** (`-Wall -Wextra`, zero warnings) with `llvm-mingw` on Windows, and
+  `native/haven-bt/src/fixture/fixture_backend.c` is a real, deterministic
+  implementation of the full ABI -- not a platform backend, the native-code
+  equivalent of `FixtureHomeAssistant`. `haven/integrations/bluetooth/`
+  splits cleanly along the one line that matters: `native.py` is the only
+  file that imports `ctypes.CDLL`, and `tests/test_bluetooth_fixture_backend.py`
+  compiles the fixture backend and runs `CtypesBluetoothLibrary` against the
+  real resulting `.dll`/`.so` (a real polled `HB_EVENT_DEVICE_FOUND`, a real
+  GATT write/read round-trip through native memory) -- it skips cleanly
+  wherever no C compiler is on `PATH`, so it never blocks the rest of the
+  suite. `provider.py`'s `BluetoothProvider` (a `DiscoveryProvider` and
+  `ExecutionAdapter`) has no ctypes dependency at all, and is proven end to
+  end -- discover -> `enroll_device()` -> `execute()` -- against that same
+  real compiled library in the same test file, alongside unit-level
+  coverage against a plain-Python `FixtureBluetoothLibrary`. Device identity
+  reuses `enroll_device()` unchanged: a candidate's `candidate_id` is the
+  native `hb_device_id` as a decimal string, which `enroll_device()` already
+  carries straight through to `DeviceManifest.device_id`, so `execute()`
+  recovers the native handle with `int(target_device_id)` -- no separate
+  id-mapping table exists. `CapabilityDescriptor.service` for a Bluetooth
+  capability is the GATT characteristic UUID; `DeviceCommand.parameters`
+  must already carry the raw bytes under `"bytes"`, because encoding
+  something like `brightness=50` into those bytes is a device-profile
+  plugin's job, a layer above this one, not built here. **The Windows
+  platform backend is real**: `native/haven-bt/src/platform/windows/winrt_backend.cpp`
+  implements adapter enumeration, scan, connect/pair/forget, GATT read/
+  write/notify against actual `Windows.Devices.Bluetooth` WinRT APIs, built
+  with MSVC + the Windows SDK (`build_windows.cmd`) and verified against
+  real hardware -- a real compiled DLL returned genuine nearby BLE
+  advertisements through `CtypesBluetoothLibrary` and then through
+  `BluetoothProvider.discover()`, indistinguishable from any other
+  provider's `DiscoveredDevice`s. `tests/test_bluetooth_winrt_backend.py`
+  compiles and loads it on every test run (skipped without MSVC), and
+  deliberately asserts nothing about scan *results* -- what's nearby and
+  whether a radio is on are facts about a host machine, not this code.
+  Linux/BlueZ and macOS/CoreBluetooth are still not built: each needs its
+  own SDK and hardware (a running `bluetoothd`, or Xcode + real Apple
+  hardware) that this session does not have -- the Windows backend is the
+  bar they're held to before being called done. See
+  `native/haven-bt/README.md`.
+- `HavenRuntime` routes command execution by a device's `DeviceManifest.provider_id`,
+  not to one fixed adapter. `HavenRuntime.execution_providers`, an
+  `ExecutionProviderRegistry`, maps `provider_id -> ExecutionAdapter`; a
+  device with a registered manifest routes there, and everything else
+  (no manifest, or `execution_providers` never configured) falls back to
+  `home_assistant`, the original single-adapter constructor argument. A
+  device whose declared `provider_id` has no registered adapter fails into a
+  normal `execution_failed` receipt (`UnknownExecutionProvider` in
+  `device_result.detail`), the same as an HTTP failure -- never a raised
+  exception. `HomeAssistantAdapter` is exactly `ExecutionAdapter`: Home
+  Assistant is one registered provider, not a protocol Haven is specially
+  aware of. Constructing `HavenRuntime` with neither `home_assistant` nor
+  `execution_providers` raises immediately.
 - Receipts distinguish the requested action, derived interpretation, observed
   evidence, authority decision, execution attempt, and device result.
+
+## Run the surface
+
+The local web surface renders a simulated household against the real
+authority engine — no network, credentials, or model required:
+
+```powershell
+python -m haven.web.server --port 8080
+```
+
+Then open `http://127.0.0.1:8080/`. The server binds loopback only and has
+no authentication in this slice; do not expose it beyond the machine it runs
+on. On start, the demo scenario runs: the simulated garage door has been open
+eighteen minutes with no motion, HAVEN's rule reaches the engine, and the
+interface enters its permission state (pulsing HAVEN mark, haloed request
+card). Approving mints a real confirmation token and closes the door through
+the runtime; denying returns the surface to idle. `POST /api/demo/reset`
+replays the scenario, and the small preview-state buttons in the corner force
+each glow state locally for design tuning.
 
 ## Run the tests
 
