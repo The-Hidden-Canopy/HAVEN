@@ -9,7 +9,9 @@ ImportError, which the manager would otherwise report as a plain
 LOAD_FAILED.
 
 The runtime-dependent section is deliberately thin: resolve a source
-path, build tokenizer + causal LM, wrap them in a handle.
+path, build tokenizer + causal LM, wrap them in a handle. The handle's
+`chat()` decodes generated tokens and returns the canonical
+`ChatResult`; callers never see tokenizer/model output shapes.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from ..contracts import ModelDescriptor
+from ..results import ChatResult
 
 
 def _source_path(descriptor: ModelDescriptor, model_dir: Path | None) -> str:
@@ -39,16 +42,17 @@ class TransformersLoadedModel:
     def descriptor(self) -> ModelDescriptor:
         return self._descriptor
 
-    def chat(self, messages: list[dict], **params: Any) -> str:
+    def chat(self, messages: list[dict], **params: Any) -> ChatResult:
         """Minimal generic pipeline: apply_chat_template -> generate -> decode."""
 
         ids = self._tokenizer.apply_chat_template(
             messages, tokenize=True, return_tensors="pt", add_generation_prompt=True
         )
         generated = self._model.generate(ids, **params)
-        return self._tokenizer.decode(
+        text = self._tokenizer.decode(
             generated[0][ids.shape[-1] :], skip_special_tokens=True
         )
+        return ChatResult(text=text, model_id=self._descriptor.id)
 
     def unload(self) -> None:
         self._tokenizer = None

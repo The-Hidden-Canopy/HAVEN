@@ -22,6 +22,7 @@ const els = {
   systemBody: $('#system-body'),
   modelsCount: $('#models-count'),
   modelsList: $('#models-list'),
+  runtimesStrip: $('#runtimes-strip'),
   jobsSection: $('#jobs-section'),
   jobsList: $('#jobs-list'),
   downloadNote: $('#download-note'),
@@ -697,6 +698,55 @@ const MODEL_STATE_CLASS = {
   license_unknown: 'state-dim',
 };
 
+/* Role assignment: six fixed roles; a model can serve a role when its
+   kind/capabilities match. Defensive substring matching on capability
+   names — chat by intelligence family, speech roles by capability name,
+   vision by vision family. */
+const ROLE_LABEL = {
+  chat: 'chat',
+  asr: 'asr',
+  tts: 'tts',
+  wake_word: 'wake',
+  vad: 'vad',
+  vision: 'vision',
+};
+
+const ROLE_CAP_PATTERN = {
+  asr: /asr|transcrib|speech[ _-]?to[ _-]?text/i,
+  tts: /tts|text[ _-]?to[ _-]?speech|synth/i,
+  wake_word: /wake/i,
+  vad: /\bvad\b|voice[ _-]?activity/i,
+};
+
+function modelServableRoles(model) {
+  if (!model || typeof model !== 'object') return [];
+  const kind = String(model.kind || '').toLowerCase();
+  const caps = (Array.isArray(model.capabilities) ? model.capabilities : [])
+    .map((c) => String(c).toLowerCase());
+  const hay = caps.join(' ');
+  const roles = [];
+  if (kind === 'intelligence' || /chat|instruct|generat|completion|llm/.test(hay)) {
+    roles.push('chat');
+  }
+  for (const role of ['asr', 'tts', 'wake_word', 'vad']) {
+    const re = ROLE_CAP_PATTERN[role];
+    if (re && caps.some((c) => re.test(c))) roles.push(role);
+  }
+  if (kind === 'vision' || /vision|image|object[ _-]?det|caption|ocr/.test(hay)) {
+    roles.push('vision');
+  }
+  return roles;
+}
+
+/* Detail string when the model's backend is registered but unavailable;
+   null when available or unknown — callers render the plain button. */
+function backendMissingDetail(backend) {
+  if (!backend) return null;
+  const entry = modelsState.backends.find((b) => b && b.backend === backend);
+  if (!entry || entry.available !== false) return null;
+  return (typeof entry.detail === 'string' && entry.detail) ? entry.detail : 'runtime not available';
+}
+
 const modelsState = {
   models: [],
   roots: [],
@@ -704,6 +754,8 @@ const modelsState = {
   discovered: [],
   inspectedUrl: null,
   jobs: [],
+  backends: [],    // [{backend, available, detail}] from GET /api/models
+  assignments: {}, // role -> model_id | null
   readyTimers: new Map(), // job_id -> timeout dropping a `ready` job from the active list
   noteTimer: null,        // auto-hide for the "Download started" note
 };
@@ -782,6 +834,9 @@ async function refreshModels() {
         modelsState.models = data.models;
         modelsState.roots = Array.isArray(data.roots) ? data.roots : [];
         modelsState.catalog = Array.isArray(data.catalog) ? data.catalog : [];
+        modelsState.backends = Array.isArray(data.backends) ? data.backends : [];
+        modelsState.assignments =
+          (data.assignments && typeof data.assignments === 'object') ? data.assignments : {};
       }
     }
   } catch {
@@ -799,6 +854,10 @@ function applyModelsResponse(resp, errEl) {
   }
   if (Array.isArray(resp.models)) modelsState.models = resp.models;
   if (Array.isArray(resp.roots)) modelsState.roots = resp.roots;
+  if (Array.isArray(resp.backends)) modelsState.backends = resp.backends;
+  if (resp.assignments && typeof resp.assignments === 'object') {
+    modelsState.assignments = resp.assignments;
+  }
   renderModels();
   return true;
 }
@@ -827,6 +886,32 @@ function renderModels() {
   renderCatalog();
   renderRoots();
   renderDiscovered();
+  renderRuntimes();
+}
+
+/* Runtime availability strip — quiet, informational. Missing backends key
+   or an empty list simply hides the strip. */
+function renderRuntimes() {
+  const backends = modelsState.backends;
+  els.runtimesStrip.textContent = '';
+  if (!backends.length) {
+    els.runtimesStrip.hidden = true;
+    return;
+  }
+  const label = document.createElement('span');
+  label.className = 'micro';
+  label.textContent = 'RUNTIMES';
+  els.runtimesStrip.appendChild(label);
+  for (const b of backends) {
+    if (!b || typeof b !== 'object') continue;
+    const available = b.available === true;
+    const chip = document.createElement('span');
+    chip.className = 'runtime-chip ' + (available ? 'rt-ready' : 'rt-missing');
+    chip.textContent = String(b.backend || 'unknown') + ' ' + (available ? 'ready' : 'missing');
+    if (typeof b.detail === 'string' && b.detail) chip.title = b.detail;
+    els.runtimesStrip.appendChild(chip);
+  }
+  els.runtimesStrip.hidden = false;
 }
 
 function makeModelRow(model) {
@@ -869,6 +954,20 @@ function makeModelRow(model) {
     main.appendChild(extras);
   }
 
+  const roles = modelServableRoles(model);
+  if (roles.length) {
+    const roleRow = document.createElement('div');
+    roleRow.className = 'model-roles';
+    for (const role of roles.slice(0, 3)) roleRow.appendChild(makeRoleToken(model, role));
+    if (roles.length > 3) {
+      const more = document.createElement('span');
+      more.className = 'role-token role-more';
+      more.textContent = '+' + (roles.length - 3);
+      roleRow.appendChild(more);
+    }
+    main.appendChild(roleRow);
+  }
+
   row.appendChild(main);
 
   const badges = document.createElement('div');
@@ -884,15 +983,52 @@ function makeModelRow(model) {
   const actions = document.createElement('div');
   actions.className = 'model-actions';
 
+  let runtimeMissing = null;
   if (state === 'loaded') {
     actions.appendChild(makeModelAction(model.id, 'unload', 'Unload'));
   } else if (MODEL_LOADABLE.has(state)) {
-    actions.appendChild(makeModelAction(model.id, 'load', 'Load'));
+    runtimeMissing = backendMissingDetail(model.backend);
+    const load = makeModelAction(model.id, 'load', 'Load');
+    if (runtimeMissing != null) {
+      load.classList.add('btn-runtime-missing');
+      load.title = runtimeMissing;
+    }
+    actions.appendChild(load);
   }
   actions.appendChild(makeModelAction(model.id, 'remove', 'Remove'));
 
-  row.appendChild(actions);
+  const actCol = document.createElement('div');
+  actCol.className = 'model-act';
+  actCol.appendChild(actions);
+  if (runtimeMissing != null) {
+    const note = document.createElement('span');
+    note.className = 'model-runtime-note micro';
+    note.textContent = 'runtime missing';
+    actCol.appendChild(note);
+  }
+  row.appendChild(actCol);
   return row;
+}
+
+/* Role token: click assigns the model to the role; clicking the ACTIVE
+   token clears it (id: null). Responses flow through applyModelsResponse,
+   so a successful assign re-renders and ACTIVE moves to the new model. */
+function makeRoleToken(model, role) {
+  const assigned = modelsState.assignments[role] === model.id;
+  const token = document.createElement('button');
+  token.type = 'button';
+  token.className = 'role-token' + (assigned ? ' role-active' : '');
+  token.textContent = ROLE_LABEL[role] || role;
+  token.title = assigned ? role + ' — click to clear' : 'assign to ' + role;
+  token.addEventListener('click', async () => {
+    clearModelError(null);
+    const resp = await postJSON('/api/models/assign', {
+      role: role,
+      id: assigned ? null : model.id,
+    });
+    applyModelsResponse(resp, null);
+  });
+  return token;
 }
 
 function makeModelAction(id, action, label) {
@@ -1437,6 +1573,10 @@ function wireEvents() {
     }
     if (Array.isArray(resp.models)) modelsState.models = resp.models;
     if (Array.isArray(resp.roots)) modelsState.roots = resp.roots;
+    if (Array.isArray(resp.backends)) modelsState.backends = resp.backends;
+    if (resp.assignments && typeof resp.assignments === 'object') {
+      modelsState.assignments = resp.assignments;
+    }
     modelsState.discovered = Array.isArray(resp.discovered) ? resp.discovered : [];
     renderModels();
   });

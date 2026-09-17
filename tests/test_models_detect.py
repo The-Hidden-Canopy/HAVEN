@@ -62,8 +62,91 @@ def test_hf_safetensors_folder_reads_architecture_from_config():
         manifest = detect_folder(folder).manifest
         assert manifest.backend == "transformers"
         assert manifest.architecture == "Qwen2ForCausalLM"
-        # the largest weights file wins
-        assert manifest.files == {"model": "model-00002-of-00002.safetensors", "config": "config.json"}
+        # the whole checkpoint is declared: every shard plus config/tokenizer
+        assert manifest.files == {
+            "weights": "model.safetensors",
+            "weights-00002-of-00002": "model-00002-of-00002.safetensors",
+            "config": "config.json",
+            "tokenizer": "tokenizer.json",
+        }
+        assert manifest.sha256 == {}
+
+
+def test_sharded_checkpoint_declares_every_shard_index_and_tokenizer_file():
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = _folder(
+            Path(tmp),
+            "Qwen3-8B",
+            {
+                "config.json": b'{"architectures": ["Qwen3ForCausalLM"]}',
+                "model-00001-of-00003.safetensors": b"w1",
+                "model-00002-of-00003.safetensors": b"w2",
+                "model-00003-of-00003.safetensors": b"w3",
+                "model.safetensors.index.json": b'{"weight_map": {}}',
+                "tokenizer.json": b"{}",
+                "tokenizer_config.json": b"{}",
+                "special_tokens_map.json": b"{}",
+                "vocab.json": b"{}",
+                "merges.txt": b"",
+                "generation_config.json": b'{"max_new_tokens": 128}',
+            },
+        )
+        manifest = detect_folder(folder).manifest
+        assert manifest.backend == "transformers"
+        assert manifest.files == {
+            "weights-00001-of-00003": "model-00001-of-00003.safetensors",
+            "weights-00002-of-00003": "model-00002-of-00003.safetensors",
+            "weights-00003-of-00003": "model-00003-of-00003.safetensors",
+            "weights-index": "model.safetensors.index.json",
+            "config": "config.json",
+            "tokenizer": "tokenizer.json",
+            "tokenizer-config": "tokenizer_config.json",
+            "special-tokens-map": "special_tokens_map.json",
+            "vocab": "vocab.json",
+            "merges": "merges.txt",
+            "generation-config": "generation_config.json",
+        }
+        assert len(set(manifest.files)) == len(manifest.files)  # roles unique
+
+
+def test_bin_checkpoint_without_safetensors_picks_the_single_largest_bin():
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = _folder(
+            Path(tmp),
+            "pytorch-checkpoint",
+            {
+                "config.json": b"{}",
+                "pytorch_model.bin": b"biggest" * 10,
+                "model.bin": b"small",
+                "spiece.model": b"spm",
+            },
+        )
+        manifest = detect_folder(folder).manifest
+        assert manifest.backend == "transformers"
+        assert manifest.files == {
+            "weights": "pytorch_model.bin",
+            "config": "config.json",
+            "spiece": "spiece.model",
+        }
+
+
+def test_checkpoint_over_the_file_cap_is_unsupported():
+    with tempfile.TemporaryDirectory() as tmp:
+        files = {"config.json": b"{}"}
+        # 33 shards + config = 34 declared files, over the cap of 32
+        for index in range(1, 34):
+            files[f"model-{index:05d}-of-00033.safetensors"] = b"w"
+        folder = _folder(Path(tmp), "huge-checkpoint", files)
+        detection = detect_folder(folder)
+        assert detection.manifest is None
+        assert detection.state is ModelState.UNSUPPORTED
+        assert detection.problems == ("checkpoint too large to synthesize (34 files)",)
+
+
+def test_synthesize_from_files_raises_for_an_oversized_checkpoint():
+    names = ["config.json"] + [f"model-{i:05d}-of-00033.safetensors" for i in range(1, 34)]
+    with pytest.raises(Exception, match="checkpoint too large to synthesize"):
+        synthesize_from_files(names, name_hint="huge")
 
 
 def test_hf_folder_with_junk_config_tolerates_it():

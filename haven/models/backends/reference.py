@@ -20,6 +20,7 @@ signal, distinct from a load that was attempted and failed. A bare
 
 from __future__ import annotations
 
+from ..results import ChatResult, InferenceResult
 from .protocol import BackendRegistry
 
 
@@ -48,4 +49,9 @@ def reference_backends() -> BackendRegistry:
     return registry
 
 
-__all__ = ["BackendConnectionError", "reference_backends"]
+__all__ = [
+    "BackendConnectionError",
+    "ChatResult",
+    "InferenceResult",
+    "reference_backends",
+]

@@ -522,6 +522,97 @@ a {
 
 .model-badge.state-dim { opacity: 0.6; }
 
+/* runtime availability strip: quiet chips, informational — never alarm */
+.runtimes-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.runtimes-strip[hidden] { display: none; }
+
+.runtime-chip {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+}
+
+.runtime-chip.rt-ready {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+  background: rgba(79, 209, 197, 0.07);
+}
+
+.runtime-chip.rt-missing {
+  color: var(--amber);
+  opacity: 0.75;
+  border-color: var(--amber-dim);
+  background: rgba(240, 160, 90, 0.05);
+}
+
+/* role tokens on model rows — tiny, quiet; ACTIVE is teal */
+.model-roles {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.role-token {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.role-token:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.role-token.role-active {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+  background: rgba(79, 209, 197, 0.07);
+}
+
+.role-token.role-more { cursor: default; opacity: 0.7; }
+
+/* actions column: buttons plus the optional runtime-missing micro-note */
+.model-act {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  flex: none;
+}
+
+.model-actions .btn.btn-runtime-missing {
+  color: var(--amber);
+  opacity: 0.8;
+  text-decoration: underline;
+  text-decoration-color: var(--amber-dim);
+  text-underline-offset: 3px;
+}
+
+.model-runtime-note {
+  font-size: 9px;
+  color: var(--amber);
+  opacity: 0.55;
+}
+
 /* download jobs: thin progress, quiet badges — same language as model rows */
 .jobs-section { margin-bottom: 22px; }
 

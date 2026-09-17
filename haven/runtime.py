@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime
+from typing import Any
 from uuid import uuid4
 
 from haven.audit.receipts import ActionReceipt
 from haven.authority.policy import AuthorityEngine
 from haven.core.domain import (
+    ActionKind,
     ActionRecord,
     ActionRequest,
     ActionStatus,
@@ -17,8 +19,11 @@ from haven.core.domain import (
     DecisionCode,
     DecisionStatus,
     DeviceCommand,
+    DeviceSelector,
+    DIRECT_ACTION_RULE_ID_PREFIX,
     DomainEvent,
     EventType,
+    EvidenceRef,
     Principal,
     Rule,
     RuleDraft,
@@ -37,6 +42,15 @@ from haven.intelligence.gateway import IntelligenceProvider
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex}"
+
+
+class AmbiguousTargetError(ValueError):
+    """Raised when a direct action's selector resolves to more than one device.
+
+    A direct action addresses exactly one device; a selector matching
+    several is a clarification for the requester, not a fan-out (group
+    fan-out is what approved selector-based rules are for).
+    """
 
 
 def _decision(
@@ -385,36 +399,191 @@ class HavenRuntime:
             if world.household_id == self.store.household_id and principal.household_id == self.store.household_id
             else ()
         )
-        action_id = _new_id("action")
         if decision.status != DecisionStatus.ALLOW:
-            blocked = ActionRecord(
-                action_id=action_id,
+            return self._record_blocked(
                 request=request,
-                status=ActionStatus.BLOCKED,
-                decision=decision,
-            )
-            event = self.store.execute_transition(
-                Transition(
-                    kind=TransitionKind.RECORD_BLOCK,
-                    household_id=self.store.household_id,
-                    actor_id=principal.actor_id,
-                    payload=blocked,
-                    correlation_id=rule.rule_id,
-                ),
-                now=now,
-            )
-            return ActionReceipt(
-                receipt_id=_new_id("receipt"),
-                requested_action=request,
                 interpretation=rule.draft.interpretation,
                 evidence=evidence,
                 decision=decision,
-                device_result=None,
-                event_ids=(event.event_id,),
+                correlation_id=rule.rule_id,
+                principal=principal,
+                now=now,
             )
+        return self._record_executed(
+            request=request,
+            interpretation=rule.draft.interpretation,
+            evidence=evidence,
+            decision=decision,
+            service=self._service_for_device(rule.draft, target_device_id),
+            correlation_id=rule.rule_id,
+            principal=principal,
+            now=now,
+        )
+
+    def run_action(
+        self,
+        *,
+        principal: Principal,
+        action_kind: ActionKind,
+        target_device_id: str | None = None,
+        target_selector: DeviceSelector | None = None,
+        parameters: tuple[tuple[str, Any], ...] = (),
+        justification: str,
+        world: WorldSnapshot,
+        now: datetime,
+        confirmation_token: ConfirmationToken | None = None,
+    ) -> ActionReceipt:
+        """Execute one HUMAN-INITIATED action straight through authority.
+
+        A member's direct command is the authorization; automation needs a
+        rule, a command does not -- so no rule is proposed, approved, or
+        stored, and `AuthorityEngine.decide_direct()` (not `decide()`)
+        judges the request. The built `ActionRequest` still requires a
+        non-empty `rule_id`, so it carries the sentinel
+        `direct-<request_id>` (`DIRECT_ACTION_RULE_ID_PREFIX`); no rule
+        with that id exists or is created, and the sentinel is what marks
+        the receipt's origin as direct. The receipt's interpretation is the
+        justification itself -- for a direct command there is no draft
+        interpretation, and the human's stated reason is exactly what was
+        understood. Evidence is empty for the same reason: the human
+        asserted the command, so nothing is inferred from world evidence.
+
+        Exactly one of `target_device_id` / `target_selector` must be set.
+        A selector that resolves to zero devices raises `ValueError` naming
+        it; one that resolves to more than one raises `AmbiguousTargetError`
+        with the resolved count, since a direct action addresses one device
+        rather than fanning out.
+        """
+
+        now = require_aware_utc(now, name="action time")
+        if (target_device_id is None) == (target_selector is None):
+            raise ValueError("a direct action must set exactly one of target_device_id or target_selector")
+        if target_selector is not None:
+            target_device_id = self._resolve_direct_target(target_selector)
+        request_id = confirmation_token.request_id if confirmation_token is not None else _new_id("request")
+        rule_id = f"{DIRECT_ACTION_RULE_ID_PREFIX}{request_id}"
+        request = ActionRequest(
+            request_id=request_id,
+            household_id=self.store.household_id,
+            requested_by=principal.actor_id,
+            rule_id=rule_id,
+            action_kind=action_kind,
+            target_device_id=target_device_id,
+            parameters=parameters,
+            justification=justification,
+            evidence_snapshot_id=world.snapshot_id,
+            requested_at=now,
+            confirmation_token=confirmation_token,
+        )
+        decision = self.authority.decide_direct(
+            request,
+            principal=principal,
+            world=world,
+            now=now,
+            confirmation_consumed=(
+                confirmation_token is not None
+                and self.store.is_confirmation_consumed(confirmation_token.token_id)
+            ),
+        )
+        if decision.status != DecisionStatus.ALLOW:
+            return self._record_blocked(
+                request=request,
+                interpretation=justification,
+                evidence=(),
+                decision=decision,
+                correlation_id=rule_id,
+                principal=principal,
+                now=now,
+            )
+        return self._record_executed(
+            request=request,
+            interpretation=justification,
+            evidence=(),
+            decision=decision,
+            service=self._service_for(action_kind),
+            correlation_id=rule_id,
+            principal=principal,
+            now=now,
+        )
+
+    def _resolve_direct_target(self, selector: DeviceSelector) -> str:
+        """Resolve a direct action's selector to its one device, or raise."""
+
+        registry = self.authority.device_registry
+        resolved = registry.resolve(selector) if registry is not None else ()
+        if not resolved:
+            raise ValueError(f"no registered device matched selector {selector!r}")
+        if len(resolved) > 1:
+            raise AmbiguousTargetError(
+                f"selector {selector!r} resolved to {len(resolved)} devices "
+                f"{resolved!r}; a direct action addresses exactly one"
+            )
+        return resolved[0]
+
+    def _record_blocked(
+        self,
+        *,
+        request: ActionRequest,
+        interpretation: str,
+        evidence: tuple[EvidenceRef, ...],
+        decision: AuthorityDecision,
+        correlation_id: str,
+        principal: Principal,
+        now: datetime,
+    ) -> ActionReceipt:
+        """Record one blocked action and return its receipt.
+
+        Shared by the rule and direct paths so both record the same
+        BLOCK event and return the same receipt shape.
+        """
+
+        blocked = ActionRecord(
+            action_id=_new_id("action"),
+            request=request,
+            status=ActionStatus.BLOCKED,
+            decision=decision,
+        )
+        event = self.store.execute_transition(
+            Transition(
+                kind=TransitionKind.RECORD_BLOCK,
+                household_id=self.store.household_id,
+                actor_id=principal.actor_id,
+                payload=blocked,
+                correlation_id=correlation_id,
+            ),
+            now=now,
+        )
+        return ActionReceipt(
+            receipt_id=_new_id("receipt"),
+            requested_action=request,
+            interpretation=interpretation,
+            evidence=evidence,
+            decision=decision,
+            device_result=None,
+            event_ids=(event.event_id,),
+        )
+
+    def _record_executed(
+        self,
+        *,
+        request: ActionRequest,
+        interpretation: str,
+        evidence: tuple[EvidenceRef, ...],
+        decision: AuthorityDecision,
+        service: str,
+        correlation_id: str,
+        principal: Principal,
+        now: datetime,
+    ) -> ActionReceipt:
+        """Authorize, execute, and record one allowed action.
+
+        Shared by the rule and direct paths: AUTHORIZE_ACTION (which also
+        consumes a bound confirmation token), one device command through
+        the routed execution adapter, RECORD_EXECUTION, and the receipt.
+        """
 
         authorized = ActionRecord(
-            action_id=action_id,
+            action_id=_new_id("action"),
             request=request,
             status=ActionStatus.AUTHORIZED,
             decision=decision,
@@ -425,7 +594,7 @@ class HavenRuntime:
                 household_id=self.store.household_id,
                 actor_id=principal.actor_id,
                 payload=authorized,
-                correlation_id=rule.rule_id,
+                correlation_id=correlation_id,
             ),
             now=now,
         )
@@ -433,12 +602,12 @@ class HavenRuntime:
         command = DeviceCommand(
             request_id=request.request_id,
             target_device_id=request.target_device_id,
-            service=self._service_for_device(rule.draft, target_device_id),
+            service=service,
             parameters=request.parameters,
             requested_at=now,
         )
         try:
-            adapter = self._execution_adapter_for(target_device_id)
+            adapter = self._execution_adapter_for(request.target_device_id)
             result = adapter.execute(command)
         except Exception as exc:  # pragma: no cover - defensive integration boundary
             result = self._integration_failure(exc, at=now)
@@ -449,14 +618,14 @@ class HavenRuntime:
                 household_id=self.store.household_id,
                 actor_id=principal.actor_id,
                 payload=executed,
-                correlation_id=rule.rule_id,
+                correlation_id=correlation_id,
             ),
             now=now,
         )
         return ActionReceipt(
             receipt_id=_new_id("receipt"),
             requested_action=request,
-            interpretation=rule.draft.interpretation,
+            interpretation=interpretation,
             evidence=evidence,
             decision=decision,
             device_result=result,
@@ -515,6 +684,7 @@ class HavenRuntime:
             "activate_scene": "scene.turn_on",
             "set_thermostat": "climate.set_temperature",
             "open_garage": "cover.open_cover",
+            "close_garage": "cover.close",
             "unlock_door": "lock.unlock",
             "purchase": "haven.purchase",
             "change_alarm": "alarm_control_panel.alarm",
@@ -533,4 +703,4 @@ class HavenRuntime:
         )
 
 
-__all__ = ["HavenRuntime", "RuleApprovalResult", "RuleClarificationResult"]
+__all__ = ["AmbiguousTargetError", "HavenRuntime", "RuleApprovalResult", "RuleClarificationResult"]

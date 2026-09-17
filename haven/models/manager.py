@@ -12,12 +12,13 @@ is the explicit gate, the way enrollment is for devices.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -59,7 +60,48 @@ class ModelLoadError(ModelManagerError):
 
 
 _ROOTS_FILENAME = "model_roots.json"
+_ASSIGNMENTS_FILENAME = "assignments.json"
 _PROBE_TIMEOUT_SECONDS = 5
+
+# The persisted role vocabulary: which model serves chat / speech / vision.
+ROLE_CHAT = "chat"
+ROLE_ASR = "asr"
+ROLE_TTS = "tts"
+ROLE_WAKE_WORD = "wake_word"
+ROLE_VAD = "vad"
+ROLE_VISION = "vision"
+
+ROLES = (ROLE_CHAT, ROLE_ASR, ROLE_TTS, ROLE_WAKE_WORD, ROLE_VAD, ROLE_VISION)
+
+# What a model must be to serve a role: kind + capabilities, never id or
+# backend. Exported so the web layer (and future role-based routing) shares
+# the same requirement table.
+ROLE_REQUIREMENTS = {
+    ROLE_CHAT: (ModelKind.INTELLIGENCE, frozenset({"chat"})),
+    ROLE_ASR: (ModelKind.SPEECH, frozenset({"asr"})),
+    ROLE_TTS: (ModelKind.SPEECH, frozenset({"tts"})),
+    ROLE_WAKE_WORD: (ModelKind.SPEECH, frozenset({"wake_word"})),
+    ROLE_VAD: (ModelKind.SPEECH, frozenset({"vad"})),
+    ROLE_VISION: (ModelKind.VISION, frozenset({"object_detection"})),
+}
+
+# The lazy reference loaders probe their runtime package by name; anything
+# else registered is a custom loader, which reports available (there is no
+# runtime package to probe, only the loader itself).
+_LAZY_RUNTIME_PACKAGES = {
+    "transformers": "transformers",
+    "llama_cpp": "llama_cpp",
+    "onnx": "onnxruntime",
+}
+
+
+@dataclass(frozen=True)
+class BackendAvailability:
+    """One registered backend's runtime availability probe."""
+
+    backend: str
+    available: bool
+    detail: str
 
 
 def _base_url(url: str) -> str:
@@ -111,6 +153,7 @@ class ModelManager:
         self._loaded: dict[str, LoadedModel] = {}
         self._roots_path = self.models_root / _ROOTS_FILENAME
         self._roots: list[str] = self._load_roots()
+        self._assignments: dict[str, str] = self._load_assignments()
 
     def _load_roots(self) -> list[str]:
         if not self._roots_path.exists():
@@ -124,6 +167,28 @@ class ModelManager:
     def _save_roots(self) -> None:
         self.models_root.mkdir(parents=True, exist_ok=True)
         self._roots_path.write_text(json.dumps(self._roots, indent=2) + "\n", encoding="utf-8")
+
+    def _load_assignments(self) -> dict[str, str]:
+        path = self.models_root / _ASSIGNMENTS_FILENAME
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {
+            str(role): str(model_id)
+            for role, model_id in data.items()
+            if role in ROLE_REQUIREMENTS and isinstance(model_id, str) and model_id
+        }
+
+    def _save_assignments(self) -> None:
+        self.models_root.mkdir(parents=True, exist_ok=True)
+        payload = {role: self._assignments[role] for role in ROLES if role in self._assignments}
+        path = self.models_root / _ASSIGNMENTS_FILENAME
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     # -- entry path: Download -------------------------------------------------
 
@@ -431,6 +496,78 @@ class ModelManager:
     def loaded_handle(self, model_id: str) -> LoadedModel | None:
         return self._loaded.get(model_id)
 
+    # -- backend availability ----------------------------------------------------
+
+    def backend_availability(self) -> tuple[BackendAvailability, ...]:
+        """One availability probe per registered backend.
+
+        "http" is stdlib and always available. The lazy reference loaders
+        probe `importlib.util.find_spec` for their runtime package.
+        Custom-registered backends report available with a note that there
+        is nothing to probe -- only their loader is known.
+        """
+
+        availability = []
+        for name in self._backends.registered():
+            if name == "http":
+                availability.append(
+                    BackendAvailability(name, True, "stdlib backend; always available")
+                )
+            elif name in _LAZY_RUNTIME_PACKAGES:
+                package = _LAZY_RUNTIME_PACKAGES[name]
+                try:
+                    found = importlib.util.find_spec(package) is not None
+                except (ImportError, ValueError):
+                    found = False
+                if found:
+                    detail = f"runtime package '{package}' is importable"
+                else:
+                    detail = f"package not importable: install {package} to enable"
+                availability.append(BackendAvailability(name, found, detail))
+            else:
+                availability.append(BackendAvailability(name, True, "custom loader registered"))
+        return tuple(availability)
+
+    # -- role assignments ----------------------------------------------------------
+
+    def assign(self, role: str, model_id: str | None) -> None:
+        """Persist which model serves a role; None clears the assignment.
+
+        The role must be one of ROLES, and a model being assigned must
+        already be registered and satisfy the role's kind + capability
+        requirement (`ROLE_REQUIREMENTS`) -- a role is a routing promise,
+        never a guess.
+        """
+
+        if not isinstance(role, str) or role not in ROLE_REQUIREMENTS:
+            raise ModelManagerError(f"unknown role: {role!r}")
+        if model_id is None:
+            self._assignments.pop(role, None)
+            self._save_assignments()
+            return
+        record = self._registry.get(model_id)
+        if record is None:
+            raise ModelNotFoundError(f"unknown model: {model_id}")
+        kind, required = ROLE_REQUIREMENTS[role]
+        if record.kind is not kind or not record.descriptor.supports_all(required):
+            raise ModelManagerError(
+                f"model {model_id!r} cannot serve role {role!r}: requires "
+                f"kind={kind.value} capabilities={sorted(required)}, has "
+                f"kind={record.kind.value} capabilities={sorted(record.descriptor.capabilities)}"
+            )
+        self._assignments[role] = model_id
+        self._save_assignments()
+
+    def assigned(self, role: str) -> str | None:
+        if not isinstance(role, str) or role not in ROLE_REQUIREMENTS:
+            raise ModelManagerError(f"unknown role: {role!r}")
+        return self._assignments.get(role)
+
+    def assignments(self) -> dict[str, str | None]:
+        """Every role keyed, assigned model id or None -- a total mapping."""
+
+        return {role: self._assignments.get(role) for role in ROLES}
+
     # -- internals ---------------------------------------------------------------
 
     def _require(self, model_id: str) -> ModelRecord:
@@ -474,9 +611,18 @@ class ModelManager:
 
 
 __all__ = [
+    "BackendAvailability",
     "BackendMissingError",
     "ModelLoadError",
     "ModelManager",
     "ModelManagerError",
     "ModelNotFoundError",
+    "ROLE_ASR",
+    "ROLE_CHAT",
+    "ROLE_REQUIREMENTS",
+    "ROLE_TTS",
+    "ROLE_VAD",
+    "ROLE_VISION",
+    "ROLE_WAKE_WORD",
+    "ROLES",
 ]

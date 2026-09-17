@@ -9,8 +9,14 @@ It loads ENDPOINT descriptors (or any descriptor carrying an http(s)
     POST {endpoint}/complete  {"model_id", "prompt", **params}
     POST {endpoint}/{method}  {"model_id", **payload}   (capability-gated)
 
-Responses are the parsed JSON returned by the server -- a pass-through
-envelope; HAVEN does not reinterpret a remote model's wire format.
+Responses are normalized to the canonical result contract before HAVEN
+sees them: `chat`/`complete` accept a plain {"text": ...} mapping, an
+OpenAI-chat-ish {"choices": [{"message": {"content": ...}}]}, a
+completion-ish {"choices": [{"text": ...}]}, or a bare JSON string, and
+return a `ChatResult`; `transcribe`/`embed` return an `InferenceResult`
+wrapping the endpoint's payload. Anything unrecognized is a
+`BackendConnectionError` naming the shape -- HAVEN never parses a vendor
+envelope itself.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from ..contracts import ModelDescriptor
+from ..results import ChatResult, InferenceResult
 from .reference import BackendConnectionError
 
 _TIMEOUT_ENV = "HAVEN_HTTP_BACKEND_TIMEOUT"
@@ -64,7 +71,7 @@ class HttpLoadedModel:
     def descriptor(self) -> ModelDescriptor:
         return self._descriptor
 
-    def _post(self, route: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _post(self, route: str, payload: dict[str, Any]) -> Any:
         if not self._active:
             raise RuntimeError(f"model {self._descriptor.id!r} is unloaded")
         url = f"{self._endpoint}/{route}"
@@ -80,26 +87,64 @@ class HttpLoadedModel:
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise BackendConnectionError(f"http backend could not reach {url}: {exc}") from exc
         try:
-            parsed = json.loads(body)
+            return json.loads(body)
         except ValueError as exc:
             raise BackendConnectionError(
                 f"http backend got a non-JSON response from {url}"
             ) from exc
-        if not isinstance(parsed, dict):
-            raise BackendConnectionError(
-                f"http backend expected a JSON object from {url}, got {type(parsed).__name__}"
-            )
-        return parsed
 
-    def chat(self, messages: list[dict], **params: Any) -> dict[str, Any]:
-        return self._post(
+    @staticmethod
+    def _extract_text(parsed: Any, *, route: str) -> str:
+        """Map a chat/complete response onto normalized text.
+
+        Accepted shapes: {"text": str}, OpenAI-chat-ish choices with a
+        message content, completion-ish choices with a text, or a bare
+        JSON string. Anything else names its shape in the error.
+        """
+
+        if isinstance(parsed, str):
+            text = parsed.strip()
+            if text:
+                return text
+        elif isinstance(parsed, dict):
+            text = parsed.get("text")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+            choices = parsed.get("choices")
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                message = choices[0].get("message")
+                if isinstance(message, dict):
+                    content = message.get("content")
+                    if isinstance(content, str) and content.strip():
+                        return content.strip()
+                completion = choices[0].get("text")
+                if isinstance(completion, str) and completion.strip():
+                    return completion.strip()
+        raise BackendConnectionError(
+            f"http backend got an unrecognized response shape from "
+            f"/{route}: {type(parsed).__name__}"
+        )
+
+    def _chat_result(self, parsed: Any, *, route: str) -> ChatResult:
+        usage = parsed.get("usage") if isinstance(parsed, dict) else None
+        return ChatResult(
+            text=self._extract_text(parsed, route=route),
+            model_id=self._descriptor.id,
+            usage=usage if isinstance(usage, dict) else None,
+            raw=parsed if isinstance(parsed, dict) else None,
+        )
+
+    def chat(self, messages: list[dict], **params: Any) -> ChatResult:
+        parsed = self._post(
             "chat", {"model_id": self._descriptor.id, "messages": messages, **params}
         )
+        return self._chat_result(parsed, route="chat")
 
-    def complete(self, prompt: str, **params: Any) -> dict[str, Any]:
-        return self._post(
+    def complete(self, prompt: str, **params: Any) -> ChatResult:
+        parsed = self._post(
             "complete", {"model_id": self._descriptor.id, "prompt": prompt, **params}
         )
+        return self._chat_result(parsed, route="complete")
 
     def capability_method(
         self, name: str, requires: str | list[str] | tuple[str, ...], payload: dict[str, Any]
@@ -117,13 +162,25 @@ class HttpLoadedModel:
                 f"model {self._descriptor.id!r} cannot {name!r}: requires "
                 f"{sorted(required)}, descriptor has {sorted(self._descriptor.capabilities)}"
             )
-        return self._post(name, {"model_id": self._descriptor.id, **payload})
+        parsed = self._post(name, {"model_id": self._descriptor.id, **payload})
+        if not isinstance(parsed, dict):
+            raise BackendConnectionError(
+                f"http backend expected a JSON object from /{name}, "
+                f"got {type(parsed).__name__}"
+            )
+        return parsed
 
-    def transcribe(self, audio: Any, **params: Any) -> dict[str, Any]:
-        return self.capability_method("transcribe", "asr", {"audio": audio, **params})
+    def transcribe(self, audio: Any, **params: Any) -> InferenceResult:
+        payload = self.capability_method("transcribe", "asr", {"audio": audio, **params})
+        return InferenceResult(
+            outputs={"result": payload}, model_id=self._descriptor.id, raw=payload
+        )
 
-    def embed(self, text: str, **params: Any) -> dict[str, Any]:
-        return self.capability_method("embed", "embedding_text", {"text": text, **params})
+    def embed(self, text: str, **params: Any) -> InferenceResult:
+        payload = self.capability_method("embed", "embedding_text", {"text": text, **params})
+        return InferenceResult(
+            outputs={"result": payload}, model_id=self._descriptor.id, raw=payload
+        )
 
     def unload(self) -> None:
         """Nothing persistent to close (stateless HTTP); clears the handle."""

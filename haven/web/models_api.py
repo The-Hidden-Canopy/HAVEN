@@ -10,7 +10,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..models import CatalogEntry, DiscoveryResult, ModelManager, ModelRecord, UrlInspection
+from ..models import (
+    CatalogEntry,
+    DiscoveryResult,
+    ModelManager,
+    ModelManagerError,
+    ModelRecord,
+    UrlInspection,
+)
 
 
 def model_row(record: ModelRecord) -> dict[str, Any]:
@@ -39,8 +46,37 @@ def _root_strings(manager: ModelManager) -> list[str]:
     return [str(root) for root in manager.roots()]
 
 
+def _backend_rows(manager: ModelManager) -> list[dict[str, Any]]:
+    return [
+        {"backend": item.backend, "available": item.available, "detail": item.detail}
+        for item in manager.backend_availability()
+    ]
+
+
 def models_payload(manager: ModelManager) -> dict[str, Any]:
-    return {"ok": True, "models": _model_rows(manager), "roots": _root_strings(manager)}
+    return {
+        "ok": True,
+        "models": _model_rows(manager),
+        "roots": _root_strings(manager),
+        "backends": _backend_rows(manager),
+        "assignments": manager.assignments(),
+    }
+
+
+def assign_payload(manager: ModelManager, role, model_id) -> dict[str, Any]:
+    """POST /api/models/assign: role -> model_id (None clears).
+
+    A rejected assignment answers ok:false with the reason (unknown role,
+    unknown model, or a model whose kind/capabilities cannot serve the
+    role); a successful one answers with the fresh models+backends payload,
+    the same refetch shape every other mutation returns.
+    """
+
+    try:
+        manager.assign(role, model_id)
+    except ModelManagerError as exc:
+        return {"ok": False, "error": str(exc)}
+    return models_payload(manager)
 
 
 def overview_payload(manager: ModelManager) -> dict[str, Any]:
@@ -93,6 +129,7 @@ def scan_payload(manager: ModelManager, discovered: list[DiscoveryResult]) -> di
 
 
 __all__ = [
+    "assign_payload",
     "catalog_row",
     "discovered_row",
     "inspection_payload",

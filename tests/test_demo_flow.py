@@ -3,8 +3,10 @@ fail-closed confirmation reuse, reset, voice session state machine, and the
 automations/system slices of the state contract.
 """
 
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from haven.core.domain import (
     ActionStatus,
@@ -14,8 +16,11 @@ from haven.core.domain import (
     Principal,
     RoleTier,
 )
+from haven.devices import CapabilityDescriptor, ControlClass, DeviceManifest
+from haven.models import BackendRegistry, ModelKind, ModelManager
+from haven.models.manifest import ModelManifest, manifest_filename
 from haven.providers import ProviderCapabilities, build_default_registry
-from haven.web.demo import DemoDirector
+from haven.web.demo import PROVIDER_ID, DemoDirector
 
 UTC = timezone.utc
 NOW = datetime(2026, 9, 16, 20, 0, tzinfo=UTC)
@@ -170,7 +175,7 @@ def test_chat_light_off_without_focus_asks_for_clarification() -> None:
     assert [c for c in director.adapter.commands if c.service == "light.turn_off"] == []
 
 
-def test_chat_close_the_garage_reruns_the_confirm_flow() -> None:
+def test_chat_close_the_garage_asks_confirmation_as_a_direct_action() -> None:
     director = _director()
     first_request = director.state()["pending"][0]["request_id"]
     director.deny(first_request)
@@ -178,9 +183,15 @@ def test_chat_close_the_garage_reruns_the_confirm_flow() -> None:
     state = director.chat("close the garage")
 
     assert len(state["pending"]) == 1
-    assert state["pending"][0]["rule_id"] == director.garage_rule_id
+    # A direct action is not tied to the stored garage rule; the sentinel
+    # rule id on the card says so honestly.
+    assert state["pending"][0]["rule_id"] != director.garage_rule_id
+    assert state["pending"][0]["rule_id"].startswith("direct-")
+    assert state["pending"][0]["title"] == "Close the garage door?"
     assert state["glow"] == "permission"
     assert director.house.garage_open() is True
+    # Direct actions never touch the rule store.
+    assert len(director.store.state.rules) == 2
 
 
 def test_chat_unknown_intent_gets_a_plain_refusal() -> None:
@@ -190,6 +201,159 @@ def test_chat_unknown_intent_gets_a_plain_refusal() -> None:
 
     assert state["conversation"][-1] == {"from": "haven", "text": "I can't do that yet."}
     assert [c for c in director.adapter.commands] == []
+
+
+# -- queries: deterministic world answers without a model ---------------------
+
+
+def test_chat_garage_question_without_model_answers_from_the_world() -> None:
+    director = _director()
+
+    state = director.chat("is the garage open?")
+
+    assert state["conversation"][-1] == {"from": "haven", "text": "The garage door is open."}
+    assert [c for c in director.adapter.commands] == []
+
+
+def test_chat_room_light_question_without_model_answers_from_the_world() -> None:
+    director = _director()
+
+    state = director.chat("is the office light on?")
+
+    assert state["conversation"][-1] == {"from": "haven", "text": "The office light is on."}
+
+
+def test_chat_who_is_home_answers_from_presence() -> None:
+    director = _director()
+
+    state = director.chat("who is home?")
+
+    assert state["conversation"][-1] == {"from": "haven", "text": "Gerron is home."}
+
+
+def test_chat_unanswerable_question_without_model_is_honest() -> None:
+    director = _director()
+
+    state = director.chat("why is the sky blue?")
+
+    assert state["conversation"][-1] == {
+        "from": "haven",
+        "text": "I can't answer that without an intelligence model.",
+    }
+    assert [c for c in director.adapter.commands] == []
+
+
+# -- queries: a loaded, assigned chat model answers instead -------------------
+
+
+class _ScriptedChatHandle:
+    """A loaded model handle with a canned reply, recording its messages."""
+
+    def __init__(self, descriptor, reply: str) -> None:
+        self._descriptor = descriptor
+        self.reply = reply
+        self.messages: list = []
+
+    @property
+    def descriptor(self):
+        return self._descriptor
+
+    def chat(self, messages, **params):
+        self.messages.append(list(messages))
+        return {"text": self.reply}
+
+    def unload(self):
+        pass
+
+
+class _StaticBackend:
+    def __init__(self, handle) -> None:
+        self._handle = handle
+
+    def load(self, descriptor, model_dir):
+        return self._handle
+
+
+def _director_with_chat_model(tmp: str, reply: str):
+    handle = _ScriptedChatHandle(None, reply)
+    registry = BackendRegistry()
+    registry.register("fake", _StaticBackend(handle))
+    manager = ModelManager(Path(tmp) / "root", backends=registry)
+    manifest = ModelManifest(
+        id="fake-chat",
+        version="1.0.0",
+        kind=ModelKind.INTELLIGENCE,
+        capabilities=frozenset({"chat"}),
+        architecture="fake-arch",
+        backend="fake",
+        files={"weights": "weights.bin"},
+    )
+    folder = Path(tmp) / "models" / "fake-chat"
+    folder.mkdir(parents=True)
+    (folder / "weights.bin").write_bytes(b"stub weights")
+    manifest.save(folder / manifest_filename())
+    manager.install_local_folder(folder)
+    manager.load("fake-chat")
+    manager.assign("chat", "fake-chat")
+    director = DemoDirector(clock=lambda: NOW, model_manager=manager)
+    return director, handle
+
+
+def test_chat_garage_question_with_loaded_chat_model_speaks_the_models_answer() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        director, handle = _director_with_chat_model(tmp, "the garage door is open, per the world")
+
+        state = director.chat("is the garage still open?")
+
+        assert state["conversation"][-1] == {
+            "from": "haven",
+            "text": "the garage door is open, per the world",
+        }
+        system = handle.messages[0][0]
+        assert system["role"] == "system"
+        # The AgentContext carried the bounded world with the garage device.
+        assert "garage_door" in system["content"]
+
+
+# -- direct actions: clarification and the untouched rule store ---------------
+
+
+def test_chat_light_off_with_two_lights_in_focus_asks_which_one() -> None:
+    director = _director()
+    director.registry.register(
+        DeviceManifest(
+            device_id="office_lamp",
+            device_type="light",
+            provider_id=PROVIDER_ID,
+            room="office",
+            capabilities=(
+                CapabilityDescriptor("power", ControlClass.LOW_RISK, writable=True, service="light.turn_off"),
+            ),
+        )
+    )
+
+    state = director.chat("turn that light off", "office")
+
+    assert state["conversation"][-1] == {
+        "from": "haven",
+        "text": "Which one? There are 2 lights in the office.",
+    }
+    assert [c for c in director.adapter.commands if c.service == "light.turn_off"] == []
+    assert len(director.store.state.rules) == 2
+
+
+def test_chat_named_room_light_off_runs_directly_without_a_rule() -> None:
+    director = _director()
+
+    state = director.chat("turn off the office light")
+
+    assert state["glow"] == "completed"
+    assert _device(state, "office", "office_light")["is_on"] is False
+    assert state["conversation"][-1] == {"from": "haven", "text": "Done — the office light is off."}
+    assert len(director.store.state.rules) == 2  # no rule created for a direct action
+    light_commands = [c for c in director.adapter.commands if c.service == "light.turn_off"]
+    assert len(light_commands) == 1
+    assert light_commands[0].target_device_id == "office_light"
 
 
 def test_reset_restores_the_scenario() -> None:
@@ -338,18 +502,18 @@ def test_automations_list_the_preapproved_rules_with_targets_and_status() -> Non
     assert camera["status"] == "approved"
 
 
-def test_automations_gain_chat_created_light_rules() -> None:
+def test_chat_light_off_runs_as_a_direct_action_without_creating_a_rule() -> None:
     director = _director()
 
     state = director.chat("turn that light off", "office")
 
     rows = _automation_rows(state)
-    assert len(rows) == 3
-    light = next(row for row in rows.values() if row["summary"] == "turn that light off")
-    assert light["action"] == "power"
-    assert light["target"] == "office · light"
-    assert light["status"] == "approved"
-    assert light["rule_id"] != director.garage_rule_id
+    # The direct action bypasses the propose/approve lifecycle entirely.
+    assert len(rows) == 2
+    assert len(director.store.state.rules) == 2
+    assert _device(state, "office", "office_light")["is_on"] is False
+    light_commands = [c for c in director.adapter.commands if c.service == "light.turn_off"]
+    assert len(light_commands) == 1
 
 
 def test_system_reports_revision_counts_engine_and_providers() -> None:
@@ -461,7 +625,8 @@ def test_voice_utterance_close_the_garage_matches_typed_chat() -> None:
     state = result["state"]
     assert state["voice"] == {"state": "dormant", "mic": False}
     assert len(state["pending"]) == 1
-    assert state["pending"][0]["rule_id"] == director.garage_rule_id
+    assert state["pending"][0]["rule_id"] != director.garage_rule_id
+    assert state["pending"][0]["rule_id"].startswith("direct-")
     assert state["glow"] == "permission"
     assert {"from": "user", "text": "close the garage"} in state["conversation"]
     assert director.house.garage_open() is True

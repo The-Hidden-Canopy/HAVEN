@@ -10,6 +10,11 @@ plain LOAD_FAILED.
 The runtime-dependent section is deliberately thin: resolve the .gguf
 path named by `descriptor.files["model"]`, construct `llama_cpp.Llama`,
 wrap it in a handle.
+
+`llama_cpp` answers chat with an OpenAI-ish completion envelope and
+plain completion with a choices-of-text envelope; both are shape-mapped
+onto the canonical `ChatResult` inside the handle, so callers never see
+the vendor envelope.
 """
 
 from __future__ import annotations
@@ -18,8 +23,37 @@ from pathlib import Path
 from typing import Any
 
 from ..contracts import ModelDescriptor
+from ..results import ChatResult
 
 _CONTEXT_SIZE = 4096
+
+
+def _text_from_envelope(envelope: Any) -> str:
+    """Map an OpenAI-ish llama.cpp envelope (or a bare string) onto text."""
+
+    if isinstance(envelope, str) and envelope.strip():
+        return envelope.strip()
+    if isinstance(envelope, dict):
+        choices = envelope.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            message = choices[0].get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    return content.strip()
+            completion = choices[0].get("text")
+            if isinstance(completion, str) and completion.strip():
+                return completion.strip()
+    raise ValueError(
+        f"llama_cpp returned an unrecognized chat envelope "
+        f"({type(envelope).__name__}); expected a completion-shaped mapping"
+    )
+
+
+def _usage_from_envelope(envelope: Any) -> dict | None:
+    if isinstance(envelope, dict) and isinstance(envelope.get("usage"), dict):
+        return dict(envelope["usage"])
+    return None
 
 
 def _model_path(descriptor: ModelDescriptor, model_dir: Path | None) -> Path:
@@ -45,8 +79,23 @@ class LlamaCppLoadedModel:
     def descriptor(self) -> ModelDescriptor:
         return self._descriptor
 
-    def chat(self, messages: list[dict], **params: Any) -> dict[str, Any]:
-        return self._model.create_chat_completion(messages=messages, **params)
+    def chat(self, messages: list[dict], **params: Any) -> ChatResult:
+        envelope = self._model.create_chat_completion(messages=messages, **params)
+        return ChatResult(
+            text=_text_from_envelope(envelope),
+            model_id=self._descriptor.id,
+            usage=_usage_from_envelope(envelope),
+            raw=envelope if isinstance(envelope, dict) else None,
+        )
+
+    def complete(self, prompt: str, **params: Any) -> ChatResult:
+        envelope = self._model.create_completion(prompt=prompt, **params)
+        return ChatResult(
+            text=_text_from_envelope(envelope),
+            model_id=self._descriptor.id,
+            usage=_usage_from_envelope(envelope),
+            raw=envelope if isinstance(envelope, dict) else None,
+        )
 
     def unload(self) -> None:
         self._model = None

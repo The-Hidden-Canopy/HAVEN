@@ -41,7 +41,16 @@ from haven.core.domain import (
 from haven.core.store import HavenStore
 from haven.devices import CapabilityDescriptor, ControlClass, DeviceManifest, DeviceRegistry
 from haven.execution import ExecutionProviderRegistry
-from haven.intelligence.gateway import ScriptedIntelligenceProvider
+from haven.intelligence.gateway import AgentContext, ScriptedIntelligenceProvider, UnsupportedIntent
+from haven.intelligence.intents import (
+    ActionProposal,
+    ClarificationRequest,
+    ConversationMessage,
+    QueryRequest,
+)
+from haven.intelligence.worldview import WorldView
+from haven.models import ModelManager
+from haven.models.bridge import ModelIntelligenceProvider
 from haven.providers import CapabilityRegistry, build_default_registry
 from haven.runtime import HavenRuntime
 
@@ -110,6 +119,10 @@ ALREADY_EXECUTING_LINE = "That action is already executing."
 
 # Utterances that mean "Haven, stop" rather than a chat intent.
 STOP_UTTERANCES = ("haven, stop", "stop")
+
+# A direct action's pending card is not tied to any stored rule; the sentinel
+# keeps the PendingRequest envelope honest about that.
+DIRECT_ACTION_RULE_ID = "direct-action"
 
 
 def _is_stop_utterance(text: str) -> bool:
@@ -494,6 +507,7 @@ class DemoDirector:
         voice_ack_seconds: float = VOICE_ACK_SECONDS,
         voice_refractory_seconds: float = VOICE_REFRACTORY_SECONDS,
         capability_registry: CapabilityRegistry | None = None,
+        model_manager: ModelManager | None = None,
     ) -> None:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         now = self._clock()
@@ -505,9 +519,15 @@ class DemoDirector:
         self.store = HavenStore(household_id=HOUSEHOLD_ID)
         self.capability_registry = capability_registry or build_default_registry()
         self.engine = AuthorityEngine(device_registry=self.registry)
+        # The bridge makes models an upgrade path in front of the scripted
+        # floor: with no model loaded every chat falls through to the
+        # deterministic demo behavior, exactly as before.
+        self.model_manager = model_manager if model_manager is not None else ModelManager()
         self.runtime = HavenRuntime(
             store=self.store,
-            intelligence_provider=ScriptedIntelligenceProvider(),
+            intelligence_provider=ModelIntelligenceProvider(
+                ScriptedIntelligenceProvider(), self.model_manager
+            ),
             authority=self.engine,
             execution_providers=providers,
         )
@@ -519,6 +539,7 @@ class DemoDirector:
         self._glow_target: str | None = None
         self._conversation: list[dict[str, Any]] = []
         self._pending: dict[str, PendingRequest] = {}
+        self._direct_actions: dict[str, ActionProposal] = {}
         self._auto_allow: set[str] = set()
         self.receipts: list = []
         self.voice = VoiceSession(
@@ -590,9 +611,6 @@ class DemoDirector:
         )
         return rule.rule_id
 
-    def _schedule_trigger(self, now: datetime) -> ScheduleTrigger:
-        return ScheduleTrigger(time_of_day=now.time().replace(microsecond=0), window=timedelta(hours=24))
-
     def start_scenario(self) -> None:
         now = self._clock()
         self.house.reset(now=now)
@@ -639,6 +657,8 @@ class DemoDirector:
         pending = self._pending.get(request_id)
         if pending is None:
             return None
+        if request_id in self._direct_actions:
+            return self._approve_direct_action(request_id, pending)
         if auto:
             self._auto_allow.add(pending.rule_id)
         del self._pending[request_id]
@@ -673,10 +693,48 @@ class DemoDirector:
         self._publish_state()
         return self.state()
 
+    def _approve_direct_action(self, request_id: str, pending: PendingRequest) -> dict[str, Any] | None:
+        proposal = self._direct_actions.pop(request_id)
+        del self._pending[request_id]
+        now = self._clock()
+        token = ConfirmationToken(
+            token_id=_new_id("confirm"),
+            household_id=HOUSEHOLD_ID,
+            rule_id=pending.rule_id,
+            request_id=request_id,
+            confirmed_by=self.resident.actor_id,
+            issued_at=now,
+            expires_at=now + timedelta(minutes=5),
+        )
+        self._set_glow(GLOW_ACTING, target=self._device_room(proposal.target_device_id))
+        receipt = self.runtime.run_action(
+            principal=self.resident,
+            action_kind=proposal.action_kind,
+            target_device_id=proposal.target_device_id,
+            target_selector=proposal.target_selector,
+            parameters=proposal.parameters,
+            justification=proposal.justification,
+            world=self.house.snapshot(now),
+            now=now,
+            confirmation_token=token,
+        )
+        self.receipts.append(receipt)
+        if receipt.decision.status == DecisionStatus.ALLOW:
+            self._proposal_completed(proposal, receipt)
+        elif receipt.decision.status == DecisionStatus.CONFIRMATION_REQUIRED:
+            self._pending[request_id] = pending
+            self._direct_actions[request_id] = proposal
+            self._set_glow(GLOW_PERMISSION, target=self._device_room(proposal.target_device_id))
+        else:
+            self._record_block(receipt)
+        self._publish_state()
+        return self.state()
+
     def deny(self, request_id: str) -> bool:
         if request_id not in self._pending:
             return False
         del self._pending[request_id]
+        self._direct_actions.pop(request_id, None)
         self._say("user", "No, leave it.")
         self._say("haven", "Understood — I'll leave the garage as it is.")
         self._set_glow(GLOW_IDLE)
@@ -734,77 +792,310 @@ class DemoDirector:
         return self.state()
 
     def _chat_intent(self, text: str, focus: str | None = None) -> None:
-        normalized = " ".join(text.casefold().split()).rstrip(".!?")
-        if normalized in ("close the garage", "close the garage door"):
-            self._chat_close_garage()
-        elif normalized in ("turn that light off", "turn off the light", "turn off that light"):
-            if focus is None:
-                self._say("haven", "Which room do you mean?")
-            else:
-                self._chat_light_off(focus)
-        else:
-            self._say("haven", "I can't do that yet.")
+        """Route one utterance over the intent union, deterministically.
 
-    def _chat_close_garage(self) -> None:
-        now = self._clock()
-        if not self.house.garage_open():
-            self._say("haven", "The garage is already closed.")
+        Classification is regex/keyword and case-insensitive; nothing here
+        executes without crossing authority. Voice and typed text share this
+        path; stop-phrases are intercepted before it (VoiceSession).
+        """
+        normalized = " ".join(text.casefold().split()).rstrip(".!?")
+        if self._is_rule_phrasing(normalized):
+            self._chat_rule_phrase(text)
             return
-        receipt = self.runtime.run_rule(
-            self.garage_rule_id,
-            principal=self.resident,
-            world=self.house.snapshot(now),
-            justification="The resident asked HAVEN to close the garage.",
+        intent = self._classify_intent(text, normalized, focus)
+        if isinstance(intent, QueryRequest):
+            self._answer_query(intent, focus=focus)
+        elif isinstance(intent, ActionProposal):
+            self._run_proposal(intent)
+        elif isinstance(intent, ClarificationRequest):
+            self._say("haven", intent.question)
+        else:
+            self._say("haven", self._conversation_fallback(normalized, focus))
+
+    def _conversation_fallback(self, normalized: str, focus: str | None) -> str:
+        if normalized in ("close the garage", "close the garage door") and not self.house.garage_open():
+            return "The garage is already closed."
+        if any(normalized == pattern for pattern in self._LIGHT_OFF_PATTERNS) and focus is None:
+            return "Which room do you mean?"
+        room = self._light_room(normalized) or (
+            focus if any(normalized == p for p in self._LIGHT_OFF_PATTERNS) else None
+        )
+        if room is not None and "light" in normalized and not self.registry.find(role="light", room=room):
+            return f"I don't see a light in the {room}."
+        return "I can't do that yet."
+
+    # -- deterministic intent classification --------------------------------
+
+    _QUESTION_LEADERS = ("is", "are", "does", "do", "did", "what", "why", "how", "who", "where", "which", "can")
+
+    def _classify_intent(self, text: str, normalized: str, focus: str | None) -> object:
+        proposal = self._classify_action(normalized, focus, source_text=text)
+        if proposal is not None:
+            return proposal
+        if self._is_question(normalized):
+            return QueryRequest(text=text)
+        return ConversationMessage(text=text)
+
+    @staticmethod
+    def _is_rule_phrasing(normalized: str) -> bool:
+        return normalized.startswith("when ") and not normalized.endswith("?")
+
+    def _is_question(self, normalized: str) -> bool:
+        if normalized.endswith("?"):
+            return True
+        return any(normalized.startswith(leader + " ") for leader in self._QUESTION_LEADERS)
+
+    _LIGHT_OFF_PATTERNS = (
+        "turn that light off",
+        "turn off the light",
+        "turn off that light",
+        "turn the light off",
+    )
+
+    def _classify_action(self, normalized: str, focus: str | None, *, source_text: str) -> ActionProposal | None:
+        if normalized in ("close the garage", "close the garage door") and self.house.garage_open():
+            return ActionProposal(
+                action_kind=ActionKind.CLOSE_GARAGE,
+                target_device_id="garage_door",
+                target_selector=None,
+                parameters=(),
+                justification="The resident asked HAVEN to close the garage.",
+                source_text=source_text,
+            )
+        if normalized in ("open the garage", "open the garage door"):
+            return ActionProposal(
+                action_kind=ActionKind.OPEN_GARAGE,
+                target_device_id="garage_door",
+                target_selector=None,
+                parameters=(),
+                justification="The resident asked HAVEN to open the garage.",
+                source_text=source_text,
+            )
+        room = self._light_room(normalized)
+        if room is not None and self.registry.find(role="light", room=room):
+            return ActionProposal(
+                action_kind=ActionKind.TURN_LIGHT_OFF,
+                target_device_id=None,
+                target_selector=DeviceSelector(role="light", room=room),
+                parameters=(),
+                justification=f"The resident asked HAVEN to turn off the {room} light.",
+                source_text=source_text,
+            )
+        if focus is not None and any(normalized == pattern for pattern in self._LIGHT_OFF_PATTERNS):
+            if self.registry.find(role="light", room=focus):
+                return ActionProposal(
+                    action_kind=ActionKind.TURN_LIGHT_OFF,
+                    target_device_id=None,
+                    target_selector=DeviceSelector(role="light", room=focus),
+                    parameters=(),
+                    justification=f"The resident asked HAVEN to turn off the {focus} light.",
+                    source_text=source_text,
+                )
+        return None
+
+    _LIGHT_ROOM_PATTERNS = (
+        "turn off the {room} light",
+        "turn the {room} light off",
+        "turn off the light in the {room}",
+    )
+
+    def _light_room(self, normalized: str) -> str | None:
+        for pattern in self._LIGHT_ROOM_PATTERNS:
+            prefix, _, suffix = pattern.partition("{room}")
+            if normalized.startswith(prefix) and normalized.endswith(suffix):
+                end = len(normalized) - len(suffix) if suffix else len(normalized)
+                room = normalized[len(prefix):end].strip()
+                if room and " " not in room:
+                    return room
+        return None
+
+    def _chat_rule_phrase(self, text: str) -> None:
+        """"when ..." automation phrasing: the propose -> approve lifecycle."""
+        now = self._clock()
+        try:
+            rule = self.runtime.propose_from_text(text, principal=self.resident, now=now)
+        except UnsupportedIntent:
+            self._say("haven", "I can't do that yet.")
+            return
+        result = self.runtime.approve_rule(
+            rule.rule_id,
+            principal=self.owner,
+            justification="Owner approved the automation the resident asked for in chat.",
             now=now,
         )
+        if result.decision.status == DecisionStatus.ALLOW:
+            self._say("haven", f"Done — I've set that up: {rule.draft.interpretation}")
+        elif result.decision.status == DecisionStatus.NEEDS_CLARIFICATION:
+            self._say("haven", "I drafted a rule from that, but it needs clarification before I can set it up.")
+        else:
+            self._say("haven", f"I couldn't set that up: {result.decision.explanation}")
+
+    # -- query handling -----------------------------------------------------
+
+    def _answer_query(self, intent: QueryRequest, *, focus: str | None) -> None:
+        provider = self.runtime.intelligence_provider
+        if isinstance(provider, ModelIntelligenceProvider) and provider.chat_handle() is not None:
+            try:
+                reply = provider.chat(self._agent_context(focus=focus), intent.text)
+            except UnsupportedIntent:
+                pass  # the model path failed; the deterministic world answers
+            else:
+                self._say("haven", reply.text)
+                return
+        self._say("haven", self._deterministic_answer(intent.text))
+
+    def _deterministic_answer(self, text: str) -> str:
+        normalized = " ".join(text.casefold().split()).rstrip(".!?")
+        now = self._clock()
+        view = WorldView.from_snapshot(
+            self.house.snapshot(now),
+            now=now,
+            device_registry=self.registry,
+            names=self._world_names(),
+            recent_events=self.store.events,
+        )
+        if "garage" in normalized and ("open" in normalized or "closed" in normalized):
+            device = next((item for item in view.devices if item.device_id == "garage_door"), None)
+            if device is None:
+                return "I have no evidence about the garage door."
+            return "The garage door is open." if device.is_on else "The garage door is closed."
+        room = self._queried_light_room(normalized)
+        if room is not None:
+            device = next(
+                (item for item in view.devices if item.room_id == room and item.kind == "light"), None
+            )
+            if device is None:
+                return f"I don't see a light in the {room}."
+            return f"The {room} light is {'on' if device.is_on else 'off'}."
+        if normalized in ("who is home", "who's home", "who is at home", "who's at home"):
+            home = sorted(
+                self._person_name(item.person_id) for item in view.presence if item.present
+            )
+            if not home:
+                return "Nobody is home right now."
+            return f"{' and '.join(home)} {'is' if len(home) == 1 else 'are'} home."
+        return "I can't answer that without an intelligence model."
+
+    _LIGHT_QUERY_PATTERNS = (
+        "is the {room} light on",
+        "is the light on in the {room}",
+        "is the {room} light off",
+    )
+
+    def _queried_light_room(self, normalized: str) -> str | None:
+        if "light" not in normalized:
+            return None
+        for pattern in self._LIGHT_QUERY_PATTERNS:
+            prefix, _, suffix = pattern.partition("{room}")
+            if normalized.startswith(prefix) and normalized.endswith(suffix):
+                room = normalized[len(prefix): len(normalized) - len(suffix) if suffix else None].strip()
+                if room and " " not in room:
+                    return room
+        return None
+
+    def _agent_context(self, *, focus: str | None) -> AgentContext:
+        now = self._clock()
+        world = WorldView.from_snapshot(
+            self.house.snapshot(now),
+            now=now,
+            device_registry=self.registry,
+            names=self._world_names(),
+            recent_events=self.store.events,
+        )
+        return AgentContext(
+            household_id=HOUSEHOLD_ID,
+            actor_id=self.resident.actor_id,
+            actor_role=self.resident.role_tier.name,
+            room_focus=focus,
+            recent_lines=tuple(entry["text"] for entry in self._conversation[-6:]),
+            world=world,
+        )
+
+    def _world_names(self) -> dict[str, str]:
+        names: dict[str, str] = {}
+        for manifest in self.registry.all_devices():
+            names[manifest.device_id] = f"{manifest.role} · {manifest.device_id}"
+            if manifest.room:
+                names[manifest.room] = manifest.room.replace("_", " ").title()
+        return names
+
+    # -- action proposals ---------------------------------------------------
+
+    def _run_proposal(self, proposal: ActionProposal) -> None:
+        now = self._clock()
+        try:
+            receipt = self.runtime.run_action(
+                principal=self.resident,
+                action_kind=proposal.action_kind,
+                target_device_id=proposal.target_device_id,
+                target_selector=proposal.target_selector,
+                parameters=proposal.parameters,
+                justification=proposal.justification,
+                world=self.house.snapshot(now),
+                now=now,
+            )
+        except ValueError:
+            self._clarify_selector(proposal)
+            return
         self.receipts.append(receipt)
-        if receipt.decision.status == DecisionStatus.CONFIRMATION_REQUIRED:
-            self._ask_garage_close(now, self.house.garage_open_minutes(at=now))
-        elif receipt.decision.status == DecisionStatus.ALLOW:
-            self._say("haven", "The garage door is closed.")
-            self._set_glow(GLOW_COMPLETED, target="garage")
+        status = receipt.decision.status
+        if status == DecisionStatus.ALLOW:
+            self._proposal_completed(proposal, receipt)
+        elif status == DecisionStatus.CONFIRMATION_REQUIRED:
+            self._ask_direct_action(proposal, receipt, now)
         else:
             self._record_block(receipt)
 
-    def _chat_light_off(self, focus: str) -> None:
-        now = self._clock()
-        if not self.registry.find(role="light", room=focus):
-            self._say("haven", f"I don't see a light in the {focus}.")
-            return
-        draft = RuleDraft(
-            draft_id=_new_id("draft"),
-            household_id=HOUSEHOLD_ID,
-            proposed_by=self.resident.actor_id,
-            source_text="turn that light off",
-            interpretation=f"Turn off the {focus} light when the resident asks.",
-            action_kind=ActionKind.TURN_LIGHT_OFF,
-            schedule_trigger=self._schedule_trigger(now),
-            capability="power",
-            target_selector=DeviceSelector(role="light", room=focus),
-        )
-        rule = self.runtime.propose_draft(draft, principal=self.resident, now=now)
-        self.runtime.approve_rule(
-            rule.rule_id,
-            principal=self.owner,
-            justification=f"Owner approved turning off the {focus} light on request.",
-            now=now,
-        )
-        self._set_glow(GLOW_ACTING, target=focus)
-        receipts = self.runtime.run_rule_for_group(
-            rule.rule_id,
-            principal=self.resident,
-            world=self.house.snapshot(now),
-            justification=f"Turn off the {focus} light.",
-            now=now,
-        )
-        self.receipts.extend(receipts)
-        if receipts and all(receipt.decision.status == DecisionStatus.ALLOW for receipt in receipts):
-            self._say("haven", f"Done — the {focus} light is off.")
-            self._set_glow(GLOW_COMPLETED)
+    def _clarify_selector(self, proposal: ActionProposal) -> None:
+        selector = proposal.target_selector
+        resolved = self.registry.resolve(selector) if selector is not None else ()
+        if selector is not None and selector.room is not None and resolved:
+            self._say("haven", f"Which one? There are {len(resolved)} lights in the {selector.room}.")
         else:
-            for receipt in receipts:
-                if receipt.decision.status != DecisionStatus.ALLOW:
-                    self._record_block(receipt)
+            self._say("haven", "Which one? I couldn't resolve that to a single device.")
+
+    def _proposal_completed(self, proposal: ActionProposal, receipt) -> None:
+        result = receipt.device_result
+        if result is not None and not result.success:
+            # Authority allowed it but the device refused the command; say so.
+            self._say("haven", f"I couldn't do that: {result.detail}")
+            self._set_glow(GLOW_CRITICAL, target=self._device_room(receipt.requested_action.target_device_id))
+            return
+        target = receipt.requested_action.target_device_id
+        room = self._device_room(target)
+        if proposal.action_kind is ActionKind.TURN_LIGHT_OFF:
+            self._say("haven", f"Done — the {room} light is off.")
+        elif proposal.action_kind is ActionKind.CLOSE_GARAGE:
+            self._say("haven", "The garage door is closed.")
+        elif proposal.action_kind is ActionKind.OPEN_GARAGE:
+            self._say("haven", "The garage door is open.")
+        else:
+            self._say("haven", "Done.")
+        self._set_glow(GLOW_COMPLETED, target=room)
+
+    def _ask_direct_action(self, proposal: ActionProposal, receipt, now: datetime) -> None:
+        request = receipt.requested_action
+        rule_id = getattr(request, "rule_id", None) or DIRECT_ACTION_RULE_ID
+        if proposal.action_kind is ActionKind.OPEN_GARAGE:
+            title = "Open the garage door?"
+            detail = "You asked to open it directly; this action needs your confirmation."
+        else:
+            title = "Close the garage door?"
+            detail = (
+                f"It has been open {self.house.garage_open_minutes(at=now)} minutes. "
+                "You asked to close it directly; this action needs your confirmation."
+            )
+        pending = PendingRequest(
+            request_id=request.request_id,
+            rule_id=rule_id,
+            title=title,
+            detail=detail,
+            expires_at=now + timedelta(minutes=5),
+        )
+        self._pending[pending.request_id] = pending
+        self._direct_actions[pending.request_id] = proposal
+        self._say("haven", "Want me to do that?")
+        self._set_glow(GLOW_PERMISSION, target=self._device_room(request.target_device_id))
 
     def voice_focus(self) -> str | None:
         """Room voice input resolves relative to: the present resident's room."""
@@ -828,6 +1119,7 @@ class DemoDirector:
     def reset(self) -> dict[str, Any]:
         self.voice.reset()
         self._pending.clear()
+        self._direct_actions.clear()
         self._conversation.clear()
         self._auto_allow.clear()
         self._glow = GLOW_IDLE

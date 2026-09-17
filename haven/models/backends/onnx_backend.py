@@ -11,7 +11,8 @@ LOAD_FAILED.
 
 The runtime-dependent section is deliberately thin: resolve the model
 path named by `descriptor.files["model"]`, open an InferenceSession,
-wrap it in a handle whose `run()` maps plain lists to numpy and back.
+wrap it in a handle whose `run()` maps plain lists to numpy and back and
+returns the canonical `InferenceResult` (output names -> plain lists).
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from ..contracts import ModelDescriptor
+from ..results import InferenceResult
 
 
 def _model_path(descriptor: ModelDescriptor, model_dir: Path | None) -> Path:
@@ -46,13 +48,14 @@ class OnnxLoadedModel:
     def descriptor(self) -> ModelDescriptor:
         return self._descriptor
 
-    def run(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        """Run the session on numpy-free plain lists; returns lists."""
+    def run(self, inputs: dict[str, Any]) -> InferenceResult:
+        """Run the session on numpy-free plain lists; returns plain lists."""
 
         feeds = {name: self._numpy.asarray(value) for name, value in inputs.items()}
         outputs = self._session.run(None, feeds)
         names = [output.name for output in self._session.get_outputs()]
-        return {name: output.tolist() for name, output in zip(names, outputs)}
+        result = {name: output.tolist() for name, output in zip(names, outputs)}
+        return InferenceResult(outputs=result, model_id=self._descriptor.id)
 
     def unload(self) -> None:
         session, self._session = self._session, None
