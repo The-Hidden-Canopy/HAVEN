@@ -1,0 +1,200 @@
+"""Stdlib HTTP surface for the HAVEN demo: JSON API, SSE stream, static files."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import mimetypes
+import posixpath
+import queue
+import re
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+from .demo import Clock, DemoDirector
+
+HEARTBEAT_SECONDS = 15
+
+_APPROVE_PATH = re.compile(r"^/api/requests/([^/]+)/approve$")
+_DENY_PATH = re.compile(r"^/api/requests/([^/]+)/deny$")
+
+
+class HavenWebServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, server_address, static_root: Path, *, clock: Clock | None = None) -> None:
+        self.static_root = static_root
+        self.director = DemoDirector(clock=clock)
+        super().__init__(server_address, _Handler)
+
+
+class _Handler(BaseHTTPRequestHandler):
+    server_version = "HavenWeb/0.1"
+
+    def log_message(self, format: str, *args) -> None:
+        pass
+
+    @property
+    def director(self) -> DemoDirector:
+        return self.server.director
+
+    def do_GET(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path == "/api/state":
+            self._send_json(200, self.director.state())
+        elif path == "/events":
+            self._stream_events()
+        else:
+            self._serve_static(path)
+
+    def do_POST(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path == "/api/chat":
+            body = self._read_json()
+            if body is None:
+                return
+            state = self.director.chat(str(body.get("text", "")), body.get("focus"))
+            self._send_json(200, {"ok": True, "state": state})
+            return
+        match = _APPROVE_PATH.match(path)
+        if match:
+            body = self._read_json(optional=True)
+            if body is None:
+                return
+            result = self.director.approve(match.group(1), auto=bool(body.get("auto", False)))
+            if result is None:
+                self._send_json(404, {"error": "unknown request"})
+            else:
+                self._send_json(200, {"ok": True, "state": result})
+            return
+        match = _DENY_PATH.match(path)
+        if match:
+            if self.director.deny(match.group(1)):
+                self._send_json(200, {"ok": True, "state": self.director.state()})
+            else:
+                self._send_json(404, {"error": "unknown request"})
+            return
+        if path == "/api/demo/reset":
+            self._send_json(200, {"ok": True, "state": self.director.reset()})
+            return
+        self._send_json(404, {"error": "not found"})
+
+    def _read_json(self, *, optional: bool = False) -> dict | None:
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            length = 0
+        raw = self.rfile.read(length) if length > 0 else b""
+        if not raw.strip():
+            if optional:
+                return {}
+            self._send_json(400, {"error": "a JSON body is required"})
+            return None
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            self._send_json(400, {"error": "invalid JSON body"})
+            return None
+        if not isinstance(body, dict):
+            self._send_json(400, {"error": "invalid JSON body"})
+            return None
+        return body
+
+    def _send_json(self, status: int, payload: dict) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+
+    def _serve_static(self, path: str) -> None:
+        if path == "/":
+            path = "/index.html"
+        relative = posixpath.normpath(path).lstrip("/")
+        if not relative or ".." in relative.split("/"):
+            self._send_json(404, {"error": "not found"})
+            return
+        target = self.server.static_root / relative
+        if not target.is_file():
+            self._send_json(404, {"error": "not found"})
+            return
+        body = target.read_bytes()
+        content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+
+    def _stream_events(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.close_connection = False
+        subscriber = self.director.subscribe()
+
+        def emit(event: str, payload: dict) -> None:
+            data = json.dumps(payload)
+            self.wfile.write(f"event: {event}\n".encode("utf-8"))
+            for line in data.splitlines() or [""]:
+                self.wfile.write(f"data: {line}\n".encode("utf-8"))
+            self.wfile.write(b"\n")
+            self.wfile.flush()
+
+        try:
+            self.wfile.write(b"retry: 3000\n\n")
+            self.wfile.flush()
+            emit("state", self.director.state())
+            while True:
+                try:
+                    kind, payload = subscriber.get(timeout=HEARTBEAT_SECONDS)
+                except queue.Empty:
+                    self.wfile.write(b": hb\n\n")
+                    self.wfile.flush()
+                    continue
+                if kind == "glow":
+                    emit("glow", payload)
+                else:
+                    emit("state", payload)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            self.director.unsubscribe(subscriber)
+
+
+def make_server(
+    port: int,
+    *,
+    clock: Clock | None = None,
+    static_root: str | Path | None = None,
+) -> tuple[HavenWebServer, DemoDirector]:
+    root = Path(static_root) if static_root is not None else Path(__file__).parent / "static"
+    server = HavenWebServer(("127.0.0.1", port), root, clock=clock)
+    return server, server.director
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Serve the HAVEN local web surface.")
+    parser.add_argument("--port", type=int, default=8080)
+    args = parser.parse_args(argv)
+    server, _ = make_server(args.port)
+    host, port = server.server_address
+    print(f"HAVEN web surface listening on http://{host}:{port}", file=sys.stderr)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()
+
+
+__all__ = ["HavenWebServer", "make_server", "main"]

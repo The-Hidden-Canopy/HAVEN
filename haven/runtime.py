@@ -30,6 +30,7 @@ from haven.core.domain import (
 )
 from haven.core.store import HavenStore, RuleApproval, RuleClarification, RuleDecision
 from haven.core.time import require_aware_utc
+from haven.execution import ExecutionAdapter, ExecutionProviderRegistry, UnknownExecutionProvider
 from haven.integrations.home_assistant.adapter import HomeAssistantAdapter
 from haven.intelligence.gateway import ModelGateway
 
@@ -70,13 +71,17 @@ class HavenRuntime:
         *,
         store: HavenStore,
         model_gateway: ModelGateway,
-        home_assistant: HomeAssistantAdapter,
+        home_assistant: HomeAssistantAdapter | None = None,
         authority: AuthorityEngine | None = None,
+        execution_providers: ExecutionProviderRegistry | None = None,
     ) -> None:
+        if home_assistant is None and execution_providers is None:
+            raise ValueError("HavenRuntime requires home_assistant, execution_providers, or both")
         self.store = store
         self.model_gateway = model_gateway
         self.home_assistant = home_assistant
         self.authority = authority or AuthorityEngine()
+        self.execution_providers = execution_providers
 
     def propose_from_text(self, text: str, *, principal: Principal, now: datetime) -> Rule:
         draft = self.model_gateway.interpret(text, principal=principal, now=now)
@@ -427,7 +432,8 @@ class HavenRuntime:
             requested_at=now,
         )
         try:
-            result = self.home_assistant.execute(command)
+            adapter = self._execution_adapter_for(target_device_id)
+            result = adapter.execute(command)
         except Exception as exc:  # pragma: no cover - defensive integration boundary
             result = self._integration_failure(exc, at=now)
         executed = replace(authorized, status=ActionStatus.EXECUTED, executed_at=now, result=result)
@@ -449,6 +455,31 @@ class HavenRuntime:
             decision=decision,
             device_result=result,
             event_ids=(authorized_event.event_id, executed_event.event_id),
+        )
+
+    def _execution_adapter_for(self, target_device_id: str) -> ExecutionAdapter:
+        """Route to the adapter for this device's provider_id, or the default.
+
+        A device with a manifest registered in `self.authority.device_registry`
+        routes through `self.execution_providers` by its declared
+        `provider_id` -- this is the piece that lets a washer, a camera, and
+        an IR blaster each execute through a different real integration
+        while sharing one authority and receipt path. A device with no
+        manifest, or a deployment that never configured
+        `execution_providers`, falls back to `self.home_assistant`: nothing
+        about this routing is required to use Haven.
+        """
+
+        registry = self.authority.device_registry
+        if self.execution_providers is not None and registry is not None and registry.is_registered(target_device_id):
+            provider_id = registry.get(target_device_id).provider_id
+            if self.execution_providers.is_registered(provider_id):
+                return self.execution_providers.get(provider_id)
+        if self.home_assistant is not None:
+            return self.home_assistant
+        raise UnknownExecutionProvider(
+            f"no execution provider is registered for device {target_device_id!r}, "
+            "and no default home_assistant adapter was configured"
         )
 
     def _service_for_device(self, draft: RuleDraft, target_device_id: str) -> str:
