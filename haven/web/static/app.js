@@ -22,6 +22,9 @@ const els = {
   systemBody: $('#system-body'),
   modelsCount: $('#models-count'),
   modelsList: $('#models-list'),
+  jobsSection: $('#jobs-section'),
+  jobsList: $('#jobs-list'),
+  downloadNote: $('#download-note'),
   modelToggles: document.querySelectorAll('[data-model-panel]'),
   panelDownload: $('#panel-download'),
   catalogList: $('#catalog-list'),
@@ -700,6 +703,9 @@ const modelsState = {
   catalog: [],
   discovered: [],
   inspectedUrl: null,
+  jobs: [],
+  readyTimers: new Map(), // job_id -> timeout dropping a `ready` job from the active list
+  noteTimer: null,        // auto-hide for the "Download started" note
 };
 
 const modelPanels = {
@@ -952,9 +958,7 @@ function renderCatalog() {
     btn.className = 'btn';
     btn.textContent = 'Download';
     btn.addEventListener('click', async () => {
-      clearModelError(els.panelErrorDownload);
-      const resp = await postJSON('/api/models/install-url', { url: entry.manifest_url });
-      if (applyModelsResponse(resp, els.panelErrorDownload)) closeModelPanels();
+      await startModelDownload(entry.manifest_url, els.panelErrorDownload);
     });
     row.appendChild(btn);
 
@@ -1067,6 +1071,220 @@ function renderInspection(inspection, url) {
   els.inspectInstall.hidden = false;
 }
 
+/* ---------- download jobs ---------- */
+/* Job feed: SSE /api/models/events while the models view is active.
+   `jobs` replaces the list; `model_job` upserts one job. `ready` jobs
+   fade out of the active list after a few seconds; failed/cancelled
+   stay visible in amber until the next full replace. */
+
+const JOB_STATE_BADGE = {
+  downloading: 'src-local',
+  verifying: 'src-local',
+  ready: 'src-local',
+  queued: '',
+  failed: 'state-amber',
+  cancelled: 'state-amber',
+};
+
+let modelsJobSource = null; // module-scoped EventSource, null when the models view is not active
+
+function isJobLike(j) {
+  return !!j && typeof j === 'object' && typeof j.job_id === 'string';
+}
+
+function jobName(job) {
+  if (job.manifest_id) return job.manifest_id;
+  try {
+    return new URL(job.url).host;
+  } catch {
+    return job.url || 'unknown';
+  }
+}
+
+function clearReadyTimer(jobId) {
+  const timer = modelsState.readyTimers.get(jobId);
+  if (timer != null) {
+    clearTimeout(timer);
+    modelsState.readyTimers.delete(jobId);
+  }
+}
+
+function scheduleReadyFade(job) {
+  if (job.state !== 'ready') return;
+  clearReadyTimer(job.job_id);
+  modelsState.readyTimers.set(job.job_id, setTimeout(() => {
+    modelsState.readyTimers.delete(job.job_id);
+    modelsState.jobs = modelsState.jobs.filter((j) => j.job_id !== job.job_id);
+    renderJobs();
+  }, 5000));
+}
+
+function upsertJob(job) {
+  if (!isJobLike(job)) return;
+  const list = modelsState.jobs;
+  const i = list.findIndex((j) => j.job_id === job.job_id);
+  if (i >= 0) list[i] = job;
+  else list.push(job);
+  if (job.state === 'ready') scheduleReadyFade(job);
+  else clearReadyTimer(job.job_id);
+  // Jobs finish asynchronously — resync the installed list on terminal states.
+  if (job.state === 'ready' || job.state === 'failed') refreshModels();
+  renderJobs();
+}
+
+function renderJobs() {
+  const jobs = modelsState.jobs;
+  els.jobsSection.hidden = jobs.length === 0;
+  els.jobsList.textContent = '';
+  for (const job of jobs) {
+    if (isJobLike(job)) els.jobsList.appendChild(makeJobRow(job));
+  }
+}
+
+function makeJobRow(job) {
+  const row = document.createElement('div');
+  row.className = 'job-row';
+
+  const head = document.createElement('div');
+  head.className = 'job-row-head';
+
+  const name = document.createElement('span');
+  name.className = 'job-name';
+  name.textContent = jobName(job);
+  head.appendChild(name);
+
+  const state = String(job.state || 'queued');
+  head.appendChild(modelBadge(state.toUpperCase(), JOB_STATE_BADGE[state] || ''));
+
+  const received = Number(job.received_bytes) || 0;
+  const total = typeof job.total_bytes === 'number' && job.total_bytes > 0 ? job.total_bytes : 0;
+
+  if (state === 'queued' || state === 'downloading' || state === 'verifying') {
+    const measure = document.createElement('span');
+    measure.className = 'job-bytes muted';
+    if (total > 0) {
+      measure.textContent = Math.min(100, (received / total) * 100).toFixed(0) + '%';
+    } else {
+      measure.textContent = (received / 1048576).toFixed(1) + ' MB';
+    }
+    head.appendChild(measure);
+
+    const bar = document.createElement('div');
+    bar.className = 'job-progress' + (total > 0 ? '' : ' indeterminate');
+    const fill = document.createElement('span');
+    if (total > 0) fill.style.width = Math.min(100, (received / total) * 100).toFixed(1) + '%';
+    bar.appendChild(fill);
+    row.appendChild(bar);
+  }
+
+  if (state === 'queued' || state === 'downloading') {
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', async () => {
+      const resp = await postJSON('/api/models/jobs/' + encodeURIComponent(job.job_id) + '/cancel', {});
+      if (resp && resp.ok && isJobLike(resp.job)) upsertJob(resp.job);
+      else refreshJobs();
+    });
+    head.appendChild(cancel);
+  }
+
+  row.appendChild(head);
+
+  if (job.current_file) {
+    const file = document.createElement('div');
+    file.className = 'job-file muted';
+    file.textContent = job.current_file;
+    row.appendChild(file);
+  }
+
+  if (state === 'failed' && job.error) {
+    const err = document.createElement('div');
+    err.className = 'job-file muted';
+    err.textContent = job.error;
+    row.appendChild(err);
+  }
+
+  return row;
+}
+
+async function refreshJobs() {
+  try {
+    const res = await fetch('/api/models/jobs');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || data.ok === false || !Array.isArray(data.jobs)) return;
+    for (const timer of modelsState.readyTimers.values()) clearTimeout(timer);
+    modelsState.readyTimers.clear();
+    modelsState.jobs = data.jobs.filter(isJobLike);
+    for (const job of modelsState.jobs) scheduleReadyFade(job);
+    renderJobs();
+  } catch {
+    // Backend may not be up yet — the SSE stream will deliver state later.
+  }
+}
+
+function startJobsStream() {
+  stopJobsStream();
+  refreshJobs(); // defensive fetch alongside the stream's initial `jobs` event
+  const es = new EventSource('/api/models/events');
+  modelsJobSource = es;
+
+  es.addEventListener('jobs', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (!data || data.ok === false || !Array.isArray(data.jobs)) return;
+      for (const timer of modelsState.readyTimers.values()) clearTimeout(timer);
+      modelsState.readyTimers.clear();
+      modelsState.jobs = data.jobs.filter(isJobLike);
+      for (const job of modelsState.jobs) scheduleReadyFade(job);
+      renderJobs();
+    } catch {
+      // malformed payload — wait for the next event
+    }
+  });
+
+  es.addEventListener('model_job', (e) => {
+    try {
+      upsertJob(JSON.parse(e.data));
+    } catch {
+      // malformed payload — wait for the next event
+    }
+  });
+
+  // EventSource auto-reconnects; nothing to do but stay alive.
+  es.addEventListener('error', () => {});
+}
+
+function stopJobsStream() {
+  if (modelsJobSource) {
+    modelsJobSource.close();
+    modelsJobSource = null;
+  }
+}
+
+/* POST /api/models/download — returns a job, not a models payload.
+   On ok, a muted note confirms the start and the jobs section carries
+   progress; terminal job events resync the installed list. */
+async function startModelDownload(url, errEl) {
+  clearModelError(errEl);
+  const resp = await postJSON('/api/models/download', { url: url });
+  if (!resp) return false; // 404 / network — quiet no-op, per postJSON
+  if (!resp.ok) {
+    showModelError(errEl, typeof resp.error === 'string' ? resp.error : 'Download failed');
+    return false;
+  }
+  els.downloadNote.textContent = 'Download started';
+  els.downloadNote.hidden = false;
+  clearTimeout(modelsState.noteTimer);
+  modelsState.noteTimer = setTimeout(() => {
+    els.downloadNote.hidden = true;
+  }, 4000);
+  refreshJobs();
+  return true;
+}
+
 /* ---------- nav views ---------- */
 
 function switchView(view, label) {
@@ -1139,13 +1357,21 @@ function wireEvents() {
   }
 
   for (const item of els.navItems) {
-    item.querySelector('a').addEventListener('click', (e) => {
+    const link = item.querySelector('a');
+    if (!link) continue; // group label — not a view switch
+    link.addEventListener('click', (e) => {
       e.preventDefault();
       for (const li of els.navItems) li.classList.toggle('active', li === item);
       const label = item.querySelector('.nav-label').textContent;
+      if (item.dataset.view === 'models') startJobsStream();
+      else stopJobsStream();
       switchView(item.dataset.view, label);
     });
   }
+
+  // Job stream lifecycle: never leave it open when the models view is not
+  // active, and close it on page unload so refreshes don't pile up streams.
+  window.addEventListener('pagehide', stopJobsStream);
 
   /* models view: panel toggles + actions */
   for (const btn of els.modelToggles) {
@@ -1171,14 +1397,12 @@ function wireEvents() {
   });
 
   els.inspectInstall.addEventListener('click', async () => {
-    clearModelError(els.panelErrorDownload);
     if (!modelsState.inspectedUrl) return;
-    const resp = await postJSON('/api/models/install-url', { url: modelsState.inspectedUrl });
-    if (!applyModelsResponse(resp, els.panelErrorDownload)) return;
+    const started = await startModelDownload(modelsState.inspectedUrl, els.panelErrorDownload);
+    if (!started) return;
     els.inspectionBox.textContent = '';
     els.inspectInstall.hidden = true;
     modelsState.inspectedUrl = null;
-    closeModelPanels();
   });
 
   els.installLocalForm.addEventListener('submit', async (e) => {

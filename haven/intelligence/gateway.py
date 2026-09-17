@@ -25,6 +25,8 @@ from uuid import uuid4
 from haven.core.domain import ActionKind, AuthorityDecision, Principal, RuleDraft
 from haven.core.time import require_aware_utc
 
+from .worldview import WorldView
+
 
 class UnsupportedIntent(ValueError):
     """Raised when the fixture provider has no declared interpretation."""
@@ -35,9 +37,12 @@ class AgentContext:
     """Bounded, read-only context handed to an intelligence provider.
 
     Deliberately minimal and serializable: a household, an actor summary, an
-    optional room focus, and recent conversation lines. Providers must never
-    receive the store, world internals, or device internals through this
-    object -- it carries identifiers and plain text, nothing executable.
+    optional room focus, recent conversation lines, and an optional
+    `WorldView` -- the bounded, serializable projection of observed world
+    state (see `haven.intelligence.worldview`). Providers must never receive
+    the store, world internals, or device internals through this object: the
+    world view is already-projected evidence with freshness and confidence
+    attached, not a window into the snapshot or the device registry.
     """
 
     household_id: str
@@ -45,6 +50,7 @@ class AgentContext:
     actor_role: str
     room_focus: str | None = None
     recent_lines: tuple[str, ...] = ()
+    world: WorldView | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("household_id", "actor_id", "actor_role"):
@@ -56,6 +62,32 @@ class AgentContext:
             self,
             "recent_lines",
             tuple(line for line in self.recent_lines if isinstance(line, str)),
+        )
+        if self.world is not None and not isinstance(self.world, WorldView):
+            raise ValueError("world must be a WorldView or None")
+
+    def to_dict(self) -> dict:
+        """Serialize to a JSON-safe dict; providers receive this across process boundaries."""
+
+        return {
+            "household_id": self.household_id,
+            "actor_id": self.actor_id,
+            "actor_role": self.actor_role,
+            "room_focus": self.room_focus,
+            "recent_lines": list(self.recent_lines),
+            "world": self.world.to_dict() if self.world is not None else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "AgentContext":
+        world = data.get("world")
+        return cls(
+            household_id=data["household_id"],
+            actor_id=data["actor_id"],
+            actor_role=data["actor_role"],
+            room_focus=data.get("room_focus"),
+            recent_lines=tuple(data.get("recent_lines", ())),
+            world=WorldView.from_dict(world) if world is not None else None,
         )
 
 

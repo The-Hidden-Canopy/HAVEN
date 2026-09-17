@@ -1,11 +1,13 @@
-"""Backend plugin protocol; HAVEN Core ships ZERO registered backends.
+"""Backend plugin protocol; the registry itself is a plain name -> loader map.
 
-Backends (onnx, transformers, gguf, remote_http, community mlx/rocm/coreml/
-...) are deployer- or plugin-registered: a community plugin like
-haven-model-mlx adds a backend without HAVEN Core absorbing the runtime.
-This repo's `BackendRegistry` therefore ships empty, and a load whose
-manifest names a backend with no registered loader fails with the explicit
-state BACKEND_MISSING -- never a silent fallback. Tests register a fake.
+Backends (http, onnx, transformers, llama_cpp, community mlx/rocm/coreml/
+...) are plugins: each implements `ModelBackend` and registers under a
+name. HAVEN ships reference implementations in this package (see
+`reference.reference_backends`): http is stdlib and always active; the
+ML loaders are lazy and only activate when their runtime is importable.
+A bare `BackendRegistry` still starts empty, and `resolve` returns None
+(never raises) so the manager can convert a miss into the explicit state
+BACKEND_MISSING -- never a silent fallback. Tests register a fake.
 """
 
 from __future__ import annotations

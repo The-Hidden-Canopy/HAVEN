@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from ..models import ModelManager, inspect_folder
+from ..models.jobs import DownloadJobManager, job_to_dict
 from ..models.storage import default_models_root
 from .demo import Clock, DemoDirector
 from .models_api import inspection_payload, models_payload, overview_payload, scan_payload
@@ -27,6 +28,8 @@ _MODEL_LIFECYCLE_PATHS = ("/api/models/load", "/api/models/unload", "/api/models
 
 _APPROVE_PATH = re.compile(r"^/api/requests/([^/]+)/approve$")
 _DENY_PATH = re.compile(r"^/api/requests/([^/]+)/deny$")
+_JOB_DETAIL_PATH = re.compile(r"^/api/models/jobs/([^/]+)$")
+_JOB_CANCEL_PATH = re.compile(r"^/api/models/jobs/([^/]+)/cancel$")
 
 
 class HavenWebServer(ThreadingHTTPServer):
@@ -51,8 +54,11 @@ class HavenWebServer(ThreadingHTTPServer):
             resolved_models_root = default_models_root()
         # One manager per server: storage/registry are file-based, but the
         # in-memory backend registry and loaded handles are shared state, so
-        # every handler thread must talk to this single instance.
+        # every handler thread must talk to this single instance. The job
+        # manager shares it: it is thread-safe by design (job map behind a
+        # lock, callbacks fired outside it).
         self.models = ModelManager(resolved_models_root)
+        self.model_jobs = DownloadJobManager(self.models)
         super().__init__(server_address, _Handler)
 
 
@@ -70,16 +76,28 @@ class _Handler(BaseHTTPRequestHandler):
     def models(self) -> ModelManager:
         return self.server.models
 
+    @property
+    def model_jobs(self) -> DownloadJobManager:
+        return self.server.model_jobs
+
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/api/state":
             self._send_json(200, self.director.state())
         elif path == "/api/models":
             self._send_json(200, overview_payload(self.models))
-        elif path == "/events":
-            self._stream_events()
+        elif path == "/api/models/jobs":
+            self._send_json(200, {"ok": True, "jobs": [job_to_dict(job) for job in self.model_jobs.list()]})
         else:
-            self._serve_static(path)
+            match = _JOB_DETAIL_PATH.match(path)
+            if match:
+                self._send_job_detail(match.group(1))
+            elif path == "/api/models/events":
+                self._stream_model_events()
+            elif path == "/events":
+                self._stream_events()
+            else:
+                self._serve_static(path)
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
@@ -139,8 +157,17 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/models/scan":
             self._send_model_result(path, lambda: scan_payload(manager, manager.scan()))
             return
+        match = _JOB_CANCEL_PATH.match(path)
+        if match:
+            self._cancel_job(match.group(1))
+            return
         body = self._read_json()
         if body is None:
+            return
+        if path == "/api/models/download":
+            url = self._require_field(body, "url")
+            if url is not None:
+                self._start_download(url)
             return
         if path == "/api/models/inspect":
             url = self._require_field(body, "url")
@@ -262,6 +289,31 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
         self.wfile.flush()
 
+    def _send_job_detail(self, job_id: str) -> None:
+        try:
+            job = self.model_jobs.status(job_id)
+        except KeyError:
+            self._send_json(200, {"ok": False, "error": f"unknown job: {job_id}"})
+            return
+        self._send_json(200, {"ok": True, "job": job_to_dict(job)})
+
+    def _start_download(self, url: str) -> None:
+        job_id = self.model_jobs.start(url)
+        job = self.model_jobs.status(job_id)
+        if job.state.value == "failed":
+            # Resolution failed synchronously: the envelope carries the error
+            # and no job id; the failed job itself still shows up in the jobs
+            # list so the UI renders it uniformly.
+            self._send_json(200, {"ok": False, "error": job.error or "download failed"})
+            return
+        self._send_json(200, {"ok": True, "job_id": job_id})
+
+    def _cancel_job(self, job_id: str) -> None:
+        if not self.model_jobs.cancel(job_id):
+            self._send_json(200, {"ok": False, "error": f"unknown job: {job_id}"})
+            return
+        self._send_json(200, {"ok": True, "job": job_to_dict(self.model_jobs.status(job_id))})
+
     def _stream_events(self) -> None:
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -300,6 +352,44 @@ class _Handler(BaseHTTPRequestHandler):
             # handler loops back into readline() on an aborted connection.
             self.close_connection = True
             self.director.unsubscribe(subscriber)
+
+    def _stream_model_events(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.close_connection = False
+        events: queue.Queue = queue.Queue()
+        subscriber = events.put
+        self.model_jobs.subscribe(subscriber)
+
+        def emit(event: str, payload) -> None:
+            data = json.dumps(payload)
+            self.wfile.write(f"event: {event}\n".encode("utf-8"))
+            for line in data.splitlines() or [""]:
+                self.wfile.write(f"data: {line}\n".encode("utf-8"))
+            self.wfile.write(b"\n")
+            self.wfile.flush()
+
+        try:
+            self.wfile.write(b"retry: 3000\n\n")
+            self.wfile.flush()
+            emit("jobs", [job_to_dict(job) for job in self.model_jobs.list()])
+            while True:
+                try:
+                    job = events.get(timeout=HEARTBEAT_SECONDS)
+                except queue.Empty:
+                    self.wfile.write(b": hb\n\n")
+                    self.wfile.flush()
+                    continue
+                emit("model_job", job_to_dict(job))
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            # Same discipline as /events: stop the handler from looping back
+            # into readline() on an aborted connection, then detach.
+            self.close_connection = True
+            self.model_jobs.unsubscribe(subscriber)
 
 
 def make_server(

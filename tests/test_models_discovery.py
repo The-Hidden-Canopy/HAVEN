@@ -98,13 +98,34 @@ def test_empty_license_is_flagged_but_still_a_candidate():
         assert results[0].problems
 
 
-def test_folder_without_manifest_is_discovered_not_classified():
+def test_folder_without_manifest_or_layout_is_unsupported_with_the_problem_text():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "mystery").mkdir()
         results = scan_roots([root])
-        assert results[0].state is ModelState.DISCOVERED
+        assert results[0].state is ModelState.UNSUPPORTED
         assert results[0].manifest is None
+        assert any("haven-model.json" in problem for problem in results[0].problems)
+
+
+def test_ordinary_layout_folders_are_inspected_with_synthesized_manifests():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        gguf = root / "My GGUF Model"
+        gguf.mkdir()
+        (gguf / "model.Q4_K_M.gguf").write_bytes(b"gguf bytes")
+        results = scan_roots([root])
+        assert len(results) == 1
+        result = results[0]
+        assert result.state is ModelState.INSPECTED
+        assert result.manifest is not None
+        assert result.manifest.id == "my-gguf-model"
+        assert result.manifest.backend == "llama_cpp"
+        assert result.manifest.files == {"model": "model.Q4_K_M.gguf"}
+        assert result.manifest.sha256 == {}
+        assert result.manifest.source == "detected:gguf"
+        # the license-unknown flag rides along as a problem, not a refusal
+        assert any("license" in problem for problem in result.problems)
 
 
 def test_scan_walks_immediate_subdirectories_only_and_skips_missing_roots():
@@ -118,9 +139,10 @@ def test_scan_walks_immediate_subdirectories_only_and_skips_missing_roots():
         results = scan_roots([root, Path(tmp) / "does-not-exist"])
         by_name = {r.path.name: r.state for r in results}
         assert by_name["a-model"] is ModelState.INSPECTED
-        # deeper levels are not walked; the intermediate folder is just a discovery
+        # deeper levels are not walked; the intermediate folder has no
+        # manifest and no recognizable layout, so it is unsupported
         assert "deep-model" not in by_name
-        assert by_name["nested"] is ModelState.DISCOVERED
+        assert by_name["nested"] is ModelState.UNSUPPORTED
 
 
 def test_scan_classifies_multiple_candidates_independently():

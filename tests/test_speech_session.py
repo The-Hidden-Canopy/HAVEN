@@ -62,6 +62,47 @@ def test_partials_are_recorded_but_never_executable_output():
     assert session.pending_final is None
 
 
+def test_partials_are_scoped_to_one_utterance():
+    session = SpeechSession()
+    session.handle(WakeEvent(confidence=0.9, at_ms=0))
+    first = TranscriptPartial(text="turn", at_ms=50)
+    session.handle(first)
+    session.handle(
+        TranscriptFinal(text="turn off the lights", start_ms=0, end_ms=100, confidence=0.9, at_ms=100)
+    )
+    session.consume_final()
+    assert session.partials == ()
+
+    # Utterance B begins; only its own partials may be visible.
+    session.handle(WakeEvent(confidence=0.9, at_ms=200))
+    second = TranscriptPartial(text="dim", at_ms=250)
+    session.handle(second)
+
+    assert session.partials == (second,)
+
+
+def test_wake_restarts_clear_partials_for_barge_in():
+    session = SpeechSession()
+    session.handle(WakeEvent(confidence=0.9, at_ms=0))
+    session.handle(TranscriptPartial(text="turn", at_ms=50))
+
+    # A second wake mid-utterance restarts it: barge-in discards the old partials.
+    session.handle(WakeEvent(confidence=0.9, at_ms=100))
+
+    assert session.partials == ()
+
+
+def test_close_clears_partials():
+    session = SpeechSession()
+    session.handle(WakeEvent(confidence=0.9, at_ms=0))
+    session.handle(TranscriptPartial(text="turn", at_ms=50))
+
+    session.close()
+
+    assert session.state is SpeechSessionState.CLOSED
+    assert session.partials == ()
+
+
 def test_full_pipeline_wake_capture_recognize_consume():
     wake = ScriptedWakeDetector(triggers_at_frame=1)
     vad = ScriptedVad(script=((1, 3),))
@@ -85,12 +126,14 @@ def test_full_pipeline_wake_capture_recognize_consume():
     session.handle(finals[0])
 
     assert session.state is SpeechSessionState.HAVEN_INPUT_READY
+    assert [p.text for p in session.partials] == ["turn", "off"]
     final = session.consume_final()
 
     assert final.text == "turn off the bedroom lights"
     assert isinstance(final, TranscriptFinal)
-    assert [p.text for p in session.partials] == ["turn", "off"]
-    # Consumed: the session returns to dormant and has nothing left to give.
+    # Consumed: the session returns to dormant, and the utterance's
+    # partials are dropped along with everything else interim.
+    assert session.partials == ()
     assert session.state is SpeechSessionState.DORMANT
     assert session.consume_final() is None
     assert session.pending_final is None

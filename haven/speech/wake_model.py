@@ -8,9 +8,9 @@ claim a detection (`threshold`, `debounce_ms`, `positive_phrase`).
 
 `ThresholdedWakeDetector` turns a manifest plus a `scorer` callable into a
 protocol-conforming `WakeDetector` in pure Python: a rolling window over
-buffered PCM frames, scored per frame, firing one `WakeEvent` per threshold
-crossing and re-arming only once the rolling score falls back below the
-threshold.
+buffered PCM frames, scored per frame once the advertised window has
+filled, firing one `WakeEvent` per threshold crossing and re-arming only
+once the rolling score falls back below the threshold.
 
 The scorer is the injection point between the contract and the artifact:
 `scorer(window_pcm) -> float` maps one window of 16-bit LE mono PCM to
@@ -102,12 +102,15 @@ class ThresholdedWakeDetector:
     """Rolling-window wake detector driven by a manifest and a scorer.
 
     PCM arrives in any chunk size; whole `frame_ms` frames accumulate into
-    a rolling window of `window_ms`. Each new frame is scored once; a score
-    at or above the threshold fires exactly one `WakeEvent` (debounced by
-    `debounce_ms`), and the detector re-arms only after the rolling score
-    falls below the threshold. With no injected clock the stream's own
-    frame timeline is the clock, so the detector is fully deterministic;
-    inject `clock_ms` to govern debounce timing from the outside.
+    a rolling window of `window_ms`. Scoring starts only once the advertised
+    window is full: frames arriving before that simply accumulate, so a
+    fixed-shape scorer never sees an undersized window. Each new frame is
+    scored once the window is full; a score at or above the threshold fires
+    exactly one `WakeEvent` (debounced by `debounce_ms`), and the detector
+    re-arms only after the rolling score falls below the threshold. With no
+    injected clock the stream's own frame timeline is the clock, so the
+    detector is fully deterministic; inject `clock_ms` to govern debounce
+    timing from the outside.
     """
 
     def __init__(
@@ -147,6 +150,8 @@ class ThresholdedWakeDetector:
             overflow = len(self._window) - self._window_bytes
             if overflow > 0:
                 del self._window[:overflow]
+            if len(self._window) < self._window_bytes:
+                continue  # startup: the window is not full yet, so nothing to score
             score = self._scorer(bytes(self._window))
             if isinstance(score, bool) or not isinstance(score, (int, float)):
                 raise ValueError("scorer must return a number between 0.0 and 1.0")

@@ -522,6 +522,106 @@ a {
 
 .model-badge.state-dim { opacity: 0.6; }
 
+/* download jobs: thin progress, quiet badges — same language as model rows */
+.jobs-section { margin-bottom: 22px; }
+
+.jobs-section > .micro {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+
+.jobs-section[hidden] { display: none; }
+
+.job-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.job-row-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.job-name {
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+.job-bytes {
+  flex: none;
+  font-size: 11.5px;
+}
+
+.job-file {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.job-row-head .btn {
+  flex: none;
+  padding: 3px 10px;
+  font-size: 10.5px;
+  color: var(--muted);
+  border-color: var(--border);
+  background: transparent;
+}
+
+.job-row-head .btn:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.job-progress {
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.job-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--teal);
+  width: 0;
+  transition: width 0.3s;
+}
+
+.job-progress.indeterminate > span {
+  width: 30%;
+  animation: job-indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes job-indeterminate {
+  0%, 100% { margin-left: 0; }
+  50%      { margin-left: 70%; }
+}
+
+.model-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.model-note[hidden] { display: none; }
+
+/* nav group label: separates household surfaces from infrastructure */
+.rail-nav .nav-group {
+  padding: 12px 12px 2px;
+}
+
+.rail-nav .nav-group .micro { display: block; }
+
 /* right HAVEN rail */
 .haven-rail {
   grid-area: rail;
@@ -1139,5 +1239,6 @@ body[data-glow="interpreting"] .haven-rail {
     gap: 0;
   }
 
-  .rail-nav .nav-label { display: none; }
+  .rail-nav .nav-label,
+  .rail-nav .nav-group { display: none; }
 }

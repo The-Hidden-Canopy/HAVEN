@@ -15,21 +15,25 @@ from __future__ import annotations
 import json
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .backends import BackendRegistry, LoadedModel
+from .backends import BackendRegistry, LoadedModel, reference_backends
 from .catalog import CatalogEntry
-from .contracts import ModelDescriptor, ModelKind, ModelSource
+from .contracts import ModelDescriptor, ModelKind, ModelSource, safe_model_id
+from .detect import detect_folder, slugify_model_id
 from .discovery import DiscoveryResult, scan_roots
 from .downloader import (
     HashMismatchError,
     ModelSourceError,
+    ResolvedSource,
     UrlInspection,
     download_files,
     inspect_manifest_url,
+    resolve_model_url,
 )
 from .integrity import verify_files
 from .manifest import ModelManifest
@@ -66,6 +70,31 @@ def _basename_keyed(sha256: dict[str, str]) -> dict[str, str]:
     return {Path(rel).name: digest for rel, digest in sha256.items()}
 
 
+def _looks_like_manifest_url(url: str) -> bool:
+    return Path(urllib.parse.urlsplit(url.strip()).path).name == "haven-model.json"
+
+
+def _synthesize_endpoint_manifest(endpoint_url: str) -> ModelManifest:
+    """Minimal metadata for a bare endpoint: no manifest URL was supplied."""
+
+    parsed = urllib.parse.urlsplit(endpoint_url)
+    hint = "-".join(part for part in (parsed.hostname, str(parsed.port or ""), parsed.path) if part)
+    model_id = safe_model_id(slugify_model_id(hint) or "remote-endpoint")
+    return ModelManifest(
+        id=model_id,
+        version="0.0.0",
+        kind=ModelKind.SPECIALIZED,
+        capabilities=frozenset({"inference"}),
+        architecture="remote",
+        backend="http",
+        files={},
+        sha256={},
+        license=None,
+        endpoint=endpoint_url,
+        source=f"endpoint:{endpoint_url}",
+    )
+
+
 class ModelManager:
     def __init__(
         self,
@@ -77,7 +106,7 @@ class ModelManager:
         self.models_root = Path(models_root) if models_root is not None else default_models_root()
         self._storage = ModelStorage(self.models_root)
         self._registry = ModelRegistry(self.models_root / "registry.json")
-        self._backends = backends if backends is not None else BackendRegistry()
+        self._backends = backends if backends is not None else reference_backends()
         self._catalog = tuple(catalog)
         self._loaded: dict[str, LoadedModel] = {}
         self._roots_path = self.models_root / _ROOTS_FILENAME
@@ -118,15 +147,60 @@ class ModelManager:
         return inspect_manifest_url(url)
 
     def install_from_url(self, url: str, *, replace: bool = False) -> ModelRecord:
-        """Download entry path: inspect -> download -> verify -> READY."""
+        """Download entry path: resolve -> inspect -> download -> verify -> READY."""
 
-        inspection = inspect_manifest_url(url)
-        manifest = inspection.manifest
-        self._register(manifest, ModelSource.DOWNLOADED, url)
+        resolved = resolve_model_url(url)
+        return self._install_resolved(resolved, url, replace=replace)
+
+    def _install_resolved(
+        self,
+        resolved: ResolvedSource,
+        source_detail: str,
+        *,
+        replace: bool = False,
+        progress=None,
+        cancel=None,
+        staging_dir: str | Path | None = None,
+        on_downloaded=None,
+    ) -> ModelRecord:
+        """The shared download->install->verify core behind both entry paths.
+
+        The synchronous `install_from_url` and the background job manager
+        both land here so a job-driven install transitions the registry
+        exactly like a synchronous one. `staging_dir` overrides the
+        temporary download destination (the job path uses a stable per-model
+        staging dir so interrupted files stay resumable); `progress` and
+        `cancel` are the downloader's byte-progress and cooperative-cancel
+        hooks; `on_downloaded` fires after the bytes are on disk and
+        hash-verified but before they are installed into storage.
+        """
+
+        manifest = resolved.manifest
+        self._register(manifest, ModelSource.DOWNLOADED, source_detail)
         try:
-            with tempfile.TemporaryDirectory() as tmp:
-                download_files(manifest, base_url=_base_url(url), dest_dir=Path(tmp))
-                dest = self._storage.install(manifest, Path(tmp), replace=replace)
+            if staging_dir is not None:
+                download_files(
+                    manifest,
+                    base_url=resolved.base_url,
+                    dest_dir=Path(staging_dir),
+                    progress=progress,
+                    cancel=cancel,
+                )
+                if on_downloaded is not None:
+                    on_downloaded()
+                dest = self._storage.install(manifest, Path(staging_dir), replace=replace)
+            else:
+                with tempfile.TemporaryDirectory() as tmp:
+                    download_files(
+                        manifest,
+                        base_url=resolved.base_url,
+                        dest_dir=Path(tmp),
+                        progress=progress,
+                        cancel=cancel,
+                    )
+                    if on_downloaded is not None:
+                        on_downloaded()
+                    dest = self._storage.install(manifest, Path(tmp), replace=replace)
         except HashMismatchError:
             self._registry.update_state(manifest.id, ModelState.HASH_MISMATCH)
             raise
@@ -139,10 +213,20 @@ class ModelManager:
     # -- entry path: Load Local ------------------------------------------------
 
     def install_local_folder(self, folder: str | Path, *, replace: bool = False) -> ModelRecord:
-        """Local folder entry path: manifest load -> install -> verify."""
+        """Local folder entry path: detect -> install -> verify.
+
+        The folder may carry a `haven-model.json` or match a known layout
+        (single *.gguf, config.json + weights, *.onnx); either way a manifest
+        is required -- an unrecognizable folder is refused before anything
+        is registered or copied.
+        """
 
         folder = Path(folder)
-        manifest = ModelManifest.load(folder / "haven-model.json")
+        detection = detect_folder(folder)
+        manifest = detection.manifest
+        if manifest is None:
+            problem = "; ".join(detection.problems) or "no model manifest or recognized layout"
+            raise ModelManagerError(f"cannot install {folder}: {problem}")
         self._register(manifest, ModelSource.LOCAL, str(folder))
         dest = self._storage.install(manifest, folder, replace=replace)
         descriptor = manifest.to_descriptor(ModelSource.LOCAL, str(dest), verified=False)
@@ -150,25 +234,48 @@ class ModelManager:
 
     # -- entry path: Register External -----------------------------------------
 
-    def register_endpoint(self, manifest_or_url) -> ModelRecord:
-        """Endpoint entry path: descriptor over a base URL, no files.
+    def register_endpoint(self, endpoint_url, *, manifest_url: str | None = None) -> ModelRecord:
+        """Endpoint entry path: the ENDPOINT URL is the inference contract.
 
-        A lightweight GET failure at registration time is recorded as
-        UNREACHABLE but does not block registration: endpoints flap, and
-        the record is the flag.
+        `endpoint_url` is probed and recorded as `endpoint_url` on the
+        descriptor; the optional `manifest_url` supplies metadata (kind,
+        capabilities, architecture, backend). Without one, a minimal
+        descriptor (specialized / {"inference"} / remote / http) is
+        synthesized. A connection failure at registration time is recorded
+        as UNREACHABLE but does not block registration; an HTTP error
+        response still counts as reachable (a 404 router is a live
+        endpoint). For backward compatibility a `ModelManifest` may be
+        passed positionally, and a positional string that names a
+        `haven-model.json` is fetched for metadata (the historical
+        `add-endpoint` behavior).
         """
 
-        if isinstance(manifest_or_url, str):
-            url = manifest_or_url
-            manifest = inspect_manifest_url(url).manifest
-            base = _base_url(url)
-        elif isinstance(manifest_or_url, ModelManifest):
-            manifest = manifest_or_url
-            if not manifest.source:
-                raise ModelManagerError("endpoint manifest must declare a source URL")
-            base = _base_url(manifest.source)
-        else:
-            raise ModelManagerError("register_endpoint expects a manifest or a manifest URL")
+        if isinstance(endpoint_url, ModelManifest):
+            manifest = endpoint_url
+            endpoint = manifest.endpoint
+            if endpoint is None:
+                if not manifest.source:
+                    raise ModelManagerError("endpoint manifest must declare an endpoint or source URL")
+                endpoint = _base_url(manifest.source)
+            return self._register_endpoint_manifest(manifest, endpoint)
+        if not isinstance(endpoint_url, str) or not endpoint_url.strip():
+            raise ModelManagerError("register_endpoint expects an http(s) endpoint URL")
+        endpoint = endpoint_url.strip()
+        if not (endpoint.startswith("http://") or endpoint.startswith("https://")):
+            raise ModelManagerError(f"endpoint URL must be http(s): {endpoint!r}")
+        manifest = None
+        if manifest_url is not None:
+            manifest = self._fetch_endpoint_manifest(manifest_url)
+        elif _looks_like_manifest_url(endpoint):
+            manifest = self._fetch_endpoint_manifest(endpoint)
+        if manifest is None:
+            manifest = _synthesize_endpoint_manifest(endpoint)
+        return self._register_endpoint_manifest(manifest, endpoint)
+
+    def _fetch_endpoint_manifest(self, url: str) -> ModelManifest:
+        return resolve_model_url(url).manifest
+
+    def _register_endpoint_manifest(self, manifest: ModelManifest, endpoint: str) -> ModelRecord:
         descriptor = ModelDescriptor(
             id=manifest.id,
             kind=manifest.kind,
@@ -177,7 +284,8 @@ class ModelManager:
             architecture=manifest.architecture,
             version=manifest.version,
             source=ModelSource.ENDPOINT,
-            path=base,
+            path=None,
+            endpoint_url=endpoint,
             languages=manifest.languages,
             device_support=manifest.device_support,
             license=manifest.license,
@@ -185,9 +293,9 @@ class ModelManager:
             files={},
             sha256={},
         )
-        record = self._register_descriptor(descriptor, ModelSource.ENDPOINT, base)
+        record = self._register_descriptor(descriptor, ModelSource.ENDPOINT, endpoint)
         self._storage.install_endpoint(manifest, replace=True)
-        if not self._probe(base):
+        if not self._probe(endpoint):
             return self._registry.update_state(descriptor.id, ModelState.UNREACHABLE)
         self._registry.update_state(descriptor.id, ModelState.VERIFIED)
         return self._registry.update_state(descriptor.id, ModelState.READY)
@@ -289,6 +397,12 @@ class ModelManager:
         )
         try:
             handle = loader.load(descriptor, model_dir)
+        except BackendMissingError:
+            # A lazy reference backend (transformers / llama_cpp / onnx) raises
+            # this when its runtime is not importable. It names a missing
+            # dependency, not a failed load -- keep the state explicit.
+            self._registry.update_state(model_id, ModelState.BACKEND_MISSING)
+            raise
         except Exception as exc:
             self._registry.update_state(model_id, ModelState.LOAD_FAILED)
             raise ModelLoadError(f"loading {model_id} with backend {descriptor.backend!r} failed: {exc}") from exc
@@ -350,7 +464,9 @@ class ModelManager:
             if missing or mismatched:
                 self._registry.update_state(manifest.id, ModelState.HASH_MISMATCH)
                 raise HashMismatchError(mismatched, missing)
-        verified = replace(descriptor, verified=True)
+        # Verification means the declared hashes matched; a hashless
+        # (synthesized) manifest has nothing to verify against.
+        verified = replace(descriptor, verified=bool(manifest.sha256))
         record = self._registry.get(manifest.id)
         self._registry.update_record(replace(record, descriptor=verified))
         self._registry.update_state(manifest.id, ModelState.VERIFIED)

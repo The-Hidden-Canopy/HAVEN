@@ -149,3 +149,55 @@ def test_invalid_json_manifest_raises_typed_error():
         path.write_text("{ not json", encoding="utf-8")
         with pytest.raises(ManifestError, match="JSON"):
             ModelManifest.load(path)
+
+
+def test_model_id_is_validated_as_a_safe_storage_identifier():
+    with pytest.raises(ManifestError, match="model id"):
+        _manifest(id="../escape")
+    with pytest.raises(ManifestError, match="model id"):
+        _manifest(id="a/b")
+    assert _manifest(id="my.model_2").id == "my.model_2"
+
+
+@pytest.mark.parametrize(
+    "bad_path",
+    ["../weights.bin", "sub/weights.bin", "sub\\weights.bin", "/abs/weights.bin",
+     "C:\\weights.bin", "C:weights.bin", "", "  ", "..", "weird..name.bin"],
+)
+def test_declared_file_paths_must_be_relative_basenames(bad_path):
+    with pytest.raises(ManifestError) as excinfo:
+        _manifest(files={"weights": bad_path}, sha256={})
+    assert repr(bad_path.strip()) in str(excinfo.value) or bad_path.strip() in str(excinfo.value)
+
+
+@pytest.mark.parametrize("bad_key", ["../weights.bin", "sub/weights.bin", "C:\\x.bin"])
+def test_sha256_keys_must_be_relative_basenames(bad_key):
+    with pytest.raises(ManifestError, match="basename"):
+        _manifest(sha256={bad_key: "a" * 64})
+
+
+def test_endpoint_field_is_carried_to_the_descriptor():
+    data = dict(BASE_MANIFEST)
+    data["endpoint"] = "https://api.example.com/v1/"
+    data["files"] = {}
+    data["sha256"] = {}
+    manifest = ModelManifest.from_dict(data)
+    assert manifest.endpoint == "https://api.example.com/v1/"
+    rebuilt = ModelManifest.from_dict(manifest.to_dict())
+    assert rebuilt.endpoint == "https://api.example.com/v1/"
+    descriptor = manifest.to_descriptor(ModelSource.ENDPOINT, None)
+    assert descriptor.endpoint_url == "https://api.example.com/v1/"
+
+
+def test_endpoint_field_must_be_an_http_url():
+    with pytest.raises(ManifestError, match="endpoint"):
+        _manifest(endpoint="ftp://example")
+
+
+def test_a_hashless_manifest_is_legal_but_partial_coverage_is_not():
+    hashless = _manifest(sha256={})
+    assert hashless.sha256 == {}
+    partial = dict(BASE_MANIFEST)
+    del partial["sha256"]["tokenizer.json"]
+    with pytest.raises(ManifestError, match="tokenizer.json"):
+        ModelManifest.from_dict(partial)
