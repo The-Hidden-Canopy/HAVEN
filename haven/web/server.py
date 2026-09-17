@@ -17,7 +17,13 @@ from ..models import ModelManager, inspect_folder
 from ..models.jobs import DownloadJobManager, job_to_dict
 from ..models.storage import default_models_root
 from .demo import Clock, DemoDirector
-from .models_api import inspection_payload, models_payload, overview_payload, scan_payload
+from .models_api import (
+    assign_payload,
+    inspection_payload,
+    models_payload,
+    overview_payload,
+    scan_payload,
+)
 
 HEARTBEAT_SECONDS = 15
 
@@ -44,7 +50,6 @@ class HavenWebServer(ThreadingHTTPServer):
         models_root: str | Path | None = None,
     ) -> None:
         self.static_root = static_root
-        self.director = DemoDirector(clock=clock)
         env_root = os.environ.get(_MODELS_ROOT_ENV)
         if env_root:
             resolved_models_root: str | Path = env_root
@@ -59,6 +64,10 @@ class HavenWebServer(ThreadingHTTPServer):
         # lock, callbacks fired outside it).
         self.models = ModelManager(resolved_models_root)
         self.model_jobs = DownloadJobManager(self.models)
+        # The director's model bridge routes chat/asr/tts through this same
+        # manager, so a model loaded in the UI is a model the demo can speak
+        # with.
+        self.director = DemoDirector(clock=clock, model_manager=self.models)
         super().__init__(server_address, _Handler)
 
 
@@ -146,6 +155,15 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/voice/cancel":
             self._send_json(200, self.director.voice_cancel())
+            return
+        if path == "/api/models/assign":
+            body = self._read_json()
+            if body is None:
+                return
+            role = self._require_field(body, "role")
+            if role is None:
+                return
+            self._send_json(200, assign_payload(self.models, role, body.get("id")))
             return
         if path == "/api/models" or path.startswith("/api/models/"):
             self._handle_models_post(path)

@@ -10,6 +10,15 @@ from pathlib import Path
 import pytest
 
 from haven.models import (
+    ROLE_ASR,
+    ROLE_CHAT,
+    ROLE_REQUIREMENTS,
+    ROLE_TTS,
+    ROLE_VAD,
+    ROLE_VISION,
+    ROLE_WAKE_WORD,
+    ROLES,
+    BackendAvailability,
     BackendMissingError,
     BackendRegistry,
     CatalogEntry,
@@ -533,3 +542,138 @@ def test_every_listing_and_lookup_shape(manager_factory):
         assert manager.list_models(ModelState.LOADED) == ()
         assert manager.get("m1").kind is ModelKind.INTELLIGENCE
         assert manager.get("nope") is None
+
+
+# -- backend availability ---------------------------------------------------------
+
+
+def test_backend_availability_reports_custom_loaders_without_probing(manager_factory):
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = manager_factory(Path(tmp) / "root")
+
+        availability = manager.backend_availability()
+
+        # the test registry carries only the custom "fake" loader
+        assert availability == (
+            BackendAvailability("fake", True, "custom loader registered"),
+        )
+
+
+def test_backend_availability_probes_the_lazy_reference_runtimes():
+    import importlib.util
+
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = ModelManager(Path(tmp) / "root")  # the default reference set
+
+        availability = {item.backend: item for item in manager.backend_availability()}
+
+        assert set(availability) == {"http", "transformers", "llama_cpp", "onnx"}
+        assert availability["http"].available is True
+        for name, package in (
+            ("transformers", "transformers"),
+            ("llama_cpp", "llama_cpp"),
+            ("onnx", "onnxruntime"),
+        ):
+            item = availability[name]
+            installed = importlib.util.find_spec(package) is not None
+            assert item.available is installed
+            if installed:
+                assert "importable" in item.detail
+            else:
+                assert item.detail == f"package not importable: install {package} to enable"
+
+
+def test_backend_availability_names_the_missing_runtime_package(monkeypatch):
+    import importlib.util
+
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = ModelManager(Path(tmp) / "root")
+    real_find_spec = importlib.util.find_spec
+
+    def missing_spec(package):
+        if package == "onnxruntime":
+            return None
+        return real_find_spec(package)
+
+    monkeypatch.setattr("haven.models.manager.importlib.util.find_spec", missing_spec)
+    availability = {item.backend: item for item in manager.backend_availability()}
+    assert availability["onnx"].available is False
+    assert availability["onnx"].detail == "package not importable: install onnxruntime to enable"
+
+
+# -- role assignments --------------------------------------------------------------
+
+
+def test_assign_validates_role_and_records_the_model(manager_factory):
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = manager_factory(Path(tmp) / "root")
+        _write_local_model(Path(tmp), "chat-model")
+        manager.install_local_folder(Path(tmp) / "chat-model")
+
+        manager.assign(ROLE_CHAT, "chat-model")
+
+        assert manager.assigned(ROLE_CHAT) == "chat-model"
+        assert manager.assignments() == {
+            ROLE_CHAT: "chat-model",
+            ROLE_ASR: None,
+            ROLE_TTS: None,
+            ROLE_WAKE_WORD: None,
+            ROLE_VAD: None,
+            ROLE_VISION: None,
+        }
+        with pytest.raises(ModelManagerError, match="unknown role"):
+            manager.assign("narrator", "chat-model")
+        with pytest.raises(ModelNotFoundError, match="unknown model"):
+            manager.assign(ROLE_CHAT, "ghost-model")
+        # a failed assign records nothing
+        assert manager.assigned(ROLE_CHAT) == "chat-model"
+
+
+def test_assign_requires_the_role_capability_fit(manager_factory):
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = manager_factory(Path(tmp) / "root")
+        _write_local_model(Path(tmp), "chat-model")
+        manager.install_local_folder(Path(tmp) / "chat-model")
+
+        with pytest.raises(ModelManagerError, match="cannot serve role"):
+            manager.assign(ROLE_ASR, "chat-model")
+        with pytest.raises(ModelManagerError, match="cannot serve role"):
+            manager.assign(ROLE_VISION, "chat-model")
+        assert manager.assigned(ROLE_ASR) is None
+
+
+def test_assign_none_clears_the_assignment(manager_factory):
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = manager_factory(Path(tmp) / "root")
+        _write_local_model(Path(tmp), "chat-model")
+        manager.install_local_folder(Path(tmp) / "chat-model")
+        manager.assign(ROLE_CHAT, "chat-model")
+
+        manager.assign(ROLE_CHAT, None)
+
+        assert manager.assigned(ROLE_CHAT) is None
+        assert manager.assignments()[ROLE_CHAT] is None
+
+
+def test_assignments_persist_across_manager_reconstruction(manager_factory):
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = manager_factory(Path(tmp) / "root")
+        _write_local_model(Path(tmp), "chat-model")
+        manager.install_local_folder(Path(tmp) / "chat-model")
+        manager.assign(ROLE_CHAT, "chat-model")
+
+        fresh = manager_factory(Path(tmp) / "root")
+
+        assert fresh.assigned(ROLE_CHAT) == "chat-model"
+        assert fresh.assignments()[ROLE_CHAT] == "chat-model"
+        assert (Path(tmp) / "root" / "assignments.json").is_file()
+
+
+def test_role_requirements_cover_every_role():
+    assert set(ROLE_REQUIREMENTS) == set(ROLES)
+    assert ROLE_REQUIREMENTS[ROLE_CHAT] == (ModelKind.INTELLIGENCE, frozenset({"chat"}))
+    assert ROLE_REQUIREMENTS[ROLE_ASR] == (ModelKind.SPEECH, frozenset({"asr"}))
+    assert ROLE_REQUIREMENTS[ROLE_TTS] == (ModelKind.SPEECH, frozenset({"tts"}))
+    assert ROLE_REQUIREMENTS[ROLE_WAKE_WORD] == (ModelKind.SPEECH, frozenset({"wake_word"}))
+    assert ROLE_REQUIREMENTS[ROLE_VAD] == (ModelKind.SPEECH, frozenset({"vad"}))
+    assert ROLE_REQUIREMENTS[ROLE_VISION] == (ModelKind.VISION, frozenset({"object_detection"}))

@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .contracts import ModelKind
-from .detect import synthesize_from_files
+from .detect import CheckpointTooLargeError, synthesize_from_files
 from .integrity import hash_file
 from .manifest import ManifestError, ModelManifest, manifest_filename
 
@@ -211,11 +211,14 @@ def resolve_model_url(url: str) -> ResolvedSource:
         filenames = _fetch_hf_file_listing(
             _hf_api_url(parsed.scheme, host, org, repo_name)
         )
-        manifest = synthesize_from_files(
-            filenames,
-            name_hint=repo_name,
-            source=f"huggingface:{org}/{repo_name}",
-        )
+        try:
+            manifest = synthesize_from_files(
+                filenames,
+                name_hint=repo_name,
+                source=f"huggingface:{org}/{repo_name}",
+            )
+        except CheckpointTooLargeError as exc:
+            raise ModelSourceError(f"repo {org}/{repo_name}: {exc}") from exc
         if manifest is None:
             raise ModelSourceError(
                 f"repo {org}/{repo_name} matches no known layout "

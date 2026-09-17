@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from haven.core.domain import DeviceState, EvidenceStatus, WorldSnapshot
+from haven.core.domain import DeviceState, DomainEvent, EventType, EvidenceStatus, WorldSnapshot
 from haven.core.time import require_aware_utc
 
 # The snapshot a deployment hands out is already bounded, but a projection
@@ -30,6 +30,20 @@ from haven.core.time import require_aware_utc
 # entries per collection the view is truncated (newest-first evidence wins)
 # and `truncated` is set so no consumer mistakes the view for complete.
 _MAX_ENTRIES_PER_COLLECTION = 200
+
+# Recent transitions are a UI/agent convenience, not evidence: a short,
+# newest-first tail of device/state-related events is plenty to answer
+# "what just happened around here?".
+_MAX_RECENT_TRANSITIONS = 10
+
+# Event types that describe something happening to a device or its state.
+_TRANSITION_EVENT_TYPES = frozenset(
+    {
+        EventType.ACTION_AUTHORIZED,
+        EventType.ACTION_EXECUTED,
+        EventType.ACTION_BLOCKED,
+    }
+)
 
 
 def _iso(value: datetime) -> str:
@@ -76,17 +90,37 @@ class WorldDeviceView:
     fresh: bool
     changed_by: str
     confidence: float
+    name: str | None = None
+    room_name: str | None = None
+    capabilities: tuple[str, ...] = ()
+    attributes: tuple[tuple[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "device_id", _require_text(self.device_id, name="device_id"))
         if self.room_id is not None:
             object.__setattr__(self, "room_id", _require_text(self.room_id, name="room_id"))
         object.__setattr__(self, "kind", _require_text(self.kind, name="kind"))
+        if self.name is not None:
+            object.__setattr__(self, "name", _require_text(self.name, name="name"))
+        if self.room_name is not None:
+            object.__setattr__(self, "room_name", _require_text(self.room_name, name="room_name"))
         if self.brightness_pct is not None and not 0 <= self.brightness_pct <= 100:
             raise ValueError("brightness_pct must be between 0 and 100")
         _parse_iso(self.observed_at, name="observed_at")
         object.__setattr__(self, "confidence", _require_confidence(self.confidence, name="confidence"))
         object.__setattr__(self, "changed_by", _require_text(self.changed_by, name="changed_by"))
+        object.__setattr__(self, "capabilities", tuple(self.capabilities))
+        object.__setattr__(
+            self,
+            "attributes",
+            tuple(sorted(((str(key), value) for key, value in self.attributes), key=lambda item: item[0])),
+        )
+
+    @property
+    def uncertain(self) -> bool:
+        """Cheap gating flag; the verbatim `confidence` stays the source of truth."""
+
+        return self.confidence < 1.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -99,12 +133,24 @@ class WorldDeviceView:
             "fresh": self.fresh,
             "changed_by": self.changed_by,
             "confidence": self.confidence,
+            "uncertain": self.uncertain,
+            "name": self.name if self.name is not None else self.device_id,
+            "room_name": self.room_name if self.room_name is not None else _room_name(self.room_id, names=None),
+            "capabilities": list(self.capabilities),
+            "attributes": {key: value for key, value in self.attributes},
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "WorldDeviceView":
         if not isinstance(data, dict):
             raise ValueError("device view must be a JSON object")
+        attributes = data.get("attributes")
+        if attributes is None:
+            # Pre-enrichment payloads carried is_on/brightness_pct top-level;
+            # flow them into the attributes bag so old reads keep their shape.
+            attributes = {
+                key: data[key] for key in ("is_on", "brightness_pct") if data.get(key) is not None
+            }
         return cls(
             device_id=data["device_id"],
             room_id=data.get("room_id"),
@@ -115,6 +161,10 @@ class WorldDeviceView:
             fresh=bool(data.get("fresh", False)),
             changed_by=data.get("changed_by", "system"),
             confidence=data.get("confidence", 1.0),
+            name=data.get("name"),
+            room_name=data.get("room_name"),
+            capabilities=tuple(data.get("capabilities", ())),
+            attributes=tuple(attributes.items()),
         )
 
 
@@ -136,12 +186,17 @@ class WorldPresenceView:
         object.__setattr__(self, "confidence", _require_confidence(self.confidence, name="confidence"))
         _parse_iso(self.observed_at, name="observed_at")
 
+    @property
+    def uncertain(self) -> bool:
+        return self.confidence < 1.0
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "person_id": self.person_id,
             "room_id": self.room_id,
             "present": self.present,
             "confidence": self.confidence,
+            "uncertain": self.uncertain,
             "observed_at": self.observed_at,
             "fresh": self.fresh,
         }
@@ -194,6 +249,86 @@ class WorldContextView:
 
 
 @dataclass(frozen=True)
+class WorldTransitionView:
+    """One line of recent device/state history, rendered from a DomainEvent."""
+
+    at: str
+    device_id: str | None
+    room_id: str | None
+    summary: str
+
+    def __post_init__(self) -> None:
+        _parse_iso(self.at, name="transition at")
+        if self.device_id is not None:
+            object.__setattr__(self, "device_id", _require_text(self.device_id, name="device_id"))
+        if self.room_id is not None:
+            object.__setattr__(self, "room_id", _require_text(self.room_id, name="room_id"))
+        object.__setattr__(self, "summary", _require_text(self.summary, name="summary"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "at": self.at,
+            "device_id": self.device_id,
+            "room_id": self.room_id,
+            "summary": self.summary,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "WorldTransitionView":
+        if not isinstance(data, dict):
+            raise ValueError("transition view must be a JSON object")
+        return cls(
+            at=data["at"],
+            device_id=data.get("device_id"),
+            room_id=data.get("room_id"),
+            summary=data["summary"],
+        )
+
+
+def _transition_from_event(event: DomainEvent, *, device_registry: Any = None) -> WorldTransitionView:
+    """Render one device/state DomainEvent as a single honest line.
+
+    `device_id` comes from the event payload when present; `room_id` is
+    resolved through the device registry when one is supplied. The summary
+    states what happened and who did it -- never more than the event knows.
+    """
+
+    payload = dict(event.payload)
+    device_id = payload.get("target_device_id")
+    if not isinstance(device_id, str) or not device_id:
+        device_id = None
+    room_id = None
+    if device_id is not None and device_registry is not None and device_registry.is_registered(device_id):
+        room_id = device_registry.get(device_id).room
+    return WorldTransitionView(
+        at=_iso(event.occurred_at),
+        device_id=device_id,
+        room_id=room_id,
+        summary=f"{event.event_type.value} by {event.actor_id}",
+    )
+
+
+def _device_name(device_id: str, state: DeviceState, *, names: Any) -> str:
+    """Readable device label: the caller's mapping, else "role · id tail"."""
+
+    if names is not None:
+        mapped = names.get(device_id)
+        if isinstance(mapped, str) and mapped.strip():
+            return mapped.strip()
+    return f"{state.kind} · {device_id}"
+
+
+def _room_name(room_id: str | None, *, names: Any) -> str | None:
+    if room_id is None:
+        return None
+    if names is not None:
+        mapped = names.get(room_id)
+        if isinstance(mapped, str) and mapped.strip():
+            return mapped.strip()
+    return room_id.replace("_", " ").title()
+
+
+@dataclass(frozen=True)
 class WorldView:
     """The whole bounded world an agent may reason about.
 
@@ -208,6 +343,7 @@ class WorldView:
     devices: tuple[WorldDeviceView, ...] = ()
     presence: tuple[WorldPresenceView, ...] = ()
     contexts: tuple[WorldContextView, ...] = ()
+    recent_transitions: tuple[WorldTransitionView, ...] = ()
     truncated: bool = field(default=False, compare=True)
 
     def __post_init__(self) -> None:
@@ -220,12 +356,17 @@ class WorldView:
             ("devices", WorldDeviceView),
             ("presence", WorldPresenceView),
             ("contexts", WorldContextView),
+            ("recent_transitions", WorldTransitionView),
         ):
             collection = tuple(getattr(self, collection_name))
             for item in collection:
                 if not isinstance(item, item_type):
                     raise ValueError(f"{collection_name} contains an invalid view value")
             object.__setattr__(self, collection_name, collection)
+
+    @property
+    def transition_count(self) -> int:
+        return len(self.recent_transitions)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -235,6 +376,8 @@ class WorldView:
             "devices": [item.to_dict() for item in self.devices],
             "presence": [item.to_dict() for item in self.presence],
             "contexts": [item.to_dict() for item in self.contexts],
+            "recent_transitions": [item.to_dict() for item in self.recent_transitions],
+            "transition_count": self.transition_count,
             "truncated": self.truncated,
         }
 
@@ -249,6 +392,9 @@ class WorldView:
             devices=tuple(WorldDeviceView.from_dict(item) for item in data.get("devices", ())),
             presence=tuple(WorldPresenceView.from_dict(item) for item in data.get("presence", ())),
             contexts=tuple(WorldContextView.from_dict(item) for item in data.get("contexts", ())),
+            recent_transitions=tuple(
+                WorldTransitionView.from_dict(item) for item in data.get("recent_transitions", ())
+            ),
             truncated=bool(data.get("truncated", False)),
         )
 
@@ -266,7 +412,15 @@ class WorldView:
         return cls.from_dict(data)
 
     @classmethod
-    def from_snapshot(cls, snapshot: WorldSnapshot, *, now: datetime) -> "WorldView":
+    def from_snapshot(
+        cls,
+        snapshot: WorldSnapshot,
+        *,
+        now: datetime,
+        device_registry: Any = None,
+        names: Any = None,
+        recent_events: Any = None,
+    ) -> "WorldView":
         """Project a snapshot into the bounded agent-facing view.
 
         Freshness uses exactly the snapshot's own semantics: an observation
@@ -274,6 +428,15 @@ class WorldView:
         `now`, and `now` is inside the snapshot's validity window. Confidence
         and `changed_by` are carried verbatim -- the view hides nothing about
         how much the evidence can be trusted.
+
+        `device_registry` and `names` are optional enrichment: with a
+        registry each device view carries its manifest capability names; with
+        a names mapping (device ids AND room ids as keys) each device/room
+        carries a readable label. Without them the projection still carries
+        every id, so nothing becomes unaddressable. `recent_events` supplies
+        DomainEvents rendered into `recent_transitions` (newest first, hard
+        cap `_MAX_RECENT_TRANSITIONS`, device/state-related only); absent
+        means no history, not invented history.
         """
 
         if not isinstance(snapshot, WorldSnapshot):
@@ -288,9 +451,36 @@ class WorldView:
                 and state.observed_at <= now
             )
 
+        def attributes(state: DeviceState) -> tuple[tuple[str, Any], ...]:
+            pairs: list[tuple[str, Any]] = []
+            if state.is_on is not None:
+                pairs.append(("is_on", state.is_on))
+            if state.brightness_pct is not None:
+                pairs.append(("brightness_pct", state.brightness_pct))
+            return tuple(pairs)
+
+        def capabilities(device_id: str) -> tuple[str, ...]:
+            if device_registry is None or not device_registry.is_registered(device_id):
+                return ()
+            return device_registry.get(device_id).capability_names
+
         devices, cut_devices = _truncate(snapshot.devices, _MAX_ENTRIES_PER_COLLECTION)
         presence, cut_presence = _truncate(snapshot.presence, _MAX_ENTRIES_PER_COLLECTION)
         contexts, cut_contexts = _truncate(snapshot.contexts, _MAX_ENTRIES_PER_COLLECTION)
+
+        transitions: list[WorldTransitionView] = []
+        cut_transitions = False
+        if recent_events is not None:
+            related = [
+                event
+                for event in recent_events
+                if isinstance(event, DomainEvent) and event.event_type in _TRANSITION_EVENT_TYPES
+            ]
+            related.sort(key=lambda event: event.occurred_at, reverse=True)
+            bounded, cut_transitions = _truncate(tuple(related), _MAX_RECENT_TRANSITIONS)
+            transitions = [
+                _transition_from_event(event, device_registry=device_registry) for event in bounded
+            ]
         return cls(
             household_id=snapshot.household_id,
             captured_at=_iso(snapshot.captured_at),
@@ -306,6 +496,10 @@ class WorldView:
                     fresh=fresh(state),
                     changed_by=state.changed_by.value,
                     confidence=state.confidence,
+                    name=_device_name(state.device_id, state, names=names),
+                    room_name=_room_name(state.room_id, names=names),
+                    capabilities=capabilities(state.device_id),
+                    attributes=attributes(state),
                 )
                 for state in devices
             ),
@@ -329,7 +523,8 @@ class WorldView:
                 )
                 for state in contexts
             ),
-            truncated=cut_devices or cut_presence or cut_contexts,
+            recent_transitions=tuple(transitions),
+            truncated=cut_devices or cut_presence or cut_contexts or cut_transitions,
         )
 
 
@@ -337,5 +532,6 @@ __all__ = [
     "WorldContextView",
     "WorldDeviceView",
     "WorldPresenceView",
+    "WorldTransitionView",
     "WorldView",
 ]

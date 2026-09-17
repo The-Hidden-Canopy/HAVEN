@@ -27,6 +27,22 @@ _LAYOUT_PROBLEM = (
     "(looked for a single *.gguf, config.json with *.safetensors/*.bin, or *.onnx)"
 )
 
+_MAX_CHECKPOINT_FILES = 32
+
+# Tokenizer artifacts a HF checkpoint may carry; whichever exist are declared.
+_TOKENIZER_FILENAMES = (
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "vocab.json",
+    "merges.txt",
+    "spiece.model",
+)
+
+
+class CheckpointTooLargeError(ValueError):
+    """A recognized layout declared more files than synthesis will cap."""
+
 
 @dataclass(frozen=True)
 class Detection:
@@ -64,6 +80,74 @@ def _architecture_from_config(config_text: str | None) -> str:
     return "unknown"
 
 
+def _slug_role(filename: str) -> str:
+    """Role key derived from a filename: slugified stem, dashes, lowercase."""
+
+    stem = filename.rsplit(".", 1)[0]
+    return re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-") or "file"
+
+
+def _weights_role(filename: str) -> str:
+    """A shard maps to weights-00001-of-00002; a lone file maps to 'weights'."""
+
+    stem = filename.rsplit(".", 1)[0]
+    match = re.search(r"-(\d+)-of-(\d+)$", stem)
+    if match:
+        return f"weights-{match.group(1)}-of-{match.group(2)}"
+    return "weights"
+
+
+def _unique_role(role: str, used: set[str]) -> str:
+    if role not in used:
+        return role
+    index = 2
+    while f"{role}-{index}" in used:
+        index += 1
+    return f"{role}-{index}"
+
+
+def _transformers_checkpoint(
+    names: list[str], weights: list[str], sizes: dict[str, int] | None
+) -> dict[str, str]:
+    """The WHOLE checkpoint, not just the biggest weights file.
+
+    Every *.safetensors shard plus `model.safetensors.index.json` when the
+    layout is sharded (otherwise the single *.safetensors / *.bin), then
+    config.json, whichever tokenizer files exist, and generation_config.json
+    when present. Role keys are slugified filenames, stable and unique;
+    synthesized manifests carry no sha256 (hash verification unavailable).
+    """
+
+    files: dict[str, str] = {}
+    used: set[str] = set()
+
+    def add(role: str, filename: str) -> None:
+        role = _unique_role(role, used)
+        used.add(role)
+        files[role] = filename
+
+    safetensors = sorted(name for name in weights if name.endswith(".safetensors"))
+    bins = sorted(name for name in weights if name.endswith(".bin"))
+    if safetensors:
+        for name in safetensors:
+            add(_weights_role(name), name)
+        if "model.safetensors.index.json" in names:
+            add("weights-index", "model.safetensors.index.json")
+    else:
+        if sizes:
+            chosen = max(bins, key=lambda name: sizes.get(name, 0))
+        else:
+            chosen = bins[-1]
+        add("weights", chosen)
+    add("config", "config.json")
+    for tokenizer_name in _TOKENIZER_FILENAMES:
+        if tokenizer_name in names:
+            add(_slug_role(tokenizer_name), tokenizer_name)
+    if "generation_config.json" in names:
+        add("generation-config", "generation_config.json")
+    return files
+
+
 def synthesize_from_files(
     filenames,
     *,
@@ -99,10 +183,11 @@ def synthesize_from_files(
             source=source or "detected:gguf",
         )
     if "config.json" in names and weights:
-        if sizes:
-            chosen = max(weights, key=lambda name: sizes.get(name, 0))
-        else:
-            chosen = sorted(weights)[-1]
+        checkpoint = _transformers_checkpoint(names, weights, sizes)
+        if len(checkpoint) > _MAX_CHECKPOINT_FILES:
+            raise CheckpointTooLargeError(
+                f"checkpoint too large to synthesize ({len(checkpoint)} files)"
+            )
         return ModelManifest(
             id=model_id,
             version="0.0.0",
@@ -110,7 +195,7 @@ def synthesize_from_files(
             capabilities=frozenset({"chat"}),
             architecture=_architecture_from_config(config_text),
             backend="transformers",
-            files={"model": chosen, "config": "config.json"},
+            files=checkpoint,
             sha256={},
             license=None,
             source=source or "detected:transformers",
@@ -188,6 +273,12 @@ def detect_folder(path: str | Path) -> Detection:
             state=ModelState.UNSUPPORTED,
             problems=(f"folder name is not a usable model id: {exc}",),
         )
+    except CheckpointTooLargeError as exc:
+        return Detection(
+            manifest=None,
+            state=ModelState.UNSUPPORTED,
+            problems=(str(exc),),
+        )
     if manifest is None:
         return Detection(
             manifest=None,
@@ -203,6 +294,7 @@ def detect_folder(path: str | Path) -> Detection:
 
 
 __all__ = [
+    "CheckpointTooLargeError",
     "Detection",
     "detect_folder",
     "slugify_model_id",

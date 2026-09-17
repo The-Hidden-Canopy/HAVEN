@@ -371,8 +371,21 @@ class ScheduleTrigger:
         return today_start <= at < today_start + self.window
 
 
+class IntentForm:
+    """Shared base marking a value as one form of natural-language intent.
+
+    The intent union itself lives in `haven.intelligence.intents` (the
+    intelligence layer may not be importable from core); this base exists
+    here so that `RuleDraft`, a core value, can join the union by
+    inheritance rather than by wrapper. An interpreter -- an agent or a
+    deterministic parser -- proposes exactly one intent form, and routing
+    differs per form: queries are answered, direct actions go straight to
+    authority, rule drafts enter the proposal lifecycle.
+    """
+
+
 @dataclass(frozen=True)
-class RuleDraft:
+class RuleDraft(IntentForm):
     draft_id: str
     household_id: str
     proposed_by: str
@@ -735,6 +748,15 @@ class ConfirmationToken:
             and self.confirmed_by == confirmed_by
             and self.issued_at <= at <= self.expires_at
         )
+
+
+# A direct (human-initiated, one-shot) action names no rule, but
+# `ActionRequest.rule_id` must be non-empty. `HavenRuntime.run_action` uses
+# this prefix to build a sentinel id of the form "direct-<request_id>":
+# honest about the request's origin, bound to the request it authorized, and
+# guaranteed to collide with no stored rule id. The store's AUTHORIZE_ACTION
+# reducer recognizes the prefix and skips the approved-rule gate for it.
+DIRECT_ACTION_RULE_ID_PREFIX = "direct-"
 
 
 @dataclass(frozen=True)

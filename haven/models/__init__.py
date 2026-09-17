@@ -26,7 +26,13 @@ from .contracts import (
     descriptor_to_dict,
     safe_model_id,
 )
-from .detect import Detection, detect_folder, synthesize_from_files
+from .detect import (
+    CheckpointTooLargeError,
+    Detection,
+    detect_folder,
+    slugify_model_id,
+    synthesize_from_files,
+)
 from .discovery import DiscoveryResult, inspect_folder, scan_roots
 from .downloader import (
     DownloadCancelledError,
@@ -41,6 +47,15 @@ from .downloader import (
 from .integrity import hash_file, verify_files
 from .jobs import DownloadJob, DownloadJobManager, JobState, job_to_dict
 from .manager import (
+    ROLE_ASR,
+    ROLE_CHAT,
+    ROLE_REQUIREMENTS,
+    ROLE_TTS,
+    ROLE_VAD,
+    ROLE_VISION,
+    ROLE_WAKE_WORD,
+    ROLES,
+    BackendAvailability,
     BackendMissingError,
     ModelLoadError,
     ModelManager,
@@ -49,20 +64,25 @@ from .manager import (
 )
 from .manifest import SCHEMA_VERSION, ManifestError, ModelManifest, manifest_filename
 from .registry import ModelRecord, ModelRegistry, RegistryError
+from .results import ChatResult, InferenceResult
 from .states import ModelState
 from .storage import ModelStorage, StorageError, default_models_root
 
 __all__ = [
+    "BackendAvailability",
     "BackendMissingError",
     "BackendRegistry",
     "CatalogEntry",
     "CatalogError",
+    "CheckpointTooLargeError",
+    "ChatResult",
     "Detection",
     "DiscoveryResult",
     "DownloadCancelledError",
     "DownloadJob",
     "DownloadJobManager",
     "HashMismatchError",
+    "InferenceResult",
     "InvalidModelIdError",
     "JobState",
     "LoadedModel",
@@ -83,6 +103,14 @@ __all__ = [
     "ModelStorage",
     "RegistryError",
     "ResolvedSource",
+    "ROLE_ASR",
+    "ROLE_CHAT",
+    "ROLE_REQUIREMENTS",
+    "ROLE_TTS",
+    "ROLE_VAD",
+    "ROLE_VISION",
+    "ROLE_WAKE_WORD",
+    "ROLES",
     "SCHEMA_VERSION",
     "StorageError",
     "UrlInspection",
@@ -101,6 +129,7 @@ __all__ = [
     "resolve_model_url",
     "safe_model_id",
     "scan_roots",
+    "slugify_model_id",
     "synthesize_from_files",
     "verify_files",
 ]

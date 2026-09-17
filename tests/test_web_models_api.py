@@ -64,13 +64,36 @@ def _post_raw(port: int, path: str, raw_body: str) -> tuple[int, dict]:
     return status, json.loads(body)
 
 
-def test_get_models_empty_lists_models_roots_and_catalog(server) -> None:
+def test_get_models_empty_lists_models_roots_catalog_backends_and_assignments(server) -> None:
     _, port, _, _ = server
 
     status, body = _get_json(port, "/api/models")
 
     assert status == 200
-    assert body == {"ok": True, "models": [], "roots": [], "catalog": []}
+    assert body["ok"] is True
+    assert body["models"] == []
+    assert body["roots"] == []
+    assert body["catalog"] == []
+    # every role is present, assigned or null
+    assert body["assignments"] == {
+        "chat": None,
+        "asr": None,
+        "tts": None,
+        "wake_word": None,
+        "vad": None,
+        "vision": None,
+    }
+    # the default reference set reports per-backend availability
+    backends = {row["backend"]: row for row in body["backends"]}
+    assert set(backends) == {"http", "transformers", "llama_cpp", "onnx"}
+    assert backends["http"] == {
+        "backend": "http",
+        "available": True,
+        "detail": "stdlib backend; always available",
+    }
+    for name in ("transformers", "llama_cpp", "onnx"):
+        assert set(backends[name]) == {"backend", "available", "detail"}
+        assert backends[name]["backend"] == name
 
 
 def test_install_local_then_get_shows_ready_with_full_row_shape(server) -> None:
@@ -267,3 +290,70 @@ def test_models_root_env_var_overrides_the_passed_default(monkeypatch) -> None:
             assert instance.models.models_root == Path(tmp)
         finally:
             instance.server_close()
+
+
+# -- role assignments over the API -------------------------------------------------
+
+
+def test_assign_binds_a_model_and_the_get_payload_reflects_it(server) -> None:
+    _, port, tmp, _ = server
+    folder = _write_local_model(tmp, "chat-model")
+
+    status, body = _post(port, "/api/models/install-local", {"folder": str(folder)})
+    assert status == 200 and body["ok"] is True
+
+    status, body = _post(port, "/api/models/assign", {"role": "chat", "id": "chat-model"})
+
+    assert status == 200
+    assert body["ok"] is True
+    # the assign answers with the same models+backends refetch shape
+    assert body["assignments"]["chat"] == "chat-model"
+    assert _row(body, "chat-model")["state"] == "ready"
+    assert any(row["backend"] == "http" for row in body["backends"])
+
+    _, body = _get_json(port, "/api/models")
+    assert body["assignments"]["chat"] == "chat-model"
+
+
+def test_assign_null_id_clears_the_assignment(server) -> None:
+    _, port, tmp, _ = server
+    folder = _write_local_model(tmp, "chat-model")
+    _post(port, "/api/models/install-local", {"folder": str(folder)})
+    _post(port, "/api/models/assign", {"role": "chat", "id": "chat-model"})
+
+    status, body = _post(port, "/api/models/assign", {"role": "chat", "id": None})
+
+    assert status == 200
+    assert body["ok"] is True
+    assert body["assignments"]["chat"] is None
+
+
+def test_assign_rejects_unknown_role_unknown_model_and_wrong_fit(server) -> None:
+    _, port, tmp, _ = server
+    folder = _write_local_model(tmp, "chat-model")
+    _post(port, "/api/models/install-local", {"folder": str(folder)})
+
+    status, body = _post(port, "/api/models/assign", {"role": "narrator", "id": "chat-model"})
+    assert status == 200
+    assert body["ok"] is False
+    assert "unknown role" in body["error"]
+
+    status, body = _post(port, "/api/models/assign", {"role": "chat", "id": "ghost-model"})
+    assert status == 200
+    assert body["ok"] is False
+    assert "unknown model" in body["error"]
+
+    # a chat model cannot serve the asr role: kind/capability fit fails
+    status, body = _post(port, "/api/models/assign", {"role": "asr", "id": "chat-model"})
+    assert status == 200
+    assert body["ok"] is False
+    assert "cannot serve role" in body["error"]
+
+
+def test_assign_requires_a_role_field(server) -> None:
+    _, port, _, _ = server
+
+    status, body = _post(port, "/api/models/assign", {"id": "anything"})
+
+    assert status == 200
+    assert body == {"ok": False, "error": "a non-empty 'role' is required"}

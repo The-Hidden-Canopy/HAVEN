@@ -450,6 +450,89 @@ def test_with_model_bridge_constructs_runtime_and_proposes_through_default() -> 
         assert rule.draft.proposed_by == RESIDENT.actor_id
 
 
+# -- Role assignments: the assigned model wins when loaded --------------------
+
+
+def _two_chat_managers(tmp: str):
+    """Two chat-capable models: 'fake-agent' registered first, 'fake-agent-2' second."""
+    backend = FakeBackend()
+    manager = _manager_with_backend(tmp, backend)
+    _install_local(manager, Path(tmp) / "models", "fake-agent", kind=ModelKind.INTELLIGENCE, capabilities={"chat"})
+    _install_local(
+        manager, Path(tmp) / "models", "fake-agent-2", kind=ModelKind.INTELLIGENCE, capabilities={"chat"}
+    )
+    return manager, backend
+
+
+def test_assigned_but_not_loaded_falls_back_to_best_loaded() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        manager, backend = _two_chat_managers(tmp)
+        manager.assign("chat", "fake-agent-2")  # assigned but never load()ed
+        manager.load("fake-agent")  # the older model is the only loaded one
+        provider = ModelIntelligenceProvider(ScriptedIntelligenceProvider(), manager)
+
+        reply = provider.chat(_context(), "hello")
+
+        assert reply.text == "model says hello"
+        assert backend.handles["fake-agent"].chat_calls == 1
+        assert backend.handles.get("fake-agent-2") is None  # never loaded, never called
+
+
+def test_assigned_and_loaded_wins_over_a_newer_loaded_model() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        manager, backend = _two_chat_managers(tmp)
+        manager.load("fake-agent")
+        manager.load("fake-agent-2")  # newest + loaded: what resolve() would pick
+        manager.assign("chat", "fake-agent")  # the assignment overrides resolve
+        provider = ModelIntelligenceProvider(ScriptedIntelligenceProvider(), manager)
+
+        reply = provider.chat(_context(), "hello")
+
+        assert reply.text == "model says hello"
+        assert backend.handles["fake-agent"].chat_calls == 1
+        assert backend.handles["fake-agent-2"].chat_calls == 0
+
+
+def test_explain_routes_through_the_assigned_chat_model() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        manager, backend = _two_chat_managers(tmp)
+        manager.load("fake-agent")
+        manager.load("fake-agent-2")
+        manager.assign("chat", "fake-agent")
+        provider = ModelIntelligenceProvider(ScriptedIntelligenceProvider(), manager)
+        decision = AuthorityDecision(
+            status=DecisionStatus.ALLOW,
+            code=DecisionCode.ALLOWED,
+            explanation="owner approval is valid for this scoped rule",
+        )
+
+        reply = provider.explain(_context(), decision)
+
+        assert reply.text == "model says hello"
+        assert backend.handles["fake-agent"].chat_calls == 1
+        assert backend.handles["fake-agent-2"].chat_calls == 0
+
+
+def test_speech_handles_follow_assignments_then_best_loaded() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        backend = FakeBackend()
+        manager = _manager_with_backend(tmp, backend)
+        _install_local(manager, Path(tmp) / "models", "fake-asr", kind=ModelKind.SPEECH, capabilities={"asr"})
+        _install_local(manager, Path(tmp) / "models", "fake-asr-2", kind=ModelKind.SPEECH, capabilities={"asr"})
+        provider = ModelIntelligenceProvider(ScriptedIntelligenceProvider(), manager)
+
+        assert provider.asr_handle() is None  # nothing loaded yet
+        assert provider.tts_handle() is None  # no tts model exists at all
+
+        manager.load("fake-asr")
+        manager.load("fake-asr-2")
+        manager.assign("asr", "fake-asr")
+        assert provider.asr_handle() is backend.handles["fake-asr"]  # assignment wins
+
+        manager.unload("fake-asr")  # assigned but not loaded: fall back to best loaded
+        assert provider.asr_handle() is backend.handles["fake-asr-2"]
+
+
 # -- Speech binding --------------------------------------------------------------
 
 

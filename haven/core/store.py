@@ -13,6 +13,7 @@ from .domain import (
     ActionStatus,
     AuthorityDecision,
     DecisionStatus,
+    DIRECT_ACTION_RULE_ID_PREFIX,
     DomainEvent,
     EventType,
     MemoryEntry,
@@ -261,8 +262,19 @@ class HavenStore:
                 raise ScopeViolation("action household does not match this store")
             if action.status != ActionStatus.AUTHORIZED or action.decision.status != DecisionStatus.ALLOW:
                 raise InvalidTransition("only allowed actions can be authorized")
-            rule = self.get_rule(action.request.rule_id)
-            if rule.status != RuleStatus.APPROVED:
+            # A direct (human-initiated) action names no rule: its request
+            # carries a "direct-<request_id>" sentinel rule_id instead. A
+            # member's own command is its authorization, so there is no
+            # approved-rule gate to pass -- any other unknown rule_id still
+            # fails closed below.
+            try:
+                rule = self.get_rule(action.request.rule_id)
+            except KeyError:
+                rule = None
+            if rule is None:
+                if not action.request.rule_id.startswith(DIRECT_ACTION_RULE_ID_PREFIX):
+                    raise InvalidTransition("an action requires an approved rule")
+            elif rule.status != RuleStatus.APPROVED:
                 raise InvalidTransition("an action requires an approved rule")
             if any(existing.action_id == action.action_id for existing in state.actions):
                 raise InvalidTransition(f"action already exists: {action.action_id}")

@@ -101,7 +101,20 @@ The initial vertical slice contains:
   `WorldView` projection (freshness and confidence per item, never the
   store) so agents can answer household questions — while the scripted
   provider remains the floor when no model is loaded: models upgrade
-  HAVEN, they are never required by it.
+  HAVEN, they are never required by it;
+- a first-class intent union (`haven/intelligence/intents.py`):
+  `QueryRequest | ActionProposal | RuleDraft | ClarificationRequest |
+  ConversationMessage`. Queries answer from bounded evidence, rules keep
+  the governed lifecycle, and one-shot commands take a separate authority
+  entry — `AuthorityEngine.decide_direct()` / `HavenRuntime.run_action()` —
+  where a household member's own command is the authorization: same scope,
+  role, justification, risk, and confirmation-token checks as automation,
+  but no rule lifecycle, no trigger, and no human-override suspension, and
+  ZERO rules created in the store for a direct action. Every backend
+  normalizes to `ChatResult`/`InferenceResult` before HAVEN sees output,
+  and the enriched `WorldView` projection (readable names, capabilities,
+  attributes, recent transitions, explicit uncertainty) is what agents
+  receive — never the store.
 
 There is no local model runtime, camera pipeline, mobile surface, scheduler,
 cloud fallback, or physical-device capability yet.

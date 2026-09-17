@@ -304,6 +304,118 @@ class AuthorityEngine:
             "approved rule, household scope, role, and current evidence satisfy policy",
         )
 
+    def decide_direct(
+        self,
+        request: ActionRequest,
+        *,
+        principal: Principal,
+        world: WorldSnapshot,
+        now: datetime,
+        confirmation_consumed: bool = False,
+    ) -> AuthorityDecision:
+        """Decide a HUMAN-INITIATED one-shot action.
+
+        A member directly commanding a device is itself the authorization;
+        automation needs a rule, a command does not. So every `decide()`
+        check that exists to police a rule is intentionally absent here:
+
+        - rule lifecycle gates (`RULE_NOT_APPROVED`,
+          `RULE_APPROVAL_INSUFFICIENT`, unresolved interpretation items,
+          `RULE_EXPIRED`) -- there is no rule;
+        - `ACTION_MISMATCH` -- the human's command is compared to nothing;
+        - trigger evaluation and all of its evidence gates
+          (`TRIGGER_NOT_ACTIVE`, `EVIDENCE_MISSING`, `EVIDENCE_UNAVAILABLE`,
+          `STALE_EVIDENCE`, `LOW_CONFIDENCE_EVIDENCE`) --
+          the human asserted the command, and execution observes the
+          consequence rather than a rule inferring it from evidence;
+        - the `HUMAN_OVERRIDE_ACTIVE` suspension -- the requester IS the
+          human, so a recent manual change must not block the human's own
+          new command.
+
+        What remains, identical to `decide()`: household scope, actor
+        match, the MEMBER role floor, a non-empty justification, risk
+        classification via `risk_for_request`, the brightness parameter
+        gate, and -- for CONFIRMATION_REQUIRED risk -- the same single-use,
+        bound, time-limited confirmation token logic.
+        """
+
+        if (
+            request.household_id != principal.household_id
+            or request.household_id != world.household_id
+        ):
+            return AuthorityDecision(
+                DecisionStatus.DENY,
+                DecisionCode.CROSS_HOUSEHOLD,
+                "the request, principal, and world snapshot must share one household",
+            )
+        if request.requested_by != principal.actor_id:
+            return AuthorityDecision(
+                DecisionStatus.DENY,
+                DecisionCode.ACTOR_MISMATCH,
+                "the action requester must match the principal being evaluated",
+            )
+        if principal.role_tier < RoleTier.MEMBER:
+            return AuthorityDecision(
+                DecisionStatus.DENY,
+                DecisionCode.WRONG_ROLE_TIER,
+                "a household member or higher role is required to command an action directly",
+                required_role=RoleTier.MEMBER,
+            )
+        if not request.justification.strip():
+            return AuthorityDecision(
+                DecisionStatus.DENY,
+                DecisionCode.MISSING_JUSTIFICATION,
+                "an action request must carry a non-empty justification",
+            )
+
+        risk, risk_code = risk_for_request(request, device_registry=self.device_registry)
+        if risk_code is not None:
+            return AuthorityDecision(
+                DecisionStatus.DENY,
+                risk_code,
+                "the request names a capability that its device manifest does not authorize",
+            )
+        if risk == RiskTier.FORBIDDEN:
+            return AuthorityDecision(
+                DecisionStatus.DENY,
+                DecisionCode.FORBIDDEN_ACTION,
+                "this action is outside explicit household authority",
+            )
+        if request.action_kind == ActionKind.SET_LIGHT_BRIGHTNESS:
+            parameter_names = {key for key, _ in request.parameters}
+            if "brightness_pct" not in parameter_names:
+                return AuthorityDecision(
+                    DecisionStatus.NEEDS_CLARIFICATION,
+                    DecisionCode.NEEDS_CLARIFICATION,
+                    "a brightness action requires an explicit brightness_pct parameter",
+                )
+
+        if risk == RiskTier.CONFIRMATION_REQUIRED:
+            token = request.confirmation_token
+            if confirmation_consumed:
+                return AuthorityDecision(
+                    DecisionStatus.DENY,
+                    DecisionCode.CONFIRMATION_REUSED,
+                    "the confirmation token was already consumed",
+                )
+            if token is None or not token.is_valid_for(
+                household_id=request.household_id,
+                rule_id=request.rule_id,
+                request_id=request.request_id,
+                confirmed_by=principal.actor_id,
+                at=now,
+            ):
+                return AuthorityDecision(
+                    DecisionStatus.CONFIRMATION_REQUIRED,
+                    DecisionCode.CONFIRMATION_REQUIRED,
+                    "this action requires a valid, unexpired confirmation token bound to this request",
+                )
+        return AuthorityDecision(
+            DecisionStatus.ALLOW,
+            DecisionCode.ALLOWED,
+            "household scope, role, and the member's own command satisfy policy",
+        )
+
 
 __all__ = [
     "AuthorityEngine",

@@ -10,13 +10,17 @@ it.
 
 Routing rules, per method:
 
-- `chat` / `explain`: resolve kind=intelligence with requires={"chat"},
-  restricted to models whose handle is actually LOADED; build a chat
-  messages list whose system message summarizes the bounded `AgentContext`
-  -- including the `WorldView` JSON when present, so a remote agent can
-  answer "is the garage still open?" from bounded evidence -- and call
-  `handle.chat(messages)`. The handle's reply envelope is read
-  defensively: both {"text": ...} dicts and raw strings are accepted.
+- `chat` / `explain`: the role-assigned chat model wins when it is LOADED;
+  otherwise resolve kind=intelligence with requires={"chat"}, restricted to
+  models whose handle is actually LOADED; otherwise the default answers.
+  Build a chat messages list whose system message summarizes the bounded
+  `AgentContext` -- including the `WorldView` JSON when present, so a remote
+  agent can answer "is the garage still open?" from bounded evidence -- and
+  call `handle.chat(messages)`. The handle's reply is read defensively: a
+  canonical `ChatResult`, a legacy {"text": ...} dict, or a raw string.
+  `asr_handle()` / `tts_handle()` expose the same routing for the speech
+  shims: the loaded handle for the assigned/best-loaded asr/tts model, or
+  None when no such model is loaded.
 - `interpret` / `propose_rule`: structured intent is NOT reliably
   structured through free-text model handles, and this module refuses to
   pretend otherwise. These methods delegate to the default provider unless
@@ -58,7 +62,15 @@ from haven.intelligence.gateway import (
     ScriptedIntelligenceProvider,
 )
 from haven.models.contracts import ModelKind
-from haven.models.manager import ModelManager, ModelNotFoundError
+from haven.models.manager import (
+    ROLE_ASR,
+    ROLE_CHAT,
+    ROLE_REQUIREMENTS,
+    ROLE_TTS,
+    ModelManager,
+    ModelNotFoundError,
+)
+from haven.models.results import ChatResult
 from haven.models.states import ModelState
 from haven.providers.capabilities import CapabilityRegistry, ProviderCapabilities
 
@@ -81,8 +93,10 @@ _DRAFT_REQUIRED_KEYS = (
 
 
 def _extract_text(result: Any) -> str:
-    """Read a chat reply defensively: {"text": ...} envelopes and raw strings."""
+    """Read a chat reply defensively: ChatResult, {"text": ...} envelopes, raw strings."""
 
+    if isinstance(result, ChatResult):
+        return result.text
     if isinstance(result, str) and result.strip():
         return result
     if isinstance(result, dict):
@@ -179,6 +193,63 @@ class ModelIntelligenceProvider:
             return None
         return self._model_manager.loaded_handle(descriptor.id)
 
+    def _assigned_loaded_handle(self, role: str):
+        """The handle for the role-assigned model, but only when LOADED.
+
+        An assignment is a routing promise, not a load demand: an assigned
+        but not-yet-loaded model returns None here so the caller falls back
+        to capability resolution (or the floor) instead of stalling.
+        """
+
+        model_id = self._model_manager.assigned(role)
+        if model_id is None:
+            return None
+        return self._model_manager.loaded_handle(model_id)
+
+    def _chat_handle(self):
+        """The chat handle by role assignment first, best-loaded second.
+
+        The assigned chat model wins only when its handle is actually
+        loaded; otherwise the best LOADED chat-capable intelligence model
+        answers; otherwise None (the default is the floor).
+        """
+
+        handle = self._assigned_loaded_handle(ROLE_CHAT)
+        if handle is not None:
+            return handle
+        return self._loaded_handle(requires=frozenset({"chat"}))
+
+    def chat_handle(self):
+        """The loaded chat handle the router should use, or None.
+
+        Public mirror of `asr_handle`/`tts_handle` so a caller (the demo
+        router) can ask "is a chat model live?" before deciding between a
+        model answer and a deterministic fallback.
+        """
+
+        return self._chat_handle()
+
+    def asr_handle(self):
+        """The loaded handle for the assigned/best-loaded asr model, or None."""
+
+        return self._role_handle(ROLE_ASR)
+
+    def tts_handle(self):
+        """The loaded handle for the assigned/best-loaded tts model, or None."""
+
+        return self._role_handle(ROLE_TTS)
+
+    def _role_handle(self, role: str):
+        handle = self._assigned_loaded_handle(role)
+        if handle is not None:
+            return handle
+        kind, required = ROLE_REQUIREMENTS[role]
+        try:
+            descriptor = self._model_manager.resolve(kind, requires=required)
+        except ModelNotFoundError:
+            return None
+        return self._model_manager.loaded_handle(descriptor.id)
+
     def _structured_intent(self, *, context: AgentContext | None, text: str) -> RuleDraft | None:
         """A RuleDraft from a capability-gated structured-intent handle, or None.
 
@@ -217,7 +288,7 @@ class ModelIntelligenceProvider:
         return self._default.interpret(text, principal=principal, now=now)
 
     def chat(self, context: AgentContext, message: str) -> AgentResponse:
-        handle = self._loaded_handle(requires=frozenset({"chat"}))
+        handle = self._chat_handle()
         if handle is not None:
             try:
                 return AgentResponse(text=self._chat_text(handle, context, message))
@@ -232,7 +303,7 @@ class ModelIntelligenceProvider:
         return self._default.propose_rule(context, message)
 
     def explain(self, context: AgentContext, decision: AuthorityDecision) -> AgentResponse:
-        handle = self._loaded_handle(requires=frozenset({"chat"}))
+        handle = self._chat_handle()
         if handle is not None:
             rendered = (
                 f"Explain this authority decision to the human in plain language: "
