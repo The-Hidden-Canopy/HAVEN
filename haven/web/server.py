@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
 import posixpath
 import queue
 import re
@@ -12,9 +13,17 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from ..models import ModelManager, inspect_folder
+from ..models.storage import default_models_root
 from .demo import Clock, DemoDirector
+from .models_api import inspection_payload, models_payload, overview_payload, scan_payload
 
 HEARTBEAT_SECONDS = 15
+
+_MODELS_ROOT_ENV = "HAVEN_MODELS_ROOT"
+# Lifecycle failures (BACKEND_MISSING, unknown id, ...) are recorded on the
+# records, so the error envelope still carries the fresh models/roots lists.
+_MODEL_LIFECYCLE_PATHS = ("/api/models/load", "/api/models/unload", "/api/models/remove")
 
 _APPROVE_PATH = re.compile(r"^/api/requests/([^/]+)/approve$")
 _DENY_PATH = re.compile(r"^/api/requests/([^/]+)/deny$")
@@ -23,9 +32,27 @@ _DENY_PATH = re.compile(r"^/api/requests/([^/]+)/deny$")
 class HavenWebServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, server_address, static_root: Path, *, clock: Clock | None = None) -> None:
+    def __init__(
+        self,
+        server_address,
+        static_root: Path,
+        *,
+        clock: Clock | None = None,
+        models_root: str | Path | None = None,
+    ) -> None:
         self.static_root = static_root
         self.director = DemoDirector(clock=clock)
+        env_root = os.environ.get(_MODELS_ROOT_ENV)
+        if env_root:
+            resolved_models_root: str | Path = env_root
+        elif models_root is not None:
+            resolved_models_root = models_root
+        else:
+            resolved_models_root = default_models_root()
+        # One manager per server: storage/registry are file-based, but the
+        # in-memory backend registry and loaded handles are shared state, so
+        # every handler thread must talk to this single instance.
+        self.models = ModelManager(resolved_models_root)
         super().__init__(server_address, _Handler)
 
 
@@ -39,10 +66,16 @@ class _Handler(BaseHTTPRequestHandler):
     def director(self) -> DemoDirector:
         return self.server.director
 
+    @property
+    def models(self) -> ModelManager:
+        return self.server.models
+
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/api/state":
             self._send_json(200, self.director.state())
+        elif path == "/api/models":
+            self._send_json(200, overview_payload(self.models))
         elif path == "/events":
             self._stream_events()
         else:
@@ -75,10 +108,109 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self._send_json(404, {"error": "unknown request"})
             return
+        if path == "/api/demo/camera-down":
+            self._send_json(200, {"ok": True, "state": self.director.mark_camera_down()})
+            return
+        if path == "/api/demo/camera-up":
+            self._send_json(200, {"ok": True, "state": self.director.mark_camera_up()})
+            return
         if path == "/api/demo/reset":
             self._send_json(200, {"ok": True, "state": self.director.reset()})
             return
+        if path == "/api/voice/wake":
+            self._send_json(200, self.director.voice_wake())
+            return
+        if path == "/api/voice/utterance":
+            body = self._read_json()
+            if body is None:
+                return
+            self._send_json(200, self.director.voice_utterance(str(body.get("text", ""))))
+            return
+        if path == "/api/voice/cancel":
+            self._send_json(200, self.director.voice_cancel())
+            return
+        if path == "/api/models" or path.startswith("/api/models/"):
+            self._handle_models_post(path)
+            return
         self._send_json(404, {"error": "not found"})
+
+    def _handle_models_post(self, path: str) -> None:
+        manager = self.models
+        if path == "/api/models/scan":
+            self._send_model_result(path, lambda: scan_payload(manager, manager.scan()))
+            return
+        body = self._read_json()
+        if body is None:
+            return
+        if path == "/api/models/inspect":
+            url = self._require_field(body, "url")
+            if url is not None:
+                self._send_model_result(
+                    path, lambda: {"ok": True, "inspection": inspection_payload(manager.inspect_url(url))}
+                )
+            return
+        if path == "/api/models/install-url":
+            url = self._require_field(body, "url")
+            if url is not None:
+                self._send_model_result(path, lambda: self._install(manager.install_from_url(url)))
+            return
+        if path == "/api/models/install-local":
+            folder = self._require_field(body, "folder")
+            if folder is not None:
+                self._send_model_result(path, lambda: self._install(manager.install_local_folder(folder)))
+            return
+        if path == "/api/models/add-endpoint":
+            url = self._require_field(body, "url")
+            if url is not None:
+                self._send_model_result(path, lambda: self._install(manager.register_endpoint(url)))
+            return
+        if path == "/api/models/add-root":
+            root = self._require_field(body, "path")
+            if root is not None:
+                self._send_model_result(path, lambda: self._install(manager.add_root(root)))
+            return
+        if path == "/api/models/register":
+            candidate = self._require_field(body, "path")
+            if candidate is not None:
+                self._send_model_result(
+                    path, lambda: self._install(manager.register_candidate(inspect_folder(candidate)))
+                )
+            return
+        if path in _MODEL_LIFECYCLE_PATHS:
+            model_id = self._require_field(body, "id")
+            if model_id is None:
+                return
+            if path == "/api/models/load":
+                action = manager.load
+            elif path == "/api/models/unload":
+                action = manager.unload
+            else:
+                action = manager.remove
+            self._send_model_result(path, lambda: self._install(action(model_id)))
+            return
+        self._send_json(404, {"error": "not found"})
+
+    def _install(self, record) -> dict:
+        # Successful mutations all answer with the fresh models+roots payload;
+        # the record itself is persisted state, the lists are the refetch.
+        return models_payload(self.models)
+
+    def _require_field(self, body: dict, name: str) -> str | None:
+        value = body.get(name)
+        if not isinstance(value, str) or not value.strip():
+            self._send_json(200, {"ok": False, "error": f"a non-empty '{name}' is required"})
+            return None
+        return value
+
+    def _send_model_result(self, path: str, action) -> None:
+        try:
+            self._send_json(200, action())
+        except Exception as exc:
+            payload = {"ok": False, "error": str(exc)}
+            if path in _MODEL_LIFECYCLE_PATHS:
+                payload["models"] = models_payload(self.models)["models"]
+                payload["roots"] = models_payload(self.models)["roots"]
+            self._send_json(200, payload)
 
     def _read_json(self, *, optional: bool = False) -> dict | None:
         try:
@@ -164,6 +296,9 @@ class _Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
         finally:
+            # The stream is over once this generator exits; without this the
+            # handler loops back into readline() on an aborted connection.
+            self.close_connection = True
             self.director.unsubscribe(subscriber)
 
 
@@ -172,9 +307,10 @@ def make_server(
     *,
     clock: Clock | None = None,
     static_root: str | Path | None = None,
+    models_root: str | Path | None = None,
 ) -> tuple[HavenWebServer, DemoDirector]:
     root = Path(static_root) if static_root is not None else Path(__file__).parent / "static"
-    server = HavenWebServer(("127.0.0.1", port), root, clock=clock)
+    server = HavenWebServer(("127.0.0.1", port), root, clock=clock, models_root=models_root)
     return server, server.director
 
 

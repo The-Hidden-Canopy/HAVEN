@@ -21,7 +21,7 @@ from haven.integrations.home_assistant import (
     HomeAssistantStateError,
     PresenceSource,
 )
-from haven.intelligence.gateway import FixtureModelGateway
+from haven.intelligence.gateway import ScriptedIntelligenceProvider
 from haven.runtime import HavenRuntime
 from test_vertical_slice import _principal
 
@@ -207,7 +207,7 @@ def test_observed_snapshot_drives_a_rule_through_the_authority_path():
     )
     store = HavenStore(household_id="household-a")
     adapter = FixtureHomeAssistant()
-    runtime = HavenRuntime(store=store, model_gateway=FixtureModelGateway(), home_assistant=adapter)
+    runtime = HavenRuntime(store=store, intelligence_provider=ScriptedIntelligenceProvider(), home_assistant=adapter)
 
     draft = RuleDraft(
         draft_id="draft-observed",

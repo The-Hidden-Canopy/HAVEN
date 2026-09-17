@@ -20,7 +20,7 @@ from haven.core.store import HavenStore
 from haven.devices import CapabilityDescriptor, ControlClass, DeviceManifest, DeviceRegistry
 from haven.execution import ExecutionProviderRegistry, UnknownExecutionProvider
 from haven.integrations.home_assistant import FixtureHomeAssistant
-from haven.intelligence.gateway import FixtureModelGateway
+from haven.intelligence.gateway import ScriptedIntelligenceProvider
 from haven.runtime import HavenRuntime
 from test_vertical_slice import BASE_TIME, RoleTier, _principal
 
@@ -139,7 +139,7 @@ def test_two_devices_on_two_providers_route_to_two_different_adapters():
     providers.register("ir_blaster", ir_adapter)
     runtime = HavenRuntime(
         store=store,
-        model_gateway=FixtureModelGateway(),
+        intelligence_provider=ScriptedIntelligenceProvider(),
         authority=AuthorityEngine(device_registry=_registry()),
         execution_providers=providers,
     )
@@ -174,7 +174,7 @@ def test_unregistered_provider_fails_closed_into_a_failed_receipt_not_an_excepti
     # ir_blaster is deliberately never registered.
     runtime = HavenRuntime(
         store=store,
-        model_gateway=FixtureModelGateway(),
+        intelligence_provider=ScriptedIntelligenceProvider(),
         authority=AuthorityEngine(device_registry=_registry()),
         execution_providers=providers,
     )
@@ -197,7 +197,7 @@ def test_execution_providers_without_a_device_registry_falls_back_to_home_assist
     ha_adapter = FixtureHomeAssistant()
     runtime = HavenRuntime(
         store=store,
-        model_gateway=FixtureModelGateway(),
+        intelligence_provider=ScriptedIntelligenceProvider(),
         home_assistant=ha_adapter,
         execution_providers=ExecutionProviderRegistry(),  # empty, and no device_registry on the default engine
     )
@@ -218,4 +218,4 @@ def test_execution_providers_without_a_device_registry_falls_back_to_home_assist
 def test_runtime_requires_at_least_one_execution_path():
     store = HavenStore(household_id="household-a")
     with pytest.raises(ValueError):
-        HavenRuntime(store=store, model_gateway=FixtureModelGateway())
+        HavenRuntime(store=store, intelligence_provider=ScriptedIntelligenceProvider())

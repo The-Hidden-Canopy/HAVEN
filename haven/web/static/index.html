@@ -15,7 +15,7 @@
         <span class="brand-sub">Home&nbsp;&middot;&nbsp;<span id="local-time">&mdash;</span></span>
       </div>
       <div class="topbar-right">
-        <span id="state-pill" class="pill pill-idle">&#9679; LISTENING</span>
+        <span id="state-pill" class="pill pill-dormant">DORMANT</span>
       </div>
     </header>
 
@@ -33,13 +33,13 @@
             <span class="nav-label">Rooms</span>
           </a>
         </li>
-        <li data-view="placeholder">
+        <li data-view="people">
           <a href="#">
             <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="5.2" r="2.5"/><path d="M2.8 13.5c.7-2.7 2.8-4 5.2-4s4.5 1.3 5.2 4"/></svg>
             <span class="nav-label">People</span>
           </a>
         </li>
-        <li data-view="placeholder">
+        <li data-view="automations">
           <a href="#">
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8.8 1.8 3.6 8.6h3l-1 5.6 5.2-6.8h-3z"/></svg>
             <span class="nav-label">Automations</span>
@@ -57,10 +57,16 @@
             <span class="nav-label">Activity</span>
           </a>
         </li>
-        <li data-view="placeholder">
+        <li data-view="system">
           <a href="#">
             <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.4"/><path d="M8 1.6v2.4M8 12v2.4M1.6 8h2.4M12 8h2.4M3.5 3.5l1.7 1.7M10.8 10.8l1.7 1.7M12.5 3.5l-1.7 1.7M5.2 10.8l-1.7 1.7"/></svg>
             <span class="nav-label">System</span>
+          </a>
+        </li>
+        <li data-view="models">
+          <a href="#">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"/><path d="M6 1.5v2M10 1.5v2M6 12.5v2M10 12.5v2M1.5 6h2M1.5 10h2M12.5 6h2M12.5 10h2"/></svg>
+            <span class="nav-label">Models</span>
           </a>
         </li>
       </ul>
@@ -91,6 +97,83 @@
         <div id="memory-list" class="feed"></div>
       </section>
 
+      <section class="view view-people" aria-label="People">
+        <div class="center-head">
+          <h1>PEOPLE</h1>
+          <span id="people-count" class="muted">&mdash;</span>
+        </div>
+        <section id="people-list" class="card-grid" aria-label="People"></section>
+      </section>
+
+      <section class="view view-automations" aria-label="Automations">
+        <div class="center-head">
+          <h1>AUTOMATIONS</h1>
+          <span id="automations-count" class="muted">&mdash;</span>
+        </div>
+        <div id="automations-list" class="feed"></div>
+      </section>
+
+      <section class="view view-system" aria-label="System">
+        <div class="center-head">
+          <h1>SYSTEM</h1>
+        </div>
+        <div id="system-body"></div>
+      </section>
+
+      <section class="view view-models" aria-label="Models">
+        <div class="center-head">
+          <h1>MODELS</h1>
+          <span id="models-count" class="muted">&mdash;</span>
+        </div>
+
+        <div class="model-bar">
+          <button type="button" class="btn" data-model-panel="download">Download Model</button>
+          <button type="button" class="btn" data-model-panel="local">Load Local</button>
+          <button type="button" class="btn" data-model-panel="endpoint">Add Endpoint</button>
+        </div>
+
+        <div id="panel-download" class="model-panel" hidden>
+          <h3 class="micro">CATALOG</h3>
+          <div id="catalog-list"></div>
+          <h3 class="micro">INSTALL FROM REPOSITORY</h3>
+          <form id="inspect-form" class="model-form">
+            <input id="inspect-url" type="text" placeholder="repository or manifest URL&hellip;" autocomplete="off" spellcheck="false">
+            <button type="submit">Inspect</button>
+          </form>
+          <div id="inspection-box"></div>
+          <button id="inspect-install" type="button" class="btn" hidden>Install</button>
+          <p id="panel-error-download" class="model-error" hidden></p>
+        </div>
+
+        <div id="panel-local" class="model-panel" hidden>
+          <form id="install-local-form" class="model-form">
+            <input id="install-folder" type="text" placeholder="local model folder path&hellip;" autocomplete="off" spellcheck="false">
+            <button type="submit">Install</button>
+          </form>
+          <h3 class="micro">MODEL ROOTS</h3>
+          <div id="roots-list"></div>
+          <form id="add-root-form" class="model-form">
+            <input id="root-path" type="text" placeholder="add root path&hellip;" autocomplete="off" spellcheck="false">
+            <button type="submit">Add Root</button>
+          </form>
+          <div class="model-panel-actions">
+            <button id="scan-roots" type="button" class="btn">Scan Roots</button>
+          </div>
+          <div id="discovered-list"></div>
+          <p id="panel-error-local" class="model-error" hidden></p>
+        </div>
+
+        <div id="panel-endpoint" class="model-panel" hidden>
+          <form id="endpoint-form" class="model-form">
+            <input id="endpoint-url" type="text" placeholder="endpoint URL&hellip;" autocomplete="off" spellcheck="false">
+            <button type="submit">Register Endpoint</button>
+          </form>
+          <p id="panel-error-endpoint" class="model-error" hidden></p>
+        </div>
+
+        <div id="models-list"></div>
+      </section>
+
       <section class="view view-placeholder" aria-label="Placeholder">
         <p id="placeholder-note" class="placeholder-note muted">Not in this slice</p>
       </section>
@@ -113,6 +196,19 @@
       </section>
 
       <section id="pending-slot"></section>
+
+      <div id="mic-wave" class="mic-wave" hidden aria-hidden="true">
+        <span></span><span></span><span></span><span></span>
+      </div>
+
+      <div class="voice-row">
+        <button id="voice-wake" type="button" class="btn btn-speak">&#9678; Speak</button>
+        <form id="voice-form" class="voice-inline" hidden>
+          <input id="voice-input" type="text" placeholder="utterance (STT stand-in)&hellip;" autocomplete="off" spellcheck="false">
+          <button type="submit">Send</button>
+          <button id="voice-stop" type="button">Stop</button>
+        </form>
+      </div>
 
       <form id="chat-form" class="composer">
         <input id="chat-input" type="text" placeholder="Ask HAVEN&hellip;" autocomplete="off" spellcheck="false">
@@ -141,6 +237,7 @@
       <button type="button" id="demo-reset" title="Reset demo scenario">&#10227;</button>
       <button type="button" id="demo-cam-down" title="Camera down — driveway critical">Cam &#9660;</button>
       <button type="button" id="demo-cam-up" title="Camera up — clear critical">Cam &#9650;</button>
+      <button type="button" id="demo-wake" title="Fire wake word — voice wake">&#9678; Wake</button>
     </div>
   </div>
 

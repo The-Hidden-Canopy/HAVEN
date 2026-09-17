@@ -20,7 +20,9 @@ The initial vertical slice contains:
 
 - an immutable, household-scoped world snapshot for presence, context, and
   device state;
-- a model-gateway boundary that can return a structured rule draft but cannot
+- an intelligence-provider boundary (agent-agnostic: an LLM, a deterministic
+  planner, an ensemble, or the built-in fixture) that can return a
+  structured rule draft but cannot
   execute an action;
 - a rule lifecycle of `PROPOSED -> APPROVED` with owner-only approval;
 - an authority engine with explicit safe-automatic, confirmation-required, and
@@ -54,7 +56,39 @@ The initial vertical slice contains:
   zero-build vanilla UI) that renders the simulated household and drives its
   glow state language directly from real `AuthorityDecision` outcomes —
   confirmation-required decisions pulse, evidence problems read as critical,
-  and nothing glows on its own.
+  and nothing glows on its own;
+- a voice input surface on that web layer: an honest
+  `dormant -> wake -> listening -> interpreting` session with a refractory
+  window and interruption, where spoken commands take exactly the same
+  authority path as typed ones and "stop" never pretends to recall an
+  executing action;
+- the public HAVEN Speech contract (`haven/speech`, stdlib only): the speech
+  event vocabulary, provider protocols for wake word / VAD / streaming ASR /
+  interruptible TTS, a pre-roll ring buffer, an energy-VAD reference
+  implementation, and a session layer that structurally cannot execute from
+  a partial transcript and discards raw audio on close unless explicitly
+  retained. Fixture providers register in the capability registry under
+  `wake_word` / `vad` / `speech_to_text` / `text_to_speech`, so a real
+  provider binds by capability, never by vendor;
+- the HAVEN Model Manager (`haven/models`, stdlib only): every model family
+  — intelligence, speech, vision, embeddings, prediction, specialized —
+  enters through the same three paths (Download from a curated catalog or
+  manifest URL, Load Local from a folder or model root, Register External
+  endpoint), normalizes into one `ModelDescriptor`, and moves through an
+  explicit lifecycle (`DISCOVERED → INSPECTED → REGISTERED → VERIFIED →
+  READY → LOADED`) with named failure states (`INCOMPLETE`, `UNSUPPORTED`,
+  `HASH_MISMATCH`, `LICENSE_UNKNOWN`, `BACKEND_MISSING`, `LOAD_FAILED`,
+  `UNREACHABLE`) that never collapse to "model unavailable". The universal
+  manifest `haven-model.json` (schema `haven-model-1`) lets anyone publish
+  a compatible model; `resolve(kind, requires, languages)` routes by
+  capability and language only — never by model name, architecture, or
+  backend. Inference backends are deployer-registered plugins and the repo
+  ships none, so a load with no loader fails as `BACKEND_MISSING`. Multiple
+  models load simultaneously (wake + VAD + ASR + agent + vision is the
+  expected topology, not single-select). The same services drive a CLI
+  (`python -m haven.models`) and the Settings → Models web view, and
+  inspect-before-install is structural: fetching a manifest never downloads
+  weights.
 
 There is no local model runtime, camera pipeline, mobile surface, scheduler,
 cloud fallback, or physical-device capability yet.
@@ -65,7 +99,7 @@ The phrase:
 
 > When I'm working late, don't blast the bedroom lights when I walk in.
 
-is accepted by the fixture model gateway as a proposal. HAVEN records the
+is accepted by the fixture intelligence provider as a proposal. HAVEN records the
 interpretation and preserves the unresolved meaning of “don't blast”; it does
 not invent a brightness percentage or silently select a scene. Approval is
 blocked until the household supplies that missing parameter. The household can
@@ -94,7 +128,24 @@ haven/
 │   ├── domain.py       # scoped facts, rules, actions, events, transitions
 │   └── store.py        # immutable state and execute_transition()
 ├── intelligence/
-│   └── gateway.py      # proposal-only model boundary and fixture interpreter
+│   └── gateway.py      # proposal-only intelligence provider boundary + fixture
+├── speech/
+│   ├── events.py       # public speech event vocabulary (WakeEvent, TranscriptFinal, ...)
+│   ├── protocols.py    # WakeDetector / Vad / SpeechRecognizer / SpeechSynthesizer
+│   ├── session.py      # invariant-enforcing session: never act on a partial
+│   ├── ring_buffer.py  # pre-roll capture so wake never eats the utterance start
+│   ├── vad/energy.py   # reference energy VAD, pure Python
+│   ├── wake_model.py   # KwsModelManifest + ThresholdedWakeDetector (scorer = the artifact seam)
+│   ├── fixtures.py     # scripted providers registered in the capability registry
+│   └── providers/      # thin inference adapters (HTTP seam to a household inference stack)
+├── models/
+│   ├── contracts.py    # ModelKind / ModelSource / ModelDescriptor (normalized form)
+│   ├── manifest.py     # universal haven-model.json (schema haven-model-1)
+│   ├── registry.py     # persistent model records + lifecycle states
+│   ├── discovery.py    # scan model roots; candidates are never auto-activated
+│   ├── downloader.py   # inspect-before-install URL flow
+│   ├── backends/       # ModelBackend protocol + empty BackendRegistry (plugins)
+│   └── manager.py      # ModelManager: 3 entry paths, resolve, load/unload topology
 ├── providers/
 │   ├── capabilities.py # capability registry: kind + capability, no licensing
 │   └── defaults.py     # registers the fixture gateway as a default provider
@@ -143,7 +194,8 @@ haven/
 ```
 
 The package does not import from a web or API layer. Integrations receive a
-command only after the authority engine returns `ALLOW`. The model gateway
+command only after the authority engine returns `ALLOW`. The intelligence
+provider
 returns a `RuleDraft`; it has no reference to the adapter or the store.
 
 Outside `haven/`, `native/haven-bt/` holds the HAVEN-BT C ABI header
@@ -373,6 +425,27 @@ and does not exist there, including Linux/macOS.
   Assistant is one registered provider, not a protocol Haven is specially
   aware of. Constructing `HavenRuntime` with neither `home_assistant` nor
   `execution_providers` raises immediately.
+- `haven/speech` is the public speech contract, not a speech engine: events
+  (`WakeEvent`, `TranscriptPartial`, `TranscriptFinal`, `SpeakerClaim`, ...)
+  and provider protocols (`WakeDetector`, `Vad`, `SpeechRecognizer`,
+  `SpeechSynthesizer`) that any implementation — a fixture, a Rust KWS, an
+  inference provider from another repo — can satisfy without HAVEN knowing
+  who built it. Three invariants are structural, not conventional: a session
+  cannot execute from a partial transcript (partials are presentation only);
+  a `SpeakerClaim` enters the world as confidence-barred evidence, because
+  voice match is not permission; and raw audio is discarded when a session
+  closes unless the household explicitly opts to retain it. Echo
+  cancellation belongs to the future audio-device layer (it needs the exact
+  speaker PCM reference), never to an ASR provider. The wake-word model is
+  an external artifact bound through a narrow seam: `KwsModelManifest`
+  declares the contract (sample rate, frame, window, threshold, debounce,
+  version) and a scorer maps audio to P(positive) — a trained HAVEN-KWS
+  served by any inference stack plugs in as that scorer, and
+  `haven/speech/providers/` holds thin HTTP adapters for households that
+  score wake/ASR/TTS remotely. A dead inference endpoint raises
+  `InferenceUnavailableError` and is treated as evidence-unavailable,
+  never as a transcript; adapters are constructed and registered by the
+  deployer, never in the zero-config defaults.
 - Receipts distinguish the requested action, derived interpretation, observed
   evidence, authority decision, execution attempt, and device result.
 
@@ -392,8 +465,14 @@ eighteen minutes with no motion, HAVEN's rule reaches the engine, and the
 interface enters its permission state (pulsing HAVEN mark, haloed request
 card). Approving mints a real confirmation token and closes the door through
 the runtime; denying returns the surface to idle. `POST /api/demo/reset`
-replays the scenario, and the small preview-state buttons in the corner force
-each glow state locally for design tuning.
+replays the scenario; `POST /api/demo/camera-down` / `camera-up` drive the
+critical path — with the driveway camera's evidence unavailable the engine
+refuses to act and the surface shows "HAVEN can't see clearly" until the
+camera returns. `POST /api/voice/wake` and `POST /api/voice/utterance`
+exercise the voice session without a microphone (the Speak button and
+utterance field in the HAVEN rail are the STT stand-in). The small
+preview-state buttons in the corner force each glow state locally for
+design tuning.
 
 ## Run the tests
 
@@ -416,8 +495,8 @@ HAVEN is intentionally independent of the existing repositories at this
 stage. A future integration should exchange versioned, provenance-preserving
 artifacts rather than import private internals across project boundaries:
 
-- Ghost Teacher can generate adversarial household situations and evaluate a
-  model gateway or planner against them.
+- Ghost Teacher can generate adversarial household situations and evaluate an
+  intelligence provider or planner against them.
 - HAVEN can provide real-world-shaped authority and consequence traces without
   granting Ghost Teacher execution authority.
 - TraceGlass can reconstruct a HAVEN receipt as an

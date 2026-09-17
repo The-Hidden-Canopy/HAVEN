@@ -7,11 +7,15 @@ member name. Collections come out as lists, never tuples.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any
 
-from haven.core.domain import DeviceState, DomainEvent, EventType, MemoryEntry, RoleTier
+from haven.authority.policy import DEFAULT_MINIMUM_CONFIDENCE, HUMAN_OVERRIDE_WINDOW
+from haven.core.domain import DeviceState, DomainEvent, EventType, MemoryEntry, RoleTier, Rule, RuleDraft
+from haven.providers import ProviderCapabilities
+
+SUMMARY_LIMIT = 90
 
 
 def to_json_value(value: Any) -> Any:
@@ -55,8 +59,8 @@ def room_to_dict(
     }
 
 
-def camera_to_dict(*, camera_id: str, label: str, motion: bool) -> dict[str, Any]:
-    return {"id": camera_id, "label": label, "motion": motion}
+def camera_to_dict(*, camera_id: str, label: str, motion: bool, online: bool) -> dict[str, Any]:
+    return {"id": camera_id, "label": label, "motion": motion, "online": online}
 
 
 def person_to_dict(*, person_id: str, name: str, room: str) -> dict[str, Any]:
@@ -79,6 +83,10 @@ def pending_to_dict(pending: Any) -> dict[str, Any]:
 
 def message_to_dict(*, sender: str, text: str) -> dict[str, Any]:
     return {"from": sender, "text": text}
+
+
+def voice_to_dict(*, state: str, mic: bool) -> dict[str, Any]:
+    return {"state": state, "mic": mic}
 
 
 def status_to_dict(*, devices: int, people: int, line: str, core: str = "Local Core") -> dict[str, Any]:
@@ -137,6 +145,87 @@ def memory_to_dict(entry: MemoryEntry) -> dict[str, Any]:
     }
 
 
+def _one_line(text: str, *, limit: int = SUMMARY_LIMIT) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 1].rstrip() + "…"
+
+
+def _rule_target(draft: RuleDraft, *, device_room: str | None) -> str:
+    if draft.target_device_id is not None:
+        if device_room:
+            room = device_room.replace("_", " ").title()
+            return f"{draft.target_device_id} · {room}"
+        return draft.target_device_id
+    selector = draft.target_selector
+    if selector is None:
+        return "unresolved target"
+    parts = [
+        value
+        for value in (selector.room, selector.role, selector.device_type, selector.requires_capability)
+        if value
+    ]
+    return " · ".join(parts) if parts else "unresolved target"
+
+
+def rule_to_dict(rule: Rule, *, device_room: str | None = None) -> dict[str, Any]:
+    """Render one household rule as a one-line automation row.
+
+    ``device_room`` is the room the device registry resolves the draft's
+    ``target_device_id`` to; without it the target falls back to the raw id
+    (or the draft's own selector description for selector-based rules). A
+    named ``capability`` is authoritative for the action, mirroring how
+    ``AuthorityEngine`` classifies a request that names one; otherwise the
+    ``ActionKind`` value stands in.
+    """
+
+    draft = rule.draft
+    source = draft.source_text.strip() or draft.interpretation
+    action = draft.capability if draft.capability is not None else draft.action_kind.value
+    return {
+        "rule_id": rule.rule_id,
+        "summary": _one_line(source),
+        "action": action,
+        "target": _rule_target(draft, device_room=device_room),
+        "status": rule.status.value,
+        "approved_at": rule.approved_at.isoformat() if rule.approved_at is not None else None,
+    }
+
+
+def engine_to_dict(*, human_override_window: timedelta, minimum_confidence: float) -> dict[str, Any]:
+    minutes = human_override_window.total_seconds() / 60
+    return {
+        "human_override_minutes": int(minutes) if minutes.is_integer() else minutes,
+        "minimum_confidence": minimum_confidence,
+    }
+
+
+def provider_to_dict(capabilities: ProviderCapabilities) -> dict[str, Any]:
+    return {
+        "kind": capabilities.kind,
+        "provider_id": capabilities.provider_id,
+        "capabilities": sorted(capabilities.capabilities),
+    }
+
+
+def system_to_dict(
+    *,
+    revision: int,
+    event_count: int,
+    memory_count: int,
+    engine: dict[str, Any],
+    providers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "revision": int(revision),
+        "event_count": int(event_count),
+        "memory_count": int(memory_count),
+        "engine": to_json_value(engine),
+        "providers": [to_json_value(provider) for provider in providers],
+    }
+
+
 def state_to_dict(
     *,
     glow: str,
@@ -150,6 +239,9 @@ def state_to_dict(
     glow_target: str | None = None,
     activity: list[dict[str, Any]] | None = None,
     memory: list[dict[str, Any]] | None = None,
+    voice: dict[str, Any] | None = None,
+    automations: list[dict[str, Any]] | None = None,
+    system: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "glow": glow,
@@ -162,7 +254,21 @@ def state_to_dict(
         "conversation": [to_json_value(message) for message in conversation],
         "activity": [to_json_value(item) for item in (activity or [])],
         "memory": [to_json_value(item) for item in (memory or [])],
+        "automations": [to_json_value(item) for item in (automations or [])],
         "status": to_json_value(status),
+        "voice": voice if voice is not None else voice_to_dict(state="dormant", mic=False),
+        "system": system
+        if system is not None
+        else system_to_dict(
+            revision=0,
+            event_count=0,
+            memory_count=0,
+            engine=engine_to_dict(
+                human_override_window=HUMAN_OVERRIDE_WINDOW,
+                minimum_confidence=DEFAULT_MINIMUM_CONFIDENCE,
+            ),
+            providers=[],
+        ),
     }
 
 
@@ -170,13 +276,18 @@ __all__ = [
     "camera_to_dict",
     "context_to_dict",
     "device_to_dict",
+    "engine_to_dict",
     "event_to_dict",
     "memory_to_dict",
     "message_to_dict",
     "pending_to_dict",
     "person_to_dict",
+    "provider_to_dict",
     "room_to_dict",
+    "rule_to_dict",
     "state_to_dict",
     "status_to_dict",
+    "system_to_dict",
     "to_json_value",
+    "voice_to_dict",
 ]

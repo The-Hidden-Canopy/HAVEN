@@ -22,7 +22,7 @@ from haven.core.domain import (
 )
 from haven.core.store import HavenStore
 from haven.integrations.home_assistant import FixtureHomeAssistant
-from haven.intelligence.gateway import FixtureModelGateway
+from haven.intelligence.gateway import ScriptedIntelligenceProvider
 from haven.runtime import HavenRuntime
 from test_vertical_slice import RoleTier, _principal
 
@@ -108,7 +108,7 @@ def _runtime():
     store = HavenStore(household_id=principal.household_id)
     adapter = FixtureHomeAssistant()
     runtime = HavenRuntime(
-        store=store, model_gateway=FixtureModelGateway(), home_assistant=adapter, authority=AuthorityEngine()
+        store=store, intelligence_provider=ScriptedIntelligenceProvider(), home_assistant=adapter, authority=AuthorityEngine()
     )
     return runtime, store, adapter, principal, owner
 

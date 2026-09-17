@@ -17,7 +17,7 @@ from haven.authority.policy import AuthorityEngine
 from haven.core.domain import ContextState, DeviceState, PresenceState, WorldSnapshot
 from test_vertical_slice import BASE_TIME, _explicit_draft, _principal, RoleTier, HavenStore
 from haven.integrations.home_assistant import FixtureHomeAssistant
-from haven.intelligence.gateway import FixtureModelGateway
+from haven.intelligence.gateway import ScriptedIntelligenceProvider
 from haven.runtime import HavenRuntime
 
 
@@ -28,7 +28,7 @@ def _runtime_with_confidence(minimum_confidence: float):
     adapter = FixtureHomeAssistant()
     runtime = HavenRuntime(
         store=store,
-        model_gateway=FixtureModelGateway(),
+        intelligence_provider=ScriptedIntelligenceProvider(),
         home_assistant=adapter,
         authority=AuthorityEngine(minimum_confidence=minimum_confidence),
     )

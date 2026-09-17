@@ -81,6 +81,16 @@ class CapabilityRegistry:
         except KeyError:
             raise UnknownProvider(provider_id) from None
 
+    def registered(self) -> tuple[ProviderCapabilities, ...]:
+        """Every registered capability declaration, in registration order.
+
+        This is the honest "what is HAVEN made of right now" view: callers
+        that render or audit the provider set enumerate it here rather than
+        re-declaring it, so extra registrations show up automatically.
+        """
+
+        return tuple(self._capabilities.values())
+
     def find(self, *, kind: str, requires: Iterable[str] = ()) -> tuple[str, ...]:
         """Return provider_ids of the given kind that satisfy every requirement."""
 

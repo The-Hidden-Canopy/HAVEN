@@ -1,30 +1,30 @@
 import pytest
 
-from haven.intelligence.gateway import FixtureModelGateway
+from haven.intelligence.gateway import ScriptedIntelligenceProvider
 from haven.providers import (
     CapabilityRegistry,
     ProviderCapabilities,
     UnknownProvider,
     build_default_registry,
 )
-from haven.providers.defaults import MODEL_GATEWAY_KIND
+from haven.providers.defaults import INTELLIGENCE_KIND
 
 
 def test_register_and_lookup_by_provider_id():
     registry = CapabilityRegistry()
-    gateway = FixtureModelGateway()
+    provider = ScriptedIntelligenceProvider()
     registry.register(
-        gateway,
+        provider,
         capabilities=ProviderCapabilities(
-            provider_id="test.gateway",
-            kind=MODEL_GATEWAY_KIND,
-            capabilities=("rule_interpretation",),
+            provider_id="test.intelligence",
+            kind=INTELLIGENCE_KIND,
+            capabilities=("interpret",),
         ),
     )
 
-    assert registry.is_available("test.gateway")
-    assert registry.get("test.gateway") is gateway
-    assert registry.capabilities_of("test.gateway").supports("rule_interpretation")
+    assert registry.is_available("test.intelligence")
+    assert registry.get("test.intelligence") is provider
+    assert registry.capabilities_of("test.intelligence").supports("interpret")
 
 
 def test_unknown_provider_raises_on_get_and_capabilities():
@@ -42,17 +42,17 @@ def test_find_filters_by_kind_and_required_capabilities():
     registry.register(
         object(),
         capabilities=ProviderCapabilities(
-            provider_id="chat.only",
-            kind=MODEL_GATEWAY_KIND,
-            capabilities=("rule_interpretation",),
+            provider_id="interpret.only",
+            kind=INTELLIGENCE_KIND,
+            capabilities=("interpret",),
         ),
     )
     registry.register(
         object(),
         capabilities=ProviderCapabilities(
             provider_id="chat.and.vision",
-            kind=MODEL_GATEWAY_KIND,
-            capabilities=("rule_interpretation", "vision"),
+            kind=INTELLIGENCE_KIND,
+            capabilities=("chat", "vision"),
         ),
     )
     registry.register(
@@ -60,25 +60,25 @@ def test_find_filters_by_kind_and_required_capabilities():
         capabilities=ProviderCapabilities(
             provider_id="other.kind",
             kind="speech",
-            capabilities=("rule_interpretation", "vision"),
+            capabilities=("interpret", "vision"),
         ),
     )
 
-    assert registry.find(kind=MODEL_GATEWAY_KIND, requires=("vision",)) == ("chat.and.vision",)
-    assert set(registry.find(kind=MODEL_GATEWAY_KIND)) == {"chat.only", "chat.and.vision"}
-    assert registry.find(kind="speech", requires=("rule_interpretation", "vision")) == ("other.kind",)
+    assert registry.find(kind=INTELLIGENCE_KIND, requires=("chat",)) == ("chat.and.vision",)
+    assert set(registry.find(kind=INTELLIGENCE_KIND)) == {"interpret.only", "chat.and.vision"}
+    assert registry.find(kind="speech", requires=("interpret", "vision")) == ("other.kind",)
 
 
 def test_capabilities_require_non_empty_identity():
     with pytest.raises(ValueError):
-        ProviderCapabilities(provider_id="", kind=MODEL_GATEWAY_KIND, capabilities=())
+        ProviderCapabilities(provider_id="", kind=INTELLIGENCE_KIND, capabilities=())
     with pytest.raises(ValueError):
         ProviderCapabilities(provider_id="x", kind="", capabilities=())
 
 
-def test_default_registry_exposes_the_fixture_gateway():
+def test_default_registry_exposes_the_fixture_intelligence_provider():
     registry = build_default_registry()
 
-    found = registry.find(kind=MODEL_GATEWAY_KIND, requires=("rule_interpretation",))
-    assert found == ("haven.fixture_model_gateway",)
-    assert isinstance(registry.get(found[0]), FixtureModelGateway)
+    found = registry.find(kind=INTELLIGENCE_KIND, requires=("interpret",))
+    assert found == ("haven.fixture_intelligence",)
+    assert isinstance(registry.get(found[0]), ScriptedIntelligenceProvider)
