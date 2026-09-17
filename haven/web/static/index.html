@@ -27,12 +27,6 @@
             <span class="nav-label">Home</span>
           </a>
         </li>
-        <li data-view="world">
-          <a href="#">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="2.5" width="7" height="11" rx="1"/><circle cx="10" cy="8" r="0.6"/></svg>
-            <span class="nav-label">Rooms</span>
-          </a>
-        </li>
         <li data-view="people">
           <a href="#">
             <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="5.2" r="2.5"/><path d="M2.8 13.5c.7-2.7 2.8-4 5.2-4s4.5 1.3 5.2 4"/></svg>
@@ -57,6 +51,7 @@
             <span class="nav-label">Activity</span>
           </a>
         </li>
+        <li class="nav-group" aria-hidden="true"><span class="micro">Settings</span></li>
         <li data-view="system">
           <a href="#">
             <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.4"/><path d="M8 1.6v2.4M8 12v2.4M1.6 8h2.4M12 8h2.4M3.5 3.5l1.7 1.7M10.8 10.8l1.7 1.7M12.5 3.5l-1.7 1.7M5.2 10.8l-1.7 1.7"/></svg>
@@ -142,6 +137,7 @@
           </form>
           <div id="inspection-box"></div>
           <button id="inspect-install" type="button" class="btn" hidden>Install</button>
+          <p id="download-note" class="model-note" hidden></p>
           <p id="panel-error-download" class="model-error" hidden></p>
         </div>
 
@@ -169,6 +165,11 @@
             <button type="submit">Register Endpoint</button>
           </form>
           <p id="panel-error-endpoint" class="model-error" hidden></p>
+        </div>
+
+        <div id="jobs-section" class="jobs-section" hidden>
+          <h3 class="micro">DOWNLOADS</h3>
+          <div id="jobs-list"></div>
         </div>
 
         <div id="models-list"></div>

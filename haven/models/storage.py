@@ -9,6 +9,7 @@ never single-select.
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -31,7 +32,18 @@ class ModelStorage:
 
     def model_dir(self, kind, model_id: str) -> Path:
         kind_value = kind.value if hasattr(kind, "value") else str(kind)
-        return self.root / kind_value / model_id
+        target = self.root / kind_value / str(model_id)
+        # Defense in depth: ids are validated upstream, but the computed
+        # target must still resolve inside the storage root before any write.
+        root_resolved = os.path.realpath(self.root)
+        target_resolved = os.path.realpath(target)
+        try:
+            common = os.path.commonpath((root_resolved, target_resolved))
+        except ValueError:
+            common = None
+        if common != root_resolved:
+            raise StorageError(f"model id escapes the models root: {model_id!r}")
+        return target
 
     def is_installed(self, kind, model_id: str) -> bool:
         return self.model_dir(kind, model_id).is_dir()

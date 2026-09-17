@@ -82,13 +82,26 @@ The initial vertical slice contains:
   manifest `haven-model.json` (schema `haven-model-1`) lets anyone publish
   a compatible model; `resolve(kind, requires, languages)` routes by
   capability and language only — never by model name, architecture, or
-  backend. Inference backends are deployer-registered plugins and the repo
-  ships none, so a load with no loader fails as `BACKEND_MISSING`. Multiple
+  backend. Inference backends are plugins: the reference set ships an
+  `http` backend that is fully real on the standard library, plus lazy
+  `transformers` / `llama_cpp` / `onnx` backends that activate only when
+  their runtime is importable and surface as `BACKEND_MISSING` otherwise;
+  community backends (mlx, rocm, coreml) register the same way. Multiple
   models load simultaneously (wake + VAD + ASR + agent + vision is the
   expected topology, not single-select). The same services drive a CLI
   (`python -m haven.models`) and the Settings → Models web view, and
   inspect-before-install is structural: fetching a manifest never downloads
-  weights.
+  weights. Downloads run as background jobs with byte-total progress,
+  cooperative cancel, and `.part` resume, streamed to the UI over SSE.
+  Ordinary model folders (a lone GGUF, a Hugging Face checkout, an ONNX
+  export) are recognized and synthesized into manifests, and repository
+  URLs resolve without HAVEN hardcoding any vendor. The runtime bridge
+  closes the loop: a loaded `intelligence` model becomes the
+  `IntelligenceProvider` the runtime calls — with a bounded, serializable
+  `WorldView` projection (freshness and confidence per item, never the
+  store) so agents can answer household questions — while the scripted
+  provider remains the floor when no model is loaded: models upgrade
+  HAVEN, they are never required by it.
 
 There is no local model runtime, camera pipeline, mobile surface, scheduler,
 cloud fallback, or physical-device capability yet.
@@ -143,8 +156,11 @@ haven/
 │   ├── manifest.py     # universal haven-model.json (schema haven-model-1)
 │   ├── registry.py     # persistent model records + lifecycle states
 │   ├── discovery.py    # scan model roots; candidates are never auto-activated
-│   ├── downloader.py   # inspect-before-install URL flow
-│   ├── backends/       # ModelBackend protocol + empty BackendRegistry (plugins)
+│   ├── detect.py       # recognize ordinary HF/GGUF/ONNX folders; synthesize manifests
+│   ├── downloader.py   # inspect-before-install URL flow + HF repo resolution
+│   ├── jobs.py         # background downloads: progress, cancel, .part resume
+│   ├── backends/       # ModelBackend protocol + reference set (http real; ML lazy)
+│   ├── bridge.py       # loaded models become providers; WorldView feeds agents
 │   └── manager.py      # ModelManager: 3 entry paths, resolve, load/unload topology
 ├── providers/
 │   ├── capabilities.py # capability registry: kind + capability, no licensing

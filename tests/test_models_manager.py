@@ -142,6 +142,39 @@ def test_install_refuses_double_install_without_replace(manager_factory):
         assert record.state is ModelState.READY
 
 
+def test_install_local_gguf_folder_registers_ready(manager_factory):
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp) / "My GGUF Model"
+        folder.mkdir()
+        (folder / "model.Q4_K_M.gguf").write_bytes(b"gguf weights")
+        manager = manager_factory(Path(tmp) / "root")
+        record = manager.install_local_folder(folder)
+        assert record.state is ModelState.READY
+        assert record.source_type is ModelSource.LOCAL
+        descriptor = record.descriptor
+        assert descriptor.backend == "llama_cpp"
+        assert descriptor.architecture == "gguf"
+        assert descriptor.kind is ModelKind.INTELLIGENCE
+        assert descriptor.id == "my-gguf-model"
+        # hashless synthesized manifest: nothing to verify against
+        assert descriptor.verified is False
+        assert (manager.models_root / "intelligence" / "my-gguf-model" / "model.Q4_K_M.gguf").is_file()
+        # a fresh manager over the same root sees the same record
+        assert ModelManager(Path(tmp) / "root").get("my-gguf-model").state is ModelState.READY
+
+
+def test_install_local_unrecognizable_folder_is_refused(manager_factory):
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp) / "random-files"
+        folder.mkdir()
+        (folder / "notes.txt").write_text("nothing model-like", encoding="utf-8")
+        manager = manager_factory(Path(tmp) / "root")
+        with pytest.raises(ModelManagerError, match="recognized layout"):
+            manager.install_local_folder(folder)
+        # nothing was registered
+        assert manager.get("random-files") is None
+
+
 def test_search_filters_the_catalog():
     entries = (
         CatalogEntry(
@@ -281,6 +314,27 @@ def test_load_without_backend_records_backend_missing(manager_factory, backend):
         assert ModelManager(Path(tmp) / "root").get("nobackend").state is ModelState.BACKEND_MISSING
 
 
+def test_loader_raising_backend_missing_is_not_wrapped_as_load_failed(manager_factory, backend):
+    # A lazy reference backend raises BackendMissingError when its runtime is
+    # not importable. That names a missing dependency and must surface as
+    # BACKEND_MISSING -- never be swallowed into LOAD_FAILED.
+    class LazyBackend:
+        def load(self, descriptor, model_dir):
+            raise BackendMissingError(f"runtime for {descriptor.backend!r} is not installed")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        registry = BackendRegistry()
+        registry.register("fake", backend)
+        registry.register("lazy-runtime", LazyBackend())
+        manager = manager_factory(Path(tmp) / "root", backends=registry)
+        _write_local_model(Path(tmp), "lazy-model", backend="lazy-runtime")
+        manager.install_local_folder(Path(tmp) / "lazy-model")
+        with pytest.raises(BackendMissingError, match="not installed"):
+            manager.load("lazy-model")
+        record = manager.get("lazy-model")
+        assert record.state is ModelState.BACKEND_MISSING
+
+
 def test_load_records_register_name_not_architecture(manager_factory, backend):
     with tempfile.TemporaryDirectory() as tmp:
         manager = manager_factory(Path(tmp) / "root")
@@ -322,7 +376,9 @@ def test_register_endpoint_ready_when_reachable(manager_factory):
             descriptor = record.descriptor
             assert descriptor.source is ModelSource.ENDPOINT
             assert descriptor.files == {}
-            assert descriptor.path == url.rsplit("/", 1)[0] + "/"
+            # legacy manifest input without an explicit endpoint probes the
+            # manifest's base directory
+            assert descriptor.endpoint_url == url.rsplit("/", 1)[0] + "/"
             assert descriptor.verified is False
             # resolvable like any other ready model
             assert manager.resolve("intelligence").id == "ep-model"
@@ -351,6 +407,72 @@ def test_register_endpoint_from_url(manager_factory):
             record = manager.register_endpoint(url)
             assert record.state is ModelState.READY
             assert record.descriptor.source is ModelSource.ENDPOINT
+    finally:
+        server.shutdown()
+
+
+def test_register_endpoint_with_explicit_endpoint_url_and_manifest_url(manager_factory):
+    server, url, manifest_dict, _ = make_file_server("ep-meta", kind="speech", capabilities=("asr",))
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = manager_factory(Path(tmp) / "root")
+            endpoint = server.url("/v1/asr")
+            record = manager.register_endpoint(endpoint, manifest_url=url)
+            assert record.state is ModelState.READY
+            descriptor = record.descriptor
+            # metadata comes from the manifest, the contract is the endpoint
+            assert descriptor.kind is ModelKind.SPEECH
+            assert descriptor.capabilities == frozenset({"asr"})
+            assert descriptor.endpoint_url == endpoint
+            assert descriptor.files == {}
+            # the registry round-trips the endpoint_url
+            reloaded = ModelManager(Path(tmp) / "root").get("ep-meta")
+            assert reloaded.descriptor.endpoint_url == endpoint
+            assert manager.resolve("speech", requires={"asr"}).id == "ep-meta"
+    finally:
+        server.shutdown()
+
+
+def test_register_endpoint_bare_url_synthesizes_minimal_metadata(manager_factory):
+    server, _, _, _ = make_file_server("unused")
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = manager_factory(Path(tmp) / "root")
+            endpoint = server.url("/v1/chat")
+            record = manager.register_endpoint(endpoint)
+            assert record.state is ModelState.READY
+            descriptor = record.descriptor
+            assert descriptor.kind is ModelKind.SPECIALIZED
+            assert descriptor.capabilities == frozenset({"inference"})
+            assert descriptor.architecture == "remote"
+            assert descriptor.backend == "http"
+            assert descriptor.endpoint_url == endpoint
+            assert descriptor.source is ModelSource.ENDPOINT
+    finally:
+        server.shutdown()
+
+
+def test_register_endpoint_dead_port_is_unreachable_not_blocked(manager_factory):
+    server, _, _, _ = make_file_server("unused")
+    server.shutdown()  # nothing listens on this port anymore
+    endpoint = server.url("/v1/chat")
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = manager_factory(Path(tmp) / "root")
+        record = manager.register_endpoint(endpoint)
+        assert record.state is ModelState.UNREACHABLE
+        record_id = record.id
+        assert ModelManager(Path(tmp) / "root").get(record_id).state is ModelState.UNREACHABLE
+
+
+def test_register_endpoint_http_error_still_counts_as_reachable(manager_factory):
+    server, _, _, _ = make_file_server("unused")
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = manager_factory(Path(tmp) / "root")
+            endpoint = server.url("/definitely/not/a/route")
+            record = manager.register_endpoint(endpoint)
+            # the server answered 404; the endpoint is live
+            assert record.state is ModelState.READY
     finally:
         server.shutdown()
 

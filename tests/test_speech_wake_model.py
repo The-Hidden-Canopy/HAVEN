@@ -71,7 +71,7 @@ def test_scorer_must_be_callable_and_clock_must_be_callable() -> None:
 
 
 def test_scorer_must_return_a_number() -> None:
-    detector = ThresholdedWakeDetector(_manifest(), lambda window: "loud")
+    detector = ThresholdedWakeDetector(_manifest(window_ms=25), lambda window: "loud")
     with pytest.raises(ValueError, match="scorer"):
         _feed(detector, 1)
 
@@ -82,14 +82,15 @@ def test_single_fire_per_sustained_activation() -> None:
     events = _feed(detector, 40)  # one full second of confident audio
 
     assert len(events) == 1
-    assert events[0] == WakeEvent(confidence=0.95, at_ms=25, phrase="haven")
-    # The very first frame crosses the threshold; the rest of the sustained
-    # activation is debounced.
+    assert events[0] == WakeEvent(confidence=0.95, at_ms=1000, phrase="haven")
+    # Scoring starts only once the 1000 ms window has filled at frame 40;
+    # that first score crosses the threshold and the sustained activation
+    # after it is debounced.
 
 
 def test_rearm_requires_the_score_to_drop_below_threshold() -> None:
     scores = iter([0.9] * 3 + [0.1] * 2 + [0.9] * 3)
-    detector = ThresholdedWakeDetector(_manifest(debounce_ms=0), lambda window: next(scores))
+    detector = ThresholdedWakeDetector(_manifest(window_ms=25, debounce_ms=0), lambda window: next(scores))
 
     events = _feed(detector, 8)
 
@@ -110,7 +111,7 @@ def test_debounce_window_suppresses_a_quick_second_fire() -> None:
         return scores_by_frame[seen["frame"]]
 
     detector = ThresholdedWakeDetector(
-        _manifest(debounce_ms=750),
+        _manifest(window_ms=25, debounce_ms=750),
         scorer,
         clock_ms=lambda: next(clock),
     )
@@ -130,12 +131,27 @@ def test_rolling_window_size_comes_from_the_manifest() -> None:
 
     _feed(detector, 10)
 
-    assert windows == [800, 1600, 2400, 3200] + [3200] * 6
+    # The 100 ms window is 4 frames of 25 ms; scoring starts at frame 4,
+    # and every scored window is exactly window_bytes long.
+    assert windows == [3200] * 7
+
+
+def test_scoring_starts_only_once_the_window_is_full() -> None:
+    lengths = []
+    manifest = _manifest(window_ms=100)  # window_bytes == 4 frames
+    detector = ThresholdedWakeDetector(manifest, lambda window: lengths.append(len(window)) or 0.1)
+
+    _feed(detector, 3)  # 75 ms of audio: the window is not full yet
+    assert lengths == []  # the scorer was never called with an undersized window
+
+    _feed(detector, 3)  # past the window
+
+    assert lengths == [manifest.window_bytes] * 3
 
 
 def test_partial_frames_wait_for_a_full_frame() -> None:
     seen = []
-    detector = ThresholdedWakeDetector(_manifest(), lambda window: seen.append(len(window)) or 0.9)
+    detector = ThresholdedWakeDetector(_manifest(window_ms=25), lambda window: seen.append(len(window)) or 0.9)
 
     assert detector.process(b"\x07\x00" * 200) == []  # half a frame
     assert seen == []
@@ -192,7 +208,7 @@ def test_scorer_backed_by_the_inference_endpoint_plugs_in_unchanged(scoring_serv
         with urllib.request.urlopen(request, timeout=5) as response:
             return float(json.loads(response.read().decode("utf-8"))["score"])
 
-    detector = ThresholdedWakeDetector(_manifest(debounce_ms=0), endpoint_scorer)
+    detector = ThresholdedWakeDetector(_manifest(window_ms=25, debounce_ms=0), endpoint_scorer)
 
     events = _feed(detector, 5)
 

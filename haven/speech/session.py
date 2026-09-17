@@ -74,7 +74,9 @@ class SpeechSession:
 
     @property
     def partials(self) -> tuple[TranscriptPartial, ...]:
-        """Interim hypotheses, for presentation only; never executable."""
+        """Interim hypotheses of the CURRENT utterance, for presentation
+        only; never executable. Cleared on wake, on `consume_final()`, and
+        on `close()` -- partials never leak across utterances."""
         return tuple(self._partials)
 
     @property
@@ -117,6 +119,7 @@ class SpeechSession:
         # A wake in any active state restarts the utterance: barge-in wins.
         self._utterance = bytearray(self._preroll.read_preroll())
         self._preroll.clear()
+        self._partials = []
         self._claims = []
         self._pending_final = None
         self._state = SpeechSessionState.CAPTURING
@@ -155,15 +158,16 @@ class SpeechSession:
         """Yield the committed transcript -- the only executable output.
 
         Returns `None` when nothing is committed; after yielding, the
-        session returns to dormant and the utterance's raw audio and claims
-        are dropped (unless retained). There is deliberately no method that
-        returns, accepts, or acts on a `TranscriptPartial`.
+        session returns to dormant and the utterance's raw audio, partials,
+        and claims are dropped (unless retained). There is deliberately no
+        method that returns, accepts, or acts on a `TranscriptPartial`.
         """
         self._require_open()
         if self._state is not SpeechSessionState.HAVEN_INPUT_READY:
             return None
         final = self._pending_final
         self._pending_final = None
+        self._partials = []
         self._claims = []
         if not self._retain_audio:
             self._utterance.clear()
@@ -175,7 +179,7 @@ class SpeechSession:
 
         Raw audio is discarded here by default: `retain_audio=True` is the
         explicit, opt-in exception for diagnostics. Text already committed
-        as finals stays; PCM and interim state do not survive.
+        as finals stays; PCM, partials, and interim state do not survive.
         """
         if self._state is SpeechSessionState.CLOSED:
             return
@@ -183,6 +187,7 @@ class SpeechSession:
         self._preroll.clear()
         if not self._retain_audio:
             self._utterance.clear()
+        self._partials = []
         self._claims = []
         self._pending_final = None
 

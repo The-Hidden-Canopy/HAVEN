@@ -1,15 +1,17 @@
 """ModelDescriptor is the normalized internal contract; validation rules
-include the endpoint-vs-file source split.
+include the endpoint-vs-file source split and storage-safe model ids.
 """
 
 import pytest
 
 from haven.models import (
+    InvalidModelIdError,
     ModelDescriptor,
     ModelKind,
     ModelSource,
     descriptor_from_dict,
     descriptor_to_dict,
+    safe_model_id,
 )
 
 
@@ -78,20 +80,57 @@ def test_file_sources_require_a_files_map():
         _descriptor(source=ModelSource.LOCAL, files={})
 
 
-def test_endpoint_requires_an_http_url_path():
+def test_endpoint_requires_an_http_endpoint_url():
+    with pytest.raises(ValueError, match="endpoint_url"):
+        _descriptor(source=ModelSource.ENDPOINT, endpoint_url=None, files={})
     with pytest.raises(ValueError, match="http"):
-        _descriptor(source=ModelSource.ENDPOINT, path=None, files={})
-    with pytest.raises(ValueError, match="http"):
-        _descriptor(source=ModelSource.ENDPOINT, path="ftp://example", files={})
+        _descriptor(source=ModelSource.ENDPOINT, endpoint_url="ftp://example", files={})
     descriptor = _descriptor(
-        source=ModelSource.ENDPOINT, path="https://api.example.com/v1/", files={}
+        source=ModelSource.ENDPOINT, endpoint_url="https://api.example.com/v1/", files={}
     )
     assert descriptor.files == {}
+    assert descriptor.endpoint_url == "https://api.example.com/v1/"
 
 
 def test_endpoint_rejects_file_lists():
     with pytest.raises(ValueError, match="no files"):
-        _descriptor(source=ModelSource.ENDPOINT, path="https://x.example/", files={"w": "w.bin"})
+        _descriptor(
+            source=ModelSource.ENDPOINT,
+            endpoint_url="https://x.example/",
+            files={"w": "w.bin"},
+        )
+
+
+def test_file_sources_may_carry_an_endpoint_url():
+    # Local artifacts plus remote inference is a legitimate topology: the
+    # manifest's `endpoint` field lands on the descriptor for file sources.
+    descriptor = _descriptor(
+        source=ModelSource.LOCAL,
+        endpoint_url="https://api.example.com/v1/",
+        files={"w": "w.bin"},
+    )
+    assert descriptor.endpoint_url == "https://api.example.com/v1/"
+    assert descriptor.files == {"w": "w.bin"}
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    ["../x", "a/b", "..", "C:\\x", "", "  ", "A" * 65, "-lead", "with space", "x:y"],
+)
+def test_safe_model_id_rejects_unsafe_values(model_id):
+    with pytest.raises(InvalidModelIdError):
+        safe_model_id(model_id)
+
+
+@pytest.mark.parametrize("model_id", ["haven-kws", "my.model_2", "a" * 64, "0", "x-y_z.1"])
+def test_safe_model_id_accepts_slug_values(model_id):
+    assert safe_model_id(model_id) == model_id
+
+
+def test_descriptor_validates_id_with_safe_model_id():
+    with pytest.raises(InvalidModelIdError):
+        _descriptor(id="../escape")
+    assert _descriptor(id="haven-kws").id == "haven-kws"
 
 
 def test_supports_all_is_subset_matching():
@@ -116,3 +155,14 @@ def test_descriptor_dict_round_trip():
     )
     rebuilt = descriptor_from_dict(descriptor_to_dict(descriptor))
     assert rebuilt == descriptor
+
+
+def test_endpoint_descriptor_dict_round_trip():
+    descriptor = _descriptor(
+        source=ModelSource.ENDPOINT,
+        endpoint_url="https://api.example.com/v1/",
+        files={},
+    )
+    as_dict = descriptor_to_dict(descriptor)
+    assert as_dict["endpoint"] == "https://api.example.com/v1/"
+    assert descriptor_from_dict(as_dict) == descriptor

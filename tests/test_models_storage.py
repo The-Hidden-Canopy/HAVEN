@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from haven.models import ModelStorage, StorageError, default_models_root
+from haven.models import ManifestError, ModelStorage, StorageError, default_models_root
 from haven.models.manifest import ModelManifest, manifest_filename
 
 from models_stub_http import make_manifest_dict
@@ -62,21 +62,36 @@ def test_install_fails_when_a_declared_file_is_missing():
         assert not storage.is_installed(manifest.kind, manifest.id)
 
 
-def test_install_flattens_nested_declared_paths_by_basename():
+def test_install_rejects_nested_declared_paths():
+    # v1 installs flat by basename: declared paths must already be basenames,
+    # so a nested layout is refused at manifest validation time.
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "nested"
         (source / "sub").mkdir(parents=True)
         (source / "sub" / "weights.bin").write_bytes(b"nested weights")
-        manifest = ModelManifest.from_dict(
-            {
-                **make_manifest_dict(),
-                "files": {"weights": "sub/weights.bin"},
-                "sha256": {"sub/weights.bin": __import__("hashlib").sha256(b"nested weights").hexdigest()},
-            }
-        )
+        with pytest.raises(ManifestError, match="basename"):
+            ModelManifest.from_dict(
+                {
+                    **make_manifest_dict(),
+                    "files": {"weights": "sub/weights.bin"},
+                    "sha256": {"sub/weights.bin": __import__("hashlib").sha256(b"nested weights").hexdigest()},
+                }
+            )
+
+
+def test_model_dir_defense_in_depth_rejects_traversal_ids():
+    from haven.models import ModelKind
+
+    with tempfile.TemporaryDirectory() as tmp:
         storage = _storage(tmp)
-        dest = storage.install(manifest, source)
-        assert (dest / "weights.bin").read_bytes() == b"nested weights"
+        # ids like these passed the old non-empty-text validation; storage
+        # must refuse to compute a target outside the root.
+        for bad_id in ("../../escape", "..\\..\\escape", "C:\\escape"):
+            with pytest.raises(StorageError, match="escapes"):
+                storage.model_dir(ModelKind.INTELLIGENCE, bad_id)
+        # a normal id still resolves inside the root
+        target = storage.model_dir(ModelKind.INTELLIGENCE, "ok-model")
+        assert target == Path(tmp) / "models" / "intelligence" / "ok-model"
 
 
 def test_install_endpoint_writes_manifest_only():

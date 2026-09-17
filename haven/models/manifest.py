@@ -2,22 +2,37 @@
 
 Every model family -- intelligence, speech, vision, embeddings, prediction,
 specialized -- describes itself with the same file, so one loader path, one
-discovery pass, and one integrity check cover all of them. Hash availability
-is first-class: a declared file without a sha256 entry is a validation
-error, because an unverifiable model is not a candidate. The family taxonomy
-(`kind`) is closed; capabilities underneath it are deliberately open-ended.
+discovery pass, and one integrity check cover all of them. Declared hashes
+are first-class: once a manifest declares any sha256, every declared file
+must have one, because a partially verifiable model is not a candidate. A
+manifest with no sha256 at all (only ever a locally synthesized one) stays
+legal but unverifiable: it installs with `verified=False` and hash
+verification reported as unavailable. Declared file paths are relative
+basenames only -- storage installs flat, so nested or absolute paths are
+rejected with the offending value. The family taxonomy (`kind`) is closed;
+capabilities underneath it are deliberately open-ended.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .contracts import ModelDescriptor, ModelKind, ModelSource
+from .contracts import (
+    InvalidModelIdError,
+    ModelDescriptor,
+    ModelKind,
+    ModelSource,
+    safe_model_id,
+)
 
 SCHEMA_VERSION = "haven-model-1"
+
+_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:")
 
 
 class ManifestError(ValueError):
@@ -45,6 +60,30 @@ def _string_set(value: Any, *, name: str) -> frozenset[str]:
     return frozenset(result)
 
 
+def _relative_basename(value: Any, *, context: str) -> str:
+    """A declared file must be a flat relative basename, never a path.
+
+    Storage installs flat by basename, so anything with separators, dot-dot
+    segments, a drive letter, or an absolute form is rejected with the
+    offending value rather than silently re-interpreted.
+    """
+
+    if not isinstance(value, str) or not value.strip():
+        raise ManifestError(f"{context} must be a non-empty basename, got {value!r}")
+    candidate = value.strip()
+    if (
+        os.path.isabs(candidate)
+        or "/" in candidate
+        or "\\" in candidate
+        or (os.altsep is not None and os.altsep in candidate)
+        or ".." in candidate
+        or _DRIVE_PATTERN.match(candidate)
+        or Path(candidate).name != candidate
+    ):
+        raise ManifestError(f"{context} must be a relative basename, got {value!r}")
+    return candidate
+
+
 @dataclass(frozen=True)
 class ModelManifest:
     """Parsed `haven-model.json`; `to_descriptor` maps it onto the contract."""
@@ -61,12 +100,21 @@ class ModelManifest:
     device_support: frozenset[str] = frozenset()
     license: str | None = None
     source: str | None = None
+    endpoint: str | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "id", _require_text(self.id, name="id"))
+        try:
+            object.__setattr__(self, "id", safe_model_id(self.id))
+        except InvalidModelIdError as exc:
+            raise ManifestError(str(exc)) from exc
         object.__setattr__(self, "version", _require_text(self.version, name="version"))
         object.__setattr__(self, "architecture", _require_text(self.architecture, name="architecture"))
         object.__setattr__(self, "backend", _require_text(self.backend, name="backend"))
+        if self.endpoint is not None:
+            endpoint = _require_text(self.endpoint, name="endpoint")
+            if not (endpoint.startswith("http://") or endpoint.startswith("https://")):
+                raise ManifestError(f"endpoint must be an http(s) URL, got {self.endpoint!r}")
+            object.__setattr__(self, "endpoint", endpoint)
         if not isinstance(self.kind, ModelKind):
             raise ManifestError(f"unknown model kind: {self.kind!r}")
         capabilities = frozenset(self.capabilities)
@@ -76,19 +124,19 @@ class ModelManifest:
         object.__setattr__(self, "languages", frozenset(self.languages))
         object.__setattr__(self, "device_support", frozenset(self.device_support))
         files = dict(self.files)
-        if not files:
+        if not files and self.endpoint is None:
             raise ManifestError("files must declare at least one role -> relative path")
         for role, rel in files.items():
             _require_text(role, name="file role")
-            _require_text(rel, name=f"file path for role {role!r}")
+            files[role] = _relative_basename(rel, context=f"file path for role {role!r}")
         object.__setattr__(self, "files", files)
         sha256 = dict(self.sha256)
         for rel, digest in sha256.items():
-            _require_text(rel, name="sha256 entry")
+            _relative_basename(rel, context="sha256 entry")
             _require_text(digest, name=f"sha256 digest for {rel!r}")
         object.__setattr__(self, "sha256", sha256)
         uncovered = [rel for rel in files.values() if rel not in sha256]
-        if uncovered:
+        if sha256 and uncovered:
             raise ManifestError(
                 "declared files missing sha256: " + ", ".join(sorted(uncovered))
             )
@@ -132,6 +180,7 @@ class ModelManifest:
             device_support=device_support,
             license=data.get("license"),
             source=data.get("source"),
+            endpoint=data.get("endpoint"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -149,6 +198,7 @@ class ModelManifest:
             "hardware": {name: True for name in sorted(self.device_support)},
             "license": self.license,
             "source": self.source,
+            "endpoint": self.endpoint,
         }
 
     @classmethod
@@ -190,6 +240,7 @@ class ModelManifest:
             verified=verified,
             files=dict(self.files),
             sha256=dict(self.sha256),
+            endpoint_url=self.endpoint,
         )
 
 
