@@ -536,6 +536,21 @@ The confirmation object in this fixture is a local protocol value, not a
 cryptographic credential issuer. A live interface must add secure issuance and
 storage before any real high-consequence integration is enabled.
 
+## Authoring a model or provider
+
+Anyone can publish a model manifest, write an inference backend, or
+implement one of HAVEN's provider protocols without touching Haven Core
+itself -- that seam is the whole point of `haven/models` and
+`haven/providers`. Two guides cover it:
+
+- [`docs/authoring-models.md`](docs/authoring-models.md) -- publishing a
+  `haven-model.json` manifest so a household can install your model, and
+  writing a `ModelBackend` when no existing backend can load it.
+- [`docs/authoring-providers.md`](docs/authoring-providers.md) --
+  implementing `IntelligenceProvider`, `ExecutionAdapter`,
+  `DiscoveryProvider`, `ObservationProvider`, or one of the speech
+  protocols, and registering it in a `CapabilityRegistry`.
+
 ## Relationship to the adjacent stack
 
 HAVEN is intentionally independent of the existing repositories at this

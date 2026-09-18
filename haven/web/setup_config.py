@@ -81,10 +81,25 @@ class SetupConfig:
 
 
 class SetupConfigStore:
-    """Loads and atomically saves one `SetupConfig` at a JSON file path."""
+    """Loads and atomically saves one `SetupConfig` at a JSON file path.
+
+    The path is settable: choosing a new data dir rebinds the store to the
+    moved `haven.json`, and every sidecar path derived from `path.parent`
+    moves with it.
+    """
 
     def __init__(self, config_path: str | Path) -> None:
-        self.path = Path(config_path)
+        self.path = config_path
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    @path.setter
+    def path(self, value: str | Path) -> None:
+        if not isinstance(value, (str, Path)) or not str(value).strip():
+            raise SetupConfigError("setup config path must be a non-empty string or path")
+        self._path = Path(value)
 
     def load(self) -> SetupConfig:
         """A missing file means "not set up yet", not an error."""

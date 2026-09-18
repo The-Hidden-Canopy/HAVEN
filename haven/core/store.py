@@ -92,6 +92,28 @@ class HavenStore:
     def events(self) -> tuple[DomainEvent, ...]:
         return self._events
 
+    def restore_rules(self, rules: tuple[Rule, ...]) -> None:
+        """Rehydrate automations saved by a previous process lifetime.
+
+        This is the ONLY non-transition mutation of the store, and it exists
+        solely at the process-lifetime boundary: rehydration replays NO
+        transitions and emits NO domain events, because the transitions that
+        proposed and approved these rules already happened in a previous
+        process lifetime. Replaying them here would fabricate activity this
+        process never governed. The rules enter as already-accepted state --
+        exactly what a restarted household means by "my automations survived
+        the reboot" -- scoped and id-checked like any other rule admission.
+        """
+
+        rules = tuple(rules)
+        for rule in rules:
+            if rule.draft.household_id != self._household_id:
+                raise ScopeViolation("restored rule household does not match this store")
+        rule_ids = [rule.rule_id for rule in rules]
+        if len(rule_ids) != len(set(rule_ids)):
+            raise InvalidTransition("restored rules contain duplicate rule_ids")
+        self._state = replace(self._state, rules=rules)
+
     def get_rule(self, rule_id: str) -> Rule:
         for rule in self._state.rules:
             if rule.rule_id == rule_id:

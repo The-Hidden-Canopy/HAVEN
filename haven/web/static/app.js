@@ -82,6 +82,7 @@ const els = {
   setupError: $('#setup-error'),
   setupWarning: $('#setup-warning'),
   setupBody: $('#setup-body'),
+  setupBack: $('#setup-back'),
   setupNext: $('#setup-next'),
 };
 
@@ -171,6 +172,7 @@ function renderState(payload) {
   if (setupState.open && setupState.setup && setupObj().completed === true) {
     setSetupOpen(false);
   }
+  maybeNotify(payload);
 }
 
 function renderPill(payload) {
@@ -995,7 +997,7 @@ function closeChainPanel() {
    requests land on the error line, never an uncaught throw. No close
    affordance — onboarding finishes or the page closes. */
 
-const SETUP_STEP_COUNT = 6;
+const SETUP_STEP_COUNT = 7;
 
 const setupState = {
   setup: null,       // last `setup` object from the backend, or null
@@ -1094,7 +1096,7 @@ function renderSetupWelcome(container) {
   container.appendChild(setupText(
     'HAVEN keeps the house\u2019s configuration on this machine \u2014 ' +
     'local first, no cloud account.'));
-  container.appendChild(setupText('Five short steps.'));
+  container.appendChild(setupText('Seven short steps.'));
   container.appendChild(setupText(
     'Everything except Finish is skippable; each step can be revisited later from System.'));
 }
@@ -1293,7 +1295,176 @@ function renderSetupDiscovery(container) {
   }
 }
 
-/* --- step 5: preferences --- */
+/* --- step 5: household --- */
+
+/* setupPost re-renders the step on success, so the name input reseeds from
+   here — entering several sensors for one person is the common case. */
+let setupHouseholdName = '';
+
+function setupMicroHeading(text) {
+  const h = document.createElement('div');
+  h.className = 'micro';
+  h.textContent = text;
+  return h;
+}
+
+/* Dotted-leader row (ctx-row idiom) with a trailing Remove button; the
+   endpoint always takes a single id and removes the whole declaration. */
+function makeSetupHouseholdRow(label, value, removePath, removeKey, removeId) {
+  const row = document.createElement('div');
+  row.className = 'ctx-row';
+  const l = document.createElement('span');
+  l.className = 'ctx-label';
+  l.textContent = label;
+  const dots = document.createElement('span');
+  dots.className = 'ctx-dots';
+  const v = document.createElement('span');
+  v.className = 'ctx-value';
+  v.textContent = value;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn setup-remove';
+  btn.textContent = 'Remove';
+  btn.addEventListener('click', async () => {
+    await setupPost(removePath, { [removeKey]: removeId });
+  });
+  row.appendChild(l);
+  row.appendChild(dots);
+  row.appendChild(v);
+  row.appendChild(btn);
+  return row;
+}
+
+function makeSetupHouseholdInput(placeholder) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = placeholder;
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  return input;
+}
+
+function renderSetupHousehold(container) {
+  const household = setupObj().household || {};
+  const people = Array.isArray(household.people) ? household.people : [];
+  const contexts = Array.isArray(household.contexts) ? household.contexts : [];
+
+  const peopleSection = document.createElement('div');
+  peopleSection.className = 'setup-household-section';
+  peopleSection.appendChild(setupMicroHeading('People'));
+  peopleSection.appendChild(setupText(
+    'Tell HAVEN which occupancy sensors report who. A person appears in a ' +
+    'room when their sensor says they are there.'));
+  peopleSection.appendChild(setupText(
+    'The first person marked owner can approve automations; HAVEN acts on ' +
+    "behalf of the household's people."));
+  if (!people.length) {
+    peopleSection.appendChild(setupText('No people declared yet.'));
+  }
+  for (const person of people) {
+    if (!person || typeof person !== 'object') continue;
+    const card = document.createElement('div');
+    card.className = 'setup-person';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'setup-person-name';
+    nameEl.textContent = String(person.name || person.person_id || 'unknown');
+    if (person.role === 'owner') {
+      const badge = document.createElement('span');
+      badge.className = 'setup-person-owner micro';
+      badge.textContent = 'OWNER';
+      nameEl.appendChild(badge);
+    }
+    card.appendChild(nameEl);
+    const sources = Array.isArray(person.sources) ? person.sources : [];
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') continue;
+      card.appendChild(makeSetupHouseholdRow(
+        String(source.entity_id || '\u2014'),
+        String(source.room_id || '\u2014'),
+        '/api/setup/household/people/remove',
+        'person_id', person.person_id));
+    }
+    peopleSection.appendChild(card);
+  }
+
+  const personForm = document.createElement('form');
+  personForm.className = 'model-form setup-provider-form';
+  const personName = makeSetupHouseholdInput('name');
+  personName.value = setupHouseholdName;
+  const personEntity = makeSetupHouseholdInput(
+    'occupancy sensor entity id, e.g. binary_sensor.gerron_office_occupancy');
+  const personRoom = makeSetupHouseholdInput('room');
+  const personRole = document.createElement('select');
+  personRole.className = 'setup-person-role';
+  for (const [value, label] of [['member', 'Member'], ['owner', 'Owner']]) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    personRole.appendChild(option);
+  }
+  const addPerson = document.createElement('button');
+  addPerson.type = 'submit';
+  addPerson.textContent = 'Add person';
+  personForm.appendChild(personName);
+  personForm.appendChild(personEntity);
+  personForm.appendChild(personRoom);
+  personForm.appendChild(personRole);
+  personForm.appendChild(addPerson);
+  personForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setupHouseholdName = personName.value;
+    await setupPost('/api/setup/household/people', {
+      name: personName.value.trim(),
+      entity_id: personEntity.value.trim(),
+      room_id: personRoom.value.trim(),
+      role: personRole.value,
+    });
+    personRole.value = 'member';
+  });
+  peopleSection.appendChild(personForm);
+  container.appendChild(peopleSection);
+
+  const contextsSection = document.createElement('div');
+  contextsSection.className = 'setup-household-section';
+  contextsSection.appendChild(setupMicroHeading('Contexts'));
+  contextsSection.appendChild(setupText(
+    'Name the household states HAVEN should track \u2014 an input_boolean ' +
+    'that means working late, vacation mode, and so on.'));
+  if (!contexts.length) {
+    contextsSection.appendChild(setupText('No contexts declared yet.'));
+  }
+  for (const context of contexts) {
+    if (!context || typeof context !== 'object') continue;
+    contextsSection.appendChild(makeSetupHouseholdRow(
+      String(context.label || context.context_id || 'unknown'),
+      String(context.entity_id || '\u2014'),
+      '/api/setup/household/contexts/remove',
+      'context_id', context.context_id));
+  }
+
+  const contextForm = document.createElement('form');
+  contextForm.className = 'model-form setup-provider-form';
+  const contextLabel = makeSetupHouseholdInput('label, e.g. Working late');
+  const contextEntity = makeSetupHouseholdInput(
+    'entity id, e.g. input_boolean.working_late');
+  const addContext = document.createElement('button');
+  addContext.type = 'submit';
+  addContext.textContent = 'Add context';
+  contextForm.appendChild(contextLabel);
+  contextForm.appendChild(contextEntity);
+  contextForm.appendChild(addContext);
+  contextForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await setupPost('/api/setup/household/contexts', {
+      label: contextLabel.value.trim(),
+      entity_id: contextEntity.value.trim(),
+    });
+  });
+  contextsSection.appendChild(contextForm);
+  container.appendChild(contextsSection);
+}
+
+/* --- step 6: preferences --- */
 
 function setupPrefChecked(container, key) {
   const input = container.querySelector('input[data-pref="' + key + '"]');
@@ -1339,7 +1510,7 @@ function renderSetupPreferences(container) {
     prefs.intelligence === true));
 }
 
-/* --- step 6: finish --- */
+/* --- step 7: finish --- */
 
 function renderSetupFinish(container) {
   const s = setupObj();
@@ -1357,6 +1528,14 @@ function renderSetupFinish(container) {
   const enrolled = Array.isArray(discovery.enrolled) ? discovery.enrolled.length : 0;
   container.appendChild(makeCtxRow(
     'Devices enrolled', String(enrolled)));
+  const household = (s.household && typeof s.household === 'object') ? s.household : {};
+  const peopleCount = Array.isArray(household.people) ? household.people.length : 0;
+  const contextsCount = Array.isArray(household.contexts) ? household.contexts.length : 0;
+  container.appendChild(makeCtxRow(
+    'Household',
+    (peopleCount === 0 && contextsCount === 0)
+      ? 'not declared'
+      : peopleCount + ' people \u00b7 ' + contextsCount + ' contexts declared'));
   const prefs = (s.preferences && typeof s.preferences === 'object') ? s.preferences : {};
   container.appendChild(makeCtxRow('Voice control', prefs.voice === true ? 'on' : 'off'));
   container.appendChild(makeCtxRow(
@@ -1368,8 +1547,9 @@ const SETUP_STEP_RENDERERS = {
   2: renderSetupDataDir,
   3: renderSetupProvider,
   4: renderSetupDiscovery,
-  5: renderSetupPreferences,
-  6: renderSetupFinish,
+  5: renderSetupHousehold,
+  6: renderSetupPreferences,
+  7: renderSetupFinish,
 };
 
 function setupRender() {
@@ -1621,6 +1801,404 @@ function renderSystem(payload) {
   els.systemBody.appendChild(engine);
   els.systemBody.appendChild(providers);
   els.systemBody.appendChild(setupSec);
+  els.systemBody.appendChild(makeDiagnosticsSection());
+  els.systemBody.appendChild(makeBackupSection());
+  els.systemBody.appendChild(makeServiceSection());
+}
+
+/* ---------- system diagnostics & backup ---------- */
+
+/* Diagnostics + backup state lives outside the SSE payload: fetched on
+   System view entry and after backup actions; both sections re-render from
+   this state on every renderSystem call. Missing keys render muted '—'. */
+const diagState = {
+  diagnostics: null, // last GET /api/system/diagnostics payload
+  probe: null,       // {tone, text} inline probe result
+  probeBusy: false,
+  backups: null,     // array | null (null = not fetched yet)
+  backupNote: null,  // {tone, text} quiet confirmation
+  backupError: null, // section-scoped error string
+  busy: new Set(),   // backup ids with an in-flight action
+  service: null,     // last GET /api/system/service payload (the .service object)
+  serviceBusy: false,
+  serviceNote: null, // {tone, text} inline install/uninstall result
+};
+
+/* postJSON swallows non-2xx bodies; the diagnostics endpoints signal
+   failure with 400 + {ok:false,error}, so parse the envelope regardless
+   of status. */
+async function diagPost(url, body) {
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body == null ? {} : body),
+    });
+    const data = await res.json().catch(() => null);
+    return { status: res.status, data: data };
+  } catch {
+    return null;
+  }
+}
+
+function diagNumber(v) {
+  return (typeof v === 'number' && Number.isFinite(v)) ? v : null;
+}
+
+/* 'N ua · M ub', '—' when either count is missing. */
+function diagPair(a, ua, b, ub) {
+  if (a == null || b == null) return '—';
+  return a + ' ' + ua + ' · ' + b + ' ' + ub;
+}
+
+/* seconds → '42 s' | '5 min' | '2 h 10 min'; '—' when absent. */
+function fmtUptime(seconds) {
+  const total = diagNumber(seconds);
+  if (total == null || total < 0) return '—';
+  const s = Math.floor(total);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h && m) return h + ' h ' + m + ' min';
+  if (h) return h + ' h';
+  if (m) return m + ' min';
+  return s + ' s';
+}
+
+function makeDiagNote(tone, text) {
+  const p = document.createElement('p');
+  p.className = 'diag-note' + (tone ? ' ' + tone : '');
+  p.textContent = text;
+  return p;
+}
+
+function diagRerender() {
+  if (app.data) renderSystem(app.data);
+}
+
+function makeDiagnosticsSection() {
+  const sec = makeSysSection('DIAGNOSTICS');
+  const d = diagState.diagnostics;
+  if (!d || typeof d !== 'object') {
+    sec.appendChild(makeSysUnavailable());
+    return sec;
+  }
+
+  const world = (d.world && typeof d.world === 'object') ? d.world : {};
+  sec.appendChild(makeCtxRow('World',
+    world.mode === 'home_assistant' ? 'Home Assistant' : 'Simulated household'));
+
+  const dirRow = makeCtxRow('Data dir',
+    typeof d.data_dir === 'string' && d.data_dir ? d.data_dir : '—');
+  dirRow.lastElementChild.className = 'ctx-value diag-mono muted';
+  sec.appendChild(dirRow);
+
+  const provider = (d.provider && typeof d.provider === 'object') ? d.provider : {};
+  const providerText = provider.configured === true
+    ? (typeof provider.base_url === 'string' && provider.base_url ? provider.base_url : 'configured')
+    : 'not configured';
+  const providerRow = makeCtxRow('Provider', providerText);
+  const probeBtn = document.createElement('button');
+  probeBtn.type = 'button';
+  probeBtn.className = 'btn btn-sm';
+  probeBtn.textContent = diagState.probeBusy ? 'Testing…' : 'Test connection';
+  probeBtn.disabled = diagState.probeBusy;
+  probeBtn.addEventListener('click', runProbe);
+  providerRow.appendChild(probeBtn);
+  sec.appendChild(providerRow);
+
+  if (diagState.probe) {
+    sec.appendChild(makeDiagNote(diagState.probe.tone, diagState.probe.text));
+  }
+
+  const hh = (d.household && typeof d.household === 'object') ? d.household : {};
+  sec.appendChild(makeCtxRow('Household',
+    diagPair(diagNumber(hh.people), 'people', diagNumber(hh.contexts), 'contexts')));
+
+  const dev = (d.devices && typeof d.devices === 'object') ? d.devices : {};
+  sec.appendChild(makeCtxRow('Devices',
+    diagPair(diagNumber(dev.enrolled), 'enrolled', diagNumber(dev.registered), 'registered')));
+
+  const rules = (d.rules && typeof d.rules === 'object') ? d.rules : {};
+  const rt = diagNumber(rules.total);
+  const ra = diagNumber(rules.approved);
+  const rp = diagNumber(rules.proposed);
+  sec.appendChild(makeCtxRow('Rules',
+    rt != null && ra != null && rp != null
+      ? rt + ' total · ' + ra + ' approved · ' + rp + ' proposed'
+      : '—'));
+
+  const sched = (d.scheduler && typeof d.scheduler === 'object') ? d.scheduler : {};
+  sec.appendChild(makeCtxRow('Scheduler',
+    diagPair(diagNumber(sched.entries), 'entries', diagNumber(sched.enabled), 'enabled')));
+
+  const events = diagNumber(d.events);
+  sec.appendChild(makeCtxRow('Events', events != null ? String(events) : '—'));
+
+  const models = (d.models && typeof d.models === 'object') ? d.models : {};
+  sec.appendChild(makeCtxRow('Models',
+    diagPair(diagNumber(models.registered), 'registered', diagNumber(models.loaded), 'loaded')));
+
+  const voice = (d.voice && typeof d.voice === 'object') ? d.voice : {};
+  const voiceText = voice.enabled === true
+    ? 'enabled' + (typeof voice.state === 'string' && voice.state ? ' · ' + voice.state : '')
+    : 'disabled';
+  sec.appendChild(makeCtxRow('Voice', voiceText));
+
+  sec.appendChild(makeCtxRow('Uptime', fmtUptime(d.uptime_seconds)));
+
+  if (typeof d.config_error === 'string' && d.config_error) {
+    sec.appendChild(makeDiagNote('diag-warn', d.config_error));
+  }
+  return sec;
+}
+
+async function runProbe() {
+  if (diagState.probeBusy) return;
+  diagState.probeBusy = true;
+  diagRerender();
+  const resp = await diagPost('/api/system/diagnostics/probe', {});
+  diagState.probeBusy = false;
+  const data = resp && resp.data && typeof resp.data === 'object' ? resp.data : null;
+  if (data && data.ok === false) {
+    diagState.probe = {
+      tone: 'diag-warn',
+      text: typeof data.error === 'string' && data.error ? data.error : 'probe failed',
+    };
+  } else if (data && data.ok === true && data.reachable === true) {
+    diagState.probe = { tone: 'diag-ok', text: 'reachable' };
+  } else if (data && data.ok === true) {
+    const detail = typeof data.detail === 'string' && data.detail ? data.detail : 'no detail';
+    diagState.probe = { tone: 'diag-warn', text: 'unreachable: ' + detail };
+  } else {
+    diagState.probe = { tone: 'diag-warn', text: 'probe failed' };
+  }
+  diagRerender();
+}
+
+/* System view entry + after every backup action. No polling. */
+async function refreshSystemDetails() {
+  try {
+    const res = await fetch('/api/system/diagnostics');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.ok && data.diagnostics && typeof data.diagnostics === 'object') {
+        diagState.diagnostics = data.diagnostics;
+      }
+    }
+  } catch {
+    // Backend may not be up yet — muted '—' rows render below.
+  }
+  try {
+    const res = await fetch('/api/system/backups');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.ok && Array.isArray(data.backups)) diagState.backups = data.backups;
+    }
+  } catch {
+    // Same — the list renders 'unavailable' until fetched.
+  }
+  try {
+    const res = await fetch('/api/system/service');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.ok && data.service && typeof data.service === 'object') {
+        diagState.service = data.service;
+      }
+    }
+  } catch {
+    // Same — the status row renders '—' until fetched.
+  }
+  diagRerender();
+}
+
+function makeBackupSection() {
+  const sec = makeSysSection('BACKUP');
+
+  const createBtn = document.createElement('button');
+  createBtn.type = 'button';
+  createBtn.className = 'btn';
+  createBtn.textContent = 'Create backup';
+  createBtn.addEventListener('click', createBackup);
+  sec.appendChild(createBtn);
+
+  if (diagState.backupError) {
+    sec.appendChild(makeDiagNote('diag-warn', diagState.backupError));
+  }
+  if (diagState.backupNote) {
+    sec.appendChild(makeDiagNote(diagState.backupNote.tone, diagState.backupNote.text));
+  }
+
+  const backups = diagState.backups;
+  if (!backups) {
+    sec.appendChild(makeSysUnavailable());
+  } else if (!backups.length) {
+    const none = document.createElement('p');
+    none.className = 'sys-unavailable muted';
+    none.textContent = 'No backups yet.';
+    sec.appendChild(none);
+  } else {
+    for (const backup of backups) sec.appendChild(makeBackupRow(backup));
+  }
+  return sec;
+}
+
+function makeBackupRow(backup) {
+  const b = (backup && typeof backup === 'object') ? backup : {};
+  const id = typeof b.id === 'string' && b.id ? b.id : null;
+  const row = document.createElement('div');
+  row.className = 'feed-row';
+
+  const idEl = document.createElement('span');
+  idEl.className = 'feed-text diag-mono';
+  idEl.textContent = id || 'unknown';
+  row.appendChild(idEl);
+
+  const when = document.createElement('span');
+  when.className = 'muted';
+  when.textContent = typeof b.created_at === 'string' && b.created_at ? b.created_at : '—';
+  row.appendChild(when);
+
+  const files = Array.isArray(b.files) ? b.files.length : 0;
+  const count = document.createElement('span');
+  count.className = 'muted';
+  count.textContent = files + (files === 1 ? ' file' : ' files');
+  row.appendChild(count);
+
+  const busy = id != null && diagState.busy.has(id);
+  const restoreBtn = document.createElement('button');
+  restoreBtn.type = 'button';
+  restoreBtn.className = 'btn btn-sm';
+  restoreBtn.textContent = 'Restore';
+  restoreBtn.disabled = busy;
+  restoreBtn.addEventListener('click', () => { if (id != null) restoreBackup(id); });
+  row.appendChild(restoreBtn);
+
+  const deleteBtn = document.createElement('button');
+  deleteBtn.type = 'button';
+  deleteBtn.className = 'btn btn-sm';
+  deleteBtn.textContent = 'Delete';
+  deleteBtn.disabled = busy;
+  deleteBtn.addEventListener('click', () => { if (id != null) deleteBackup(id); });
+  row.appendChild(deleteBtn);
+
+  return row;
+}
+
+function diagBackupError(resp, fallback) {
+  const data = resp && resp.data && typeof resp.data === 'object' ? resp.data : null;
+  if (data && typeof data.error === 'string' && data.error) return data.error;
+  return fallback;
+}
+
+async function createBackup() {
+  diagState.backupError = null;
+  const resp = await diagPost('/api/system/backup', {});
+  const data = resp && resp.data && typeof resp.data === 'object' ? resp.data : null;
+  if (data && data.ok === true && data.backup && typeof data.backup.id === 'string') {
+    diagState.backupNote = { tone: 'diag-ok', text: 'Backup ' + data.backup.id + ' created' };
+  } else {
+    diagState.backupNote = null;
+    diagState.backupError = diagBackupError(resp, 'Backup failed');
+  }
+  await refreshSystemDetails();
+}
+
+async function restoreBackup(id) {
+  diagState.backupError = null;
+  diagState.busy.add(id);
+  diagRerender();
+  const resp = await diagPost('/api/system/backup/restore', { id: id });
+  diagState.busy.delete(id);
+  const data = resp && resp.data && typeof resp.data === 'object' ? resp.data : null;
+  if (data && data.ok === true) {
+    const result = data.result && typeof data.result === 'object' ? data.result : {};
+    diagState.backupNote = result.restart_required === true
+      ? { tone: 'diag-warn', text: 'Restored. Restart HAVEN to apply.' }
+      : { tone: 'diag-ok', text: 'Restored.' };
+  } else {
+    diagState.backupNote = null;
+    diagState.backupError = diagBackupError(resp, 'Restore failed');
+  }
+  await refreshSystemDetails();
+}
+
+async function deleteBackup(id) {
+  diagState.backupError = null;
+  diagState.busy.add(id);
+  diagRerender();
+  const resp = await diagPost('/api/system/backup/delete', { id: id });
+  diagState.busy.delete(id);
+  const data = resp && resp.data && typeof resp.data === 'object' ? resp.data : null;
+  if (!data || data.ok !== true) {
+    diagState.backupError = diagBackupError(resp, 'Delete failed');
+  }
+  await refreshSystemDetails();
+}
+
+/* Logon-start (per-user Task Scheduler task) status + install/remove. The
+   task only affects the NEXT sign-in — the running server is untouched.
+   Missing keys render muted '—'; nothing here throws on a null envelope. */
+function makeServiceSection() {
+  const sec = makeSysSection('SERVICE');
+  const svc = diagState.service;
+  if (!svc || typeof svc !== 'object') {
+    const row = makeCtxRow('Status', '—');
+    row.lastElementChild.className = 'ctx-value muted';
+    sec.appendChild(row);
+    return sec;
+  }
+
+  const installed = svc.installed === true;
+  const running = svc.running === true;
+  const statusText = !installed
+    ? 'Not installed'
+    : running ? 'Installed · running' : 'Installed · starts at next logon';
+  const statusRow = makeCtxRow('Status', statusText);
+  statusRow.lastElementChild.className = installed && running ? 'ctx-value ok' : 'ctx-value muted';
+  sec.appendChild(statusRow);
+
+  if (typeof svc.detail === 'string' && svc.detail) {
+    sec.appendChild(makeDiagNote(null, svc.detail));
+  }
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn';
+  btn.textContent = diagState.serviceBusy
+    ? 'Working…'
+    : installed ? 'Remove' : 'Install — start at logon';
+  btn.disabled = diagState.serviceBusy;
+  btn.addEventListener('click', () => runServiceAction(installed ? 'uninstall' : 'install'));
+  sec.appendChild(btn);
+
+  if (diagState.serviceNote) {
+    sec.appendChild(makeDiagNote(diagState.serviceNote.tone, diagState.serviceNote.text));
+  }
+
+  const explainer = document.createElement('p');
+  explainer.className = 'diag-note';
+  explainer.textContent = 'Runs HAVEN at sign-in as this user. The current session is unaffected.';
+  sec.appendChild(explainer);
+  return sec;
+}
+
+async function runServiceAction(action) {
+  if (diagState.serviceBusy) return;
+  diagState.serviceBusy = true;
+  diagState.serviceNote = null;
+  diagRerender();
+  const resp = await diagPost('/api/system/service/' + action, {});
+  diagState.serviceBusy = false;
+  const data = resp && resp.data && typeof resp.data === 'object' ? resp.data : null;
+  if (data && data.ok === true) {
+    diagState.serviceNote = {
+      tone: 'diag-ok',
+      text: typeof data.detail === 'string' && data.detail ? data.detail : 'done',
+    };
+  } else {
+    diagState.serviceNote = { tone: 'diag-warn', text: diagBackupError(resp, 'Request failed') };
+  }
+  await refreshSystemDetails();
 }
 
 /* ---------- models view ---------- */
@@ -2381,6 +2959,7 @@ function switchView(view, label) {
   app.view = view;
   els.center.dataset.view = view;
   if (view === 'models') refreshModels();
+  if (view === 'system') refreshSystemDetails();
   if (view === 'placeholder') {
     els.placeholderNote.textContent = (label || 'This view') + ' is not in this slice.';
   }
@@ -2397,6 +2976,125 @@ function updateDevButtons() {
   for (const btn of els.devButtons) {
     btn.classList.toggle('active', btn.dataset.preview === app.preview);
   }
+}
+
+/* ---------- notifications ----------
+   Off-screen extension of the two attention meanings only: glow "permission"
+   (HAVEN needs you) and glow "critical" (something is wrong). Never fires
+   for acting/completed/idle. Opt-in only; failures never touch rendering. */
+
+const NOTIF_STORE_KEY = 'haven.notifications.enabled';
+
+const notifState = {
+  enabled: false,
+  permission: 'default',
+  lastKey: null,
+  btn: null,
+};
+
+function notifKey(state) {
+  if (!state) return null;
+  if (state.glow === 'permission') {
+    const pending = state.pending;
+    if (!Array.isArray(pending) || pending.length === 0) return null;
+    const req = pending[0] || {};
+    return 'permission:' + (req.request_id != null ? req.request_id : 'unknown');
+  }
+  if (state.glow === 'critical') {
+    return 'critical:' + (state.revision != null ? state.revision : '0');
+  }
+  return null; // acting / completed / idle — ordinary activity stays quiet
+}
+
+function syncNotifBell() {
+  if (!notifState.btn) return;
+  const granted = notifState.permission === 'granted';
+  const on = notifState.enabled && granted;
+  notifState.btn.classList.toggle('on', on);
+  notifState.btn.title = on
+    ? 'Notifications on'
+    : (notifState.permission === 'denied'
+        ? 'Notifications blocked by the browser'
+        : 'Enable notifications');
+}
+
+function maybeNotify(state) {
+  try {
+    if (!('Notification' in window)) return;
+    notifState.permission = Notification.permission;
+    syncNotifBell();
+    const key = notifKey(state);
+    if (!key || key === notifState.lastKey) return;
+    if (!notifState.enabled || Notification.permission !== 'granted') return;
+    let title = 'HAVEN';
+    let body = 'Attention needed';
+    if (key.indexOf('permission:') === 0) {
+      const req = (state.pending && state.pending[0]) || {};
+      title = req.title || 'Permission requested';
+      body = req.detail || '';
+    } else if (state.status && state.status.line) {
+      body = state.status.line;
+    }
+    const n = new Notification(title, { body: body, tag: key, silent: false });
+    n.onclick = () => { window.focus(); };
+    notifState.lastKey = key;
+  } catch {
+    // best-effort by doctrine — a failed notification never breaks rendering
+  }
+}
+
+function initNotifBell() {
+  if (!('Notification' in window)) return; // unsupported — no button at all
+  notifState.permission = Notification.permission;
+  let stored = null;
+  try {
+    stored = localStorage.getItem(NOTIF_STORE_KEY);
+  } catch {
+    // private mode etc. — session-only opt-in
+  }
+  notifState.enabled = stored === '1';
+
+  const host = els.pill ? els.pill.parentElement : null;
+  if (!host) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'notif-bell';
+  btn.setAttribute('aria-label', 'Notifications');
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(svgNS, 'path');
+  path.setAttribute('d',
+    'M8 1.8a3.3 3.3 0 0 0-3.3 3.3v2.7l-1.4 2.1h9.4l-1.4-2.1V5.1A3.3 3.3 0 0 0 8 1.8z' +
+    'M6.4 11.9a1.6 1.6 0 0 0 3.2 0');
+  svg.appendChild(path);
+  btn.appendChild(svg);
+
+  btn.addEventListener('click', async () => {
+    try {
+      if (Notification.permission === 'default') {
+        const result = await Notification.requestPermission();
+        notifState.permission = result;
+        notifState.enabled = result === 'granted';
+      } else if (Notification.permission === 'denied') {
+        btn.title = 'Notifications blocked by the browser';
+        return; // browsers require a settings change for denied
+      }
+      try {
+        localStorage.setItem(NOTIF_STORE_KEY, notifState.enabled ? '1' : '0');
+      } catch {
+        // persistence best-effort
+      }
+      syncNotifBell();
+    } catch {
+      // never let the bell break the topbar
+    }
+  });
+
+  notifState.btn = btn;
+  host.insertBefore(btn, els.pill); // bell sits left of the state pill
+  syncNotifBell();
 }
 
 /* ---------- events & boot ---------- */
@@ -2576,6 +3274,7 @@ function wireEvents() {
 
 async function boot() {
   startClock();
+  initNotifBell();
   wireEvents();
 
   try {
@@ -2612,6 +3311,12 @@ async function boot() {
 
   // EventSource auto-reconnects; nothing to do but stay alive.
   es.addEventListener('error', () => {});
+
+  /* installable PWA: register the service worker last so a failed or slow
+     registration never delays first render; silent failure is fine */
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
 }
 
 boot();
