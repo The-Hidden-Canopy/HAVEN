@@ -1,9 +1,10 @@
 """Direct (human-initiated) actions: a member's command is the authorization.
 
 A direct action executes with no rule proposed, approved, or stored; the
-sentinel `direct-<request_id>` rule id on the request marks the receipt's
-origin, and the store's event log shows the same event types as the rule
-path (ACTION_AUTHORIZED / ACTION_EXECUTED, or ACTION_BLOCKED).
+request's `origin` field (ActionOrigin.DIRECT, never a rule_id string)
+marks the receipt's provenance, and the store's event log shows the same
+event types as the rule path (ACTION_AUTHORIZED / ACTION_EXECUTED, or
+ACTION_BLOCKED).
 """
 
 from datetime import timedelta
@@ -13,21 +14,29 @@ import pytest
 from haven.authority.policy import AuthorityEngine
 from haven.core.domain import (
     ActionKind,
+    ActionOrigin,
+    ActionRecord,
     ActionRequest,
     ActionStatus,
+    AuthorityDecision,
     ChangeOrigin,
     ConfirmationToken,
     ContextState,
+    DecisionCode,
     DecisionStatus,
     DeviceSelector,
     DeviceState,
     EventType,
     PresenceState,
     RoleTier,
+    Rule,
+    Transition,
+    TransitionKind,
     WorldSnapshot,
 )
 from haven.core.store import HavenStore
 from haven.devices import CapabilityDescriptor, ControlClass, DeviceManifest, DeviceRegistry
+from haven.errors import InvalidTransition
 from haven.integrations.home_assistant import FixtureHomeAssistant
 from haven.intelligence.gateway import ScriptedIntelligenceProvider
 from haven.runtime import AmbiguousTargetError, HavenRuntime
@@ -140,7 +149,9 @@ def test_member_direct_safe_action_executes_without_creating_a_rule() -> None:
 
     assert receipt.outcome == "executed"
     assert receipt.decision.code.value == "allowed"
-    assert receipt.requested_action.rule_id.startswith("direct-")
+    assert receipt.requested_action.origin is ActionOrigin.DIRECT
+    assert receipt.requested_action.rule_id == receipt.requested_action.request_id
+    assert receipt.to_dict()["requested_action"]["origin"] == "direct"
     assert receipt.interpretation == "I am going to bed; turn the bedroom lights off right now."
     assert receipt.evidence == ()
     # no rule entered the store for a direct action
@@ -388,13 +399,14 @@ def test_unknown_capability_fails_closed_for_direct_actions() -> None:
         request_id="request-direct-1",
         household_id=resident.household_id,
         requested_by=resident.actor_id,
-        rule_id="direct-request-direct-1",
+        rule_id="request-direct-1",
         action_kind=ActionKind.SET_THERMOSTAT,
         target_device_id="bedroom_lights",
         parameters=(("temperature", 21),),
         justification="Set the thermostat.",
         evidence_snapshot_id="direct-snapshot",
         requested_at=now,
+        origin=ActionOrigin.DIRECT,
         capability="self_destruct",
     )
 
@@ -404,3 +416,167 @@ def test_unknown_capability_fails_closed_for_direct_actions() -> None:
 
     assert decision.status == DecisionStatus.DENY
     assert decision.code.value == "unknown_capability"
+
+
+def test_origin_is_typed_and_coerced_from_str() -> None:
+    runtime, store, adapter, resident, owner = _runtime()
+    now = BASE_TIME + timedelta(minutes=2)
+
+    coerced = ActionRequest(
+        request_id="request-direct-coerce",
+        household_id=resident.household_id,
+        requested_by=resident.actor_id,
+        rule_id="request-direct-coerce",
+        action_kind=ActionKind.TURN_LIGHT_OFF,
+        target_device_id="bedroom_lights",
+        parameters=(),
+        justification="Turn it off.",
+        evidence_snapshot_id="direct-snapshot",
+        requested_at=now,
+        origin="direct",
+    )
+    assert coerced.origin is ActionOrigin.DIRECT
+
+    default_origin = ActionRequest(
+        request_id="request-rule-default",
+        household_id=resident.household_id,
+        requested_by=resident.actor_id,
+        rule_id="rule-1",
+        action_kind=ActionKind.TURN_LIGHT_OFF,
+        target_device_id="bedroom_lights",
+        parameters=(),
+        justification="Apply the rule.",
+        evidence_snapshot_id="direct-snapshot",
+        requested_at=now,
+    )
+    assert default_origin.origin is ActionOrigin.RULE
+
+    with pytest.raises(ValueError):
+        ActionRequest(
+            request_id="request-bad-origin",
+            household_id=resident.household_id,
+            requested_by=resident.actor_id,
+            rule_id="rule-1",
+            action_kind=ActionKind.TURN_LIGHT_OFF,
+            target_device_id="bedroom_lights",
+            parameters=(),
+            justification="Apply the rule.",
+            evidence_snapshot_id="direct-snapshot",
+            requested_at=now,
+            origin="automation",
+        )
+
+
+def test_decide_direct_rejects_rule_origin_requests() -> None:
+    runtime, store, adapter, resident, owner = _runtime()
+    now = BASE_TIME + timedelta(minutes=2)
+    rule = Rule(rule_id="rule-1", draft=_explicit_draft(resident))
+    request = ActionRequest(
+        request_id="request-rule-1",
+        household_id=resident.household_id,
+        requested_by=resident.actor_id,
+        rule_id=rule.rule_id,
+        action_kind=ActionKind.TURN_LIGHT_OFF,
+        target_device_id="bedroom_lights",
+        parameters=(),
+        justification="Apply the rule.",
+        evidence_snapshot_id="direct-snapshot",
+        requested_at=now,
+        origin=ActionOrigin.RULE,
+    )
+
+    with pytest.raises(ValueError, match=r"decide_direct\(\) only evaluates direct-origin"):
+        runtime.authority.decide_direct(request, principal=resident, world=_direct_world(resident), now=now)
+
+
+def test_decide_rejects_direct_origin_requests() -> None:
+    runtime, store, adapter, resident, owner = _runtime()
+    now = BASE_TIME + timedelta(minutes=2)
+    rule = Rule(rule_id="rule-1", draft=_explicit_draft(resident))
+    request = ActionRequest(
+        request_id="request-direct-1",
+        household_id=resident.household_id,
+        requested_by=resident.actor_id,
+        rule_id="request-direct-1",
+        action_kind=ActionKind.TURN_LIGHT_OFF,
+        target_device_id="bedroom_lights",
+        parameters=(),
+        justification="Turn it off now.",
+        evidence_snapshot_id="direct-snapshot",
+        requested_at=now,
+        origin=ActionOrigin.DIRECT,
+    )
+
+    with pytest.raises(ValueError, match=r"decide\(\) only evaluates rule-origin"):
+        runtime.authority.decide(
+            request, principal=resident, rule=rule, world=_direct_world(resident), now=now
+        )
+
+
+def _authorized_record(request: ActionRequest) -> ActionRecord:
+    return ActionRecord(
+        action_id=f"action-{request.request_id}",
+        request=request,
+        status=ActionStatus.AUTHORIZED,
+        decision=AuthorityDecision(DecisionStatus.ALLOW, DecisionCode.ALLOWED, "allowed by fixture"),
+    )
+
+
+def _authorize(store: HavenStore, record: ActionRecord, *, actor_id: str, now) -> None:
+    store.execute_transition(
+        Transition(
+            kind=TransitionKind.AUTHORIZE_ACTION,
+            household_id=store.household_id,
+            actor_id=actor_id,
+            payload=record,
+            correlation_id=record.request.request_id,
+        ),
+        now=now,
+    )
+
+
+def test_store_authorize_gate_skips_the_rule_requirement_for_direct_origin() -> None:
+    runtime, store, adapter, resident, owner = _runtime()
+    now = BASE_TIME + timedelta(minutes=2)
+    request = ActionRequest(
+        request_id="request-direct-gate",
+        household_id=resident.household_id,
+        requested_by=resident.actor_id,
+        rule_id="request-direct-gate",  # no stored rule has this id; none is needed
+        action_kind=ActionKind.TURN_LIGHT_OFF,
+        target_device_id="bedroom_lights",
+        parameters=(),
+        justification="Turn it off now.",
+        evidence_snapshot_id="direct-snapshot",
+        requested_at=now,
+        origin=ActionOrigin.DIRECT,
+    )
+
+    _authorize(store, _authorized_record(request), actor_id=resident.actor_id, now=now)
+
+    assert store.state.rules == ()  # still no rule in the store for a direct action
+    assert len(store.state.actions) == 1
+    assert store.state.actions[0].request.origin is ActionOrigin.DIRECT
+
+
+def test_store_authorize_gate_still_fails_closed_for_unknown_rule_ids() -> None:
+    runtime, store, adapter, resident, owner = _runtime()
+    now = BASE_TIME + timedelta(minutes=2)
+    request = ActionRequest(
+        request_id="request-rule-gate",
+        household_id=resident.household_id,
+        requested_by=resident.actor_id,
+        rule_id="rule-not-in-store",
+        action_kind=ActionKind.TURN_LIGHT_OFF,
+        target_device_id="bedroom_lights",
+        parameters=(),
+        justification="Apply the rule.",
+        evidence_snapshot_id="direct-snapshot",
+        requested_at=now,
+        origin=ActionOrigin.RULE,
+    )
+
+    with pytest.raises(InvalidTransition, match="an action requires an approved rule"):
+        _authorize(store, _authorized_record(request), actor_id=resident.actor_id, now=now)
+
+    assert store.state.actions == ()

@@ -183,15 +183,16 @@ def test_chat_close_the_garage_asks_confirmation_as_a_direct_action() -> None:
     state = director.chat("close the garage")
 
     assert len(state["pending"]) == 1
-    # A direct action is not tied to the stored garage rule; the sentinel
-    # rule id on the card says so honestly.
+    # A direct action is not tied to the stored garage rule; the card's
+    # rule_id is the action's own request id as a correlation key, and the
+    # request's origin -- never an id string -- marks it as direct.
     assert state["pending"][0]["rule_id"] != director.garage_rule_id
-    assert state["pending"][0]["rule_id"].startswith("direct-")
+    assert state["pending"][0]["rule_id"] == state["pending"][0]["request_id"]
     assert state["pending"][0]["title"] == "Close the garage door?"
     assert state["glow"] == "permission"
     assert director.house.garage_open() is True
     # Direct actions never touch the rule store.
-    assert len(director.store.state.rules) == 2
+    assert len(director.store.state.rules) == 3
 
 
 def test_chat_unknown_intent_gets_a_plain_refusal() -> None:
@@ -339,7 +340,7 @@ def test_chat_light_off_with_two_lights_in_focus_asks_which_one() -> None:
         "text": "Which one? There are 2 lights in the office.",
     }
     assert [c for c in director.adapter.commands if c.service == "light.turn_off"] == []
-    assert len(director.store.state.rules) == 2
+    assert len(director.store.state.rules) == 3
 
 
 def test_chat_named_room_light_off_runs_directly_without_a_rule() -> None:
@@ -350,7 +351,7 @@ def test_chat_named_room_light_off_runs_directly_without_a_rule() -> None:
     assert state["glow"] == "completed"
     assert _device(state, "office", "office_light")["is_on"] is False
     assert state["conversation"][-1] == {"from": "haven", "text": "Done — the office light is off."}
-    assert len(director.store.state.rules) == 2  # no rule created for a direct action
+    assert len(director.store.state.rules) == 3  # no rule created for a direct action
     light_commands = [c for c in director.adapter.commands if c.service == "light.turn_off"]
     assert len(light_commands) == 1
     assert light_commands[0].target_device_id == "office_light"
@@ -465,7 +466,7 @@ def test_activity_and_memory_surface_the_store() -> None:
     assert set(first) == {"event_id", "event_type", "actor_id", "occurred_at", "summary"}
     assert "Rule approved: close the garage by gerron" in {row["summary"] for row in state["activity"]}
 
-    assert len(state["memory"]) == 2
+    assert len(state["memory"]) == 3
     entry = state["memory"][0]
     assert set(entry) == {"entry_id", "kind", "content", "recorded_at"}
     assert all(row["kind"] == "approved_rule" for row in state["memory"])
@@ -473,6 +474,7 @@ def test_activity_and_memory_surface_the_store() -> None:
         "When the garage door has been open a while with no nearby motion, ask to close it.",
         "Record a short clip on the driveway camera when asked; the rule "
         "only runs while the camera's own evidence is current.",
+        "Turn off the office light at 22:35 every night.",
     }
 
 
@@ -509,8 +511,8 @@ def test_chat_light_off_runs_as_a_direct_action_without_creating_a_rule() -> Non
 
     rows = _automation_rows(state)
     # The direct action bypasses the propose/approve lifecycle entirely.
-    assert len(rows) == 2
-    assert len(director.store.state.rules) == 2
+    assert len(rows) == 3
+    assert len(director.store.state.rules) == 3
     assert _device(state, "office", "office_light")["is_on"] is False
     light_commands = [c for c in director.adapter.commands if c.service == "light.turn_off"]
     assert len(light_commands) == 1
@@ -626,7 +628,7 @@ def test_voice_utterance_close_the_garage_matches_typed_chat() -> None:
     assert state["voice"] == {"state": "dormant", "mic": False}
     assert len(state["pending"]) == 1
     assert state["pending"][0]["rule_id"] != director.garage_rule_id
-    assert state["pending"][0]["rule_id"].startswith("direct-")
+    assert state["pending"][0]["rule_id"] == state["pending"][0]["request_id"]
     assert state["glow"] == "permission"
     assert {"from": "user", "text": "close the garage"} in state["conversation"]
     assert director.house.garage_open() is True
@@ -751,3 +753,171 @@ def test_reset_clears_an_engaged_voice_session() -> None:
     # Refractory is cleared too: wake works immediately after a reset.
     assert director.voice.wake() is True
     director.voice.reset()
+
+
+# -- the scheduler: quiet architectural operation, another requester -------------
+
+
+def _clock_box(start=NOW):
+    box = {"now": start}
+    return box, lambda: box["now"]
+
+
+def _due() -> datetime:
+    return NOW.replace(hour=22, minute=35)
+
+
+def test_run_scheduler_tick_executes_the_office_light_schedule() -> None:
+    box, clock = _clock_box()
+    director = DemoDirector(clock=clock)
+    box["now"] = _due()
+
+    receipts = director.run_scheduler_tick()
+
+    assert len(receipts) == 1
+    receipt = receipts[0]
+    assert receipt.outcome == "executed"
+    assert receipt.requested_action.rule_id == director.office_light_rule_id
+    assert receipt.requested_action.justification == f"schedule due at {_due().isoformat()}"
+    light_commands = [c for c in director.adapter.commands if c.service == "light.turn_off"]
+    assert len(light_commands) == 1
+    assert light_commands[0].target_device_id == "office_light"
+
+    state = director.state()
+    assert _device(state, "office", "office_light")["is_on"] is False
+    assert state["glow"] == "completed"
+    assert state["glow_target"] == "office"
+    # Successes stay silent: only the two scenario lines are present.
+    texts = [entry["text"] for entry in state["conversation"]]
+    assert "Garage has been open 18 minutes with no nearby motion." in texts
+    assert "Want me to close it?" in texts
+    assert len(texts) == 2
+    # The run shows up in the operational layer and the activity feed.
+    rows = {row["rule_id"]: row for row in state["scheduler"]}
+    office = rows[director.office_light_rule_id]
+    assert office["last_outcome"] == "executed"
+    assert office["last_fired_at"] == _due().isoformat()
+    assert office["due_now"] is False
+    executed = [row for row in state["activity"] if row["event_type"] == "action_executed"]
+    assert len(executed) == 1
+
+
+def test_scheduler_blocked_run_adds_a_quiet_conversation_line() -> None:
+    director = _director()
+    director.scheduler.set_enabled(director.camera_rule_id, True)
+    director.house.set_camera_down(True)
+
+    receipts = director.run_scheduler_tick(now=NOW)
+
+    assert len(receipts) == 1
+    assert receipts[0].decision.code == DecisionCode.EVIDENCE_UNAVAILABLE
+    state = director.state()
+    assert state["glow"] == "critical"
+    assert state["glow_target"] == "driveway"
+    texts = [entry["text"] for entry in state["conversation"]]
+    assert (
+        "I was due to run record a driveway clip but evidence_unavailable: "
+        in texts[-1]
+    )
+    rows = {row["rule_id"]: row for row in state["scheduler"]}
+    assert rows[director.camera_rule_id]["last_outcome"] == "unavailable"
+
+
+def test_scheduler_does_not_refire_within_the_window() -> None:
+    box, clock = _clock_box()
+    director = DemoDirector(clock=clock)
+    box["now"] = _due()
+
+    assert len(director.run_scheduler_tick()) == 1
+    box["now"] = _due() + timedelta(minutes=2)
+    assert director.run_scheduler_tick() == []
+    light_commands = [c for c in director.adapter.commands if c.service == "light.turn_off"]
+    assert len(light_commands) == 1
+
+
+def test_state_includes_scheduler_status_rows() -> None:
+    director = _director()
+
+    rows = {row["rule_id"]: row for row in director.state()["scheduler"]}
+
+    assert set(rows) == {
+        director.garage_rule_id,
+        director.camera_rule_id,
+        director.office_light_rule_id,
+    }
+    for row in rows.values():
+        assert set(row) == {
+            "rule_id",
+            "summary",
+            "enabled",
+            "due_now",
+            "next_run_at",
+            "last_fired_at",
+            "last_outcome",
+        }
+    office = rows[director.office_light_rule_id]
+    assert office["summary"] == "turn off the office light at 22:35 every day"
+    assert office["enabled"] is True
+    assert office["due_now"] is False
+    assert office["next_run_at"] == "2026-09-16T22:35:00+00:00"
+    assert office["last_fired_at"] is None
+    assert office["last_outcome"] is None
+    # The manual-flow rules carry 24h schedule windows as an "ask whenever
+    # invoked" affordance; they stay out of the scheduler.
+    assert rows[director.garage_rule_id]["enabled"] is False
+    assert rows[director.camera_rule_id]["enabled"] is False
+
+
+def test_scheduler_enabled_toggle_shows_up_in_state() -> None:
+    director = _director()
+
+    director.set_scheduler_enabled(director.office_light_rule_id, False)
+
+    rows = {row["rule_id"]: row for row in director.state()["scheduler"]}
+    assert rows[director.office_light_rule_id]["enabled"] is False
+    # A disabled schedule does not fire even at its due instant.
+    receipts = director.run_scheduler_tick(now=_due())
+    assert receipts == []
+    assert _device(director.state(), "office", "office_light")["is_on"] is True
+
+
+def test_scheduler_thread_ticks_and_stops_cleanly() -> None:
+    director = DemoDirector(clock=lambda: NOW, scheduler_tick_seconds=0.05)
+    ticks: list = []
+    original = director.run_scheduler_tick
+
+    def spy(now=None):
+        ticks.append(now)
+        return original(now=now)
+
+    director.run_scheduler_tick = spy
+    director.start_scheduler()
+    director.start_scheduler()  # idempotent
+    deadline = time.monotonic() + 5
+    while not ticks and time.monotonic() < deadline:
+        time.sleep(0.01)
+    thread = director._scheduler_thread
+    director.stop_scheduler()
+
+    assert ticks
+    assert director._scheduler_thread is None
+    assert thread is not None and not thread.is_alive()
+    # Stopping twice, or never starting, is a no-op.
+    director.stop_scheduler()
+    fresh = _director()
+    fresh.stop_scheduler()
+
+
+def test_reset_stops_and_restarts_the_scheduler_thread() -> None:
+    director = DemoDirector(clock=lambda: NOW, scheduler_tick_seconds=0.05)
+    director.start_scheduler()
+    first = director._scheduler_thread
+    assert first is not None
+
+    director.reset()
+
+    assert director._scheduler_thread is not None
+    assert director._scheduler_thread is not first
+    assert not first.is_alive()
+    director.stop_scheduler()
+    assert director._scheduler_thread is None

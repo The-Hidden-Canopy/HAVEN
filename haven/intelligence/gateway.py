@@ -25,6 +25,7 @@ from uuid import uuid4
 from haven.core.domain import ActionKind, AuthorityDecision, Principal, RuleDraft
 from haven.core.time import require_aware_utc
 
+from .intents import Intent
 from .worldview import WorldView
 
 
@@ -125,6 +126,22 @@ class IntelligenceProvider(Protocol):
     def explain(self, context: AgentContext, decision: AuthorityDecision) -> AgentResponse:
         """Return a human-facing explanation of an authority decision."""
 
+    def interpret_intent(
+        self, text: str, *, context: AgentContext, principal: Principal, now: datetime
+    ) -> Intent:
+        """Propose exactly ONE intent form for an utterance.
+
+        This is THE agent-agnostic classification seam: an LLM, a planner, a
+        deterministic parser, an IDA, or a community provider all propose the
+        same `Intent` union, and HAVEN routes it -- a query is answered from
+        the world view, an action proposal crosses to authority through the
+        direct path, a rule draft enters the propose/approve lifecycle, a
+        clarification goes back to the human, and a conversation message gets
+        a reply. `interpret`/`propose_rule` remain for structured rule
+        drafting; intent classification for arbitrary utterances lives here.
+        Nothing returned here executes.
+        """
+
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex}"
@@ -182,6 +199,20 @@ class ScriptedIntelligenceProvider:
         if not self._matches_example(text):
             raise UnsupportedIntent("the fixture provider has no declared interpretation for this text")
         return self._draft(text=text, household_id=principal.household_id, actor_id=principal.actor_id)
+
+    def interpret_intent(
+        self, text: str, *, context: AgentContext, principal: Principal, now: datetime
+    ) -> Intent:
+        require_aware_utc(now, name="interpretation time")
+        # Imported here so the interpreter module can import UnsupportedIntent
+        # from this module without a circular import.
+        from .interpreter import DeterministicIntentInterpreter
+
+        def draft_for(phrase: str, draft_principal: Principal, draft_now: datetime) -> RuleDraft:
+            return self.interpret(phrase, principal=draft_principal, now=draft_now)
+
+        interpreter = DeterministicIntentInterpreter(draft_for=draft_for, principal=principal, now=now)
+        return interpreter.classify(text, world=context.world, room_focus=context.room_focus)
 
     def chat(self, context: AgentContext, message: str) -> AgentResponse:
         _require_text(message, name="message")

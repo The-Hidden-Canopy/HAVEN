@@ -11,6 +11,7 @@ from haven.audit.receipts import ActionReceipt
 from haven.authority.policy import AuthorityEngine
 from haven.core.domain import (
     ActionKind,
+    ActionOrigin,
     ActionRecord,
     ActionRequest,
     ActionStatus,
@@ -20,7 +21,6 @@ from haven.core.domain import (
     DecisionStatus,
     DeviceCommand,
     DeviceSelector,
-    DIRECT_ACTION_RULE_ID_PREFIX,
     DomainEvent,
     EventType,
     EvidenceRef,
@@ -380,6 +380,7 @@ class HavenRuntime:
             justification=justification,
             evidence_snapshot_id=world.snapshot_id,
             requested_at=now,
+            origin=ActionOrigin.RULE,
             confirmation_token=confirmation_token,
             capability=rule.draft.capability,
         )
@@ -438,15 +439,19 @@ class HavenRuntime:
         A member's direct command is the authorization; automation needs a
         rule, a command does not -- so no rule is proposed, approved, or
         stored, and `AuthorityEngine.decide_direct()` (not `decide()`)
-        judges the request. The built `ActionRequest` still requires a
-        non-empty `rule_id`, so it carries the sentinel
-        `direct-<request_id>` (`DIRECT_ACTION_RULE_ID_PREFIX`); no rule
-        with that id exists or is created, and the sentinel is what marks
-        the receipt's origin as direct. The receipt's interpretation is the
-        justification itself -- for a direct command there is no draft
-        interpretation, and the human's stated reason is exactly what was
-        understood. Evidence is empty for the same reason: the human
-        asserted the command, so nothing is inferred from world evidence.
+        judges the request. The built `ActionRequest` is marked
+        `origin=ActionOrigin.DIRECT`: origin is the typed seam between
+        human-command authorization and automation authorization, and the
+        store's AUTHORIZE gate branches on it rather than on any string
+        sentinel. `ActionRequest.rule_id` must still be non-empty, so it
+        carries the request's own id as an honest correlation key: no rule
+        with that id exists or is created, and the receipt's origin is the
+        origin field, never the rule_id's spelling. The receipt's
+        interpretation is the justification itself -- for a direct command
+        there is no draft interpretation, and the human's stated reason is
+        exactly what was understood. Evidence is empty for the same reason:
+        the human asserted the command, so nothing is inferred from world
+        evidence.
 
         Exactly one of `target_device_id` / `target_selector` must be set.
         A selector that resolves to zero devices raises `ValueError` naming
@@ -461,7 +466,10 @@ class HavenRuntime:
         if target_selector is not None:
             target_device_id = self._resolve_direct_target(target_selector)
         request_id = confirmation_token.request_id if confirmation_token is not None else _new_id("request")
-        rule_id = f"{DIRECT_ACTION_RULE_ID_PREFIX}{request_id}"
+        # No rule exists for a direct action; the request's own id is the
+        # honest correlation key for receipts, events, and confirmation
+        # binding, and origin (never this string) carries the provenance.
+        rule_id = request_id
         request = ActionRequest(
             request_id=request_id,
             household_id=self.store.household_id,
@@ -473,6 +481,7 @@ class HavenRuntime:
             justification=justification,
             evidence_snapshot_id=world.snapshot_id,
             requested_at=now,
+            origin=ActionOrigin.DIRECT,
             confirmation_token=confirmation_token,
         )
         decision = self.authority.decide_direct(

@@ -420,3 +420,101 @@ def test_sse_state_events_carry_voice_transitions(server) -> None:
                 break
     assert voice_seen == {"state": "wake", "mic": False}
     connection.close()
+
+
+# -- scheduler endpoints --------------------------------------------------------
+
+
+def test_get_scheduler_lists_status_rows(server):
+    _, director, port = server
+
+    status, body = _get_json(port, "/api/scheduler")
+
+    assert status == 200
+    assert body["ok"] is True
+    rows = {row["rule_id"]: row for row in body["scheduler"]}
+    assert set(rows) == {
+        director.garage_rule_id,
+        director.camera_rule_id,
+        director.office_light_rule_id,
+    }
+    office = rows[director.office_light_rule_id]
+    assert set(office) == {
+        "rule_id",
+        "summary",
+        "enabled",
+        "due_now",
+        "next_run_at",
+        "last_fired_at",
+        "last_outcome",
+    }
+    assert office["enabled"] is True
+    assert office["due_now"] is False
+
+
+def test_scheduler_tick_endpoint_runs_one_synchronous_tick(server):
+    _, director, port = server
+
+    status, body = _post(port, "/api/scheduler/tick")
+
+    assert status == 200
+    assert body["ok"] is True
+    assert isinstance(body["scheduler"], list)
+    # FIXED_NOW (20:00) is outside the office rule's 22:35 window.
+    rows = {row["rule_id"]: row for row in body["scheduler"]}
+    assert rows[director.office_light_rule_id]["last_fired_at"] is None
+    assert [c for c in director.adapter.commands if c.service == "light.turn_off"] == []
+
+
+def test_scheduler_enabled_toggle_endpoint_flips_and_refreshes(server):
+    _, director, port = server
+
+    status, body = _post(
+        port, f"/api/scheduler/rules/{director.office_light_rule_id}/enabled", {"enabled": False}
+    )
+
+    assert status == 200
+    assert body["ok"] is True
+    rows = {row["rule_id"]: row for row in body["scheduler"]}
+    assert rows[director.office_light_rule_id]["enabled"] is False
+
+    # The toggle rides the state payload too.
+    _, state = _get_json(port, "/api/state")
+    state_rows = {row["rule_id"]: row for row in state["scheduler"]}
+    assert state_rows[director.office_light_rule_id]["enabled"] is False
+
+    _, body = _post(
+        port, f"/api/scheduler/rules/{director.office_light_rule_id}/enabled", {"enabled": True}
+    )
+    rows = {row["rule_id"]: row for row in body["scheduler"]}
+    assert rows[director.office_light_rule_id]["enabled"] is True
+
+    status, body = _post(port, "/api/scheduler/rules/nope/enabled", {"enabled": True})
+    assert status == 404
+    assert body == {"error": "unknown rule"}
+
+
+def test_scheduler_state_rides_the_sse_stream(server):
+    _, _, port = server
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+    connection.request("GET", "/events")
+    response = connection.getresponse()
+
+    event, data = _read_event(response)
+    assert event == "state"
+    initial = json.loads(data)
+    assert isinstance(initial["scheduler"], list)
+
+    status, _ = _post(port, "/api/scheduler/tick")
+    assert status == 200
+
+    for _ in range(4):
+        event, data = _read_event(response)
+        if event == "state":
+            payload = json.loads(data)
+            if "scheduler" in payload:
+                break
+    else:
+        pytest.fail("no state event with a scheduler payload")
+    assert isinstance(payload["scheduler"], list)
+    connection.close()

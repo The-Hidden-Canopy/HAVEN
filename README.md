@@ -104,13 +104,20 @@ The initial vertical slice contains:
   HAVEN, they are never required by it;
 - a first-class intent union (`haven/intelligence/intents.py`):
   `QueryRequest | ActionProposal | RuleDraft | ClarificationRequest |
-  ConversationMessage`. Queries answer from bounded evidence, rules keep
-  the governed lifecycle, and one-shot commands take a separate authority
-  entry — `AuthorityEngine.decide_direct()` / `HavenRuntime.run_action()` —
+  ConversationMessage`, proposed through the agent seam itself —
+  `IntelligenceProvider.interpret_intent(...)` returns exactly one form, so
+  any provider (LLM, planner, deterministic parser, a community agent)
+  classifies generically while HAVEN routes uniformly; a reusable
+  household-grounded `DeterministicIntentInterpreter` is the zero-model
+  floor. Queries answer from bounded evidence, rules keep the governed
+  lifecycle, and one-shot commands take a separate authority entry —
+  `AuthorityEngine.decide_direct()` / `HavenRuntime.run_action()` —
   where a household member's own command is the authorization: same scope,
   role, justification, risk, and confirmation-token checks as automation,
   but no rule lifecycle, no trigger, and no human-override suspension, and
-  ZERO rules created in the store for a direct action. Every backend
+  ZERO rules created in the store. Provenance is typed, never string-matched:
+  `ActionOrigin.RULE | DIRECT` on every `ActionRequest`, enforced by both
+  engine entries and by the store's transition gate. Every backend
   normalizes to `ChatResult`/`InferenceResult` before HAVEN sees output,
   and the enriched `WorldView` projection (readable names, capabilities,
   attributes, recent transitions, explicit uncertainty) is what agents
@@ -162,6 +169,10 @@ haven/
 │   ├── ring_buffer.py  # pre-roll capture so wake never eats the utterance start
 │   ├── vad/energy.py   # reference energy VAD, pure Python
 │   ├── wake_model.py   # KwsModelManifest + ThresholdedWakeDetector (scorer = the artifact seam)
+│   ├── shims.py        # loaded model handles -> SpeechRecognizer/Synthesizer/WakeDetector
+│   ├── sources.py      # AudioSource protocol; WavFileSource (real audio, no mic needed)
+│   ├── sinks.py        # PlaybackSink protocol; WavFileSink; NullSink
+│   ├── service.py      # SpeechService: the always-on runtime (capture -> KWS -> VAD -> ASR -> session)
 │   ├── fixtures.py     # scripted providers registered in the capability registry
 │   └── providers/      # thin inference adapters (HTTP seam to a household inference stack)
 ├── models/
@@ -474,7 +485,14 @@ and does not exist there, including Linux/macOS.
   score wake/ASR/TTS remotely. A dead inference endpoint raises
   `InferenceUnavailableError` and is treated as evidence-unavailable,
   never as a transcript; adapters are constructed and registered by the
-  deployer, never in the zero-config defaults.
+  deployer, never in the zero-config defaults. Loaded model handles adapt
+  to the speech protocols through `haven/speech/shims.py` (ASR/TTS/wake,
+  capability-gated with typed errors), and `SpeechService` is the always-on
+  runtime — capture source → wake → VAD → ASR → the invariant-enforcing
+  session — with barge-in that stops playback without a model call. The
+  browser displays speech state; this service owns the microphone runtime.
+  Real audio flows the whole pipeline today from WAV files; live capture
+  with echo cancellation is the remaining native device seam.
 - Receipts distinguish the requested action, derived interpretation, observed
   evidence, authority decision, execution attempt, and device result.
 
