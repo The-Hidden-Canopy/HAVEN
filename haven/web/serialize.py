@@ -40,6 +40,10 @@ def device_to_dict(device: DeviceState, *, role: str) -> dict[str, Any]:
         "is_on": device.is_on,
         "brightness_pct": device.brightness_pct,
         "observed_at": device.observed_at.isoformat(),
+        "status": device.status.value,
+        "changed_by": device.changed_by.value,
+        "confidence": device.confidence,
+        "source": device.source,
     }
 
 

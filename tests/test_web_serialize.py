@@ -57,6 +57,10 @@ def test_device_to_dict_uses_iso_datetime_and_plain_types() -> None:
         "is_on": True,
         "brightness_pct": 70,
         "observed_at": NOW.isoformat(),
+        "status": "observed",
+        "changed_by": "system",
+        "confidence": 1.0,
+        "source": "demo.house",
     }
 
 

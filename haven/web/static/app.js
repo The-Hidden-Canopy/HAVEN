@@ -10,6 +10,9 @@ const els = {
   center: $('.center'),
   centerMeta: $('#center-meta'),
   rooms: $('#rooms'),
+  roomsCount: $('#rooms-count'),
+  roomNav: $('#room-nav'),
+  roomDetail: $('#room-detail'),
   navItems: document.querySelectorAll('.rail-nav li'),
   activityList: $('#activity-list'),
   activityCount: $('#activity-count'),
@@ -68,6 +71,18 @@ const els = {
   demoCamDown: $('#demo-cam-down'),
   demoCamUp: $('#demo-cam-up'),
   demoWake: $('#demo-wake'),
+  chainPanel: $('#chain-panel'),
+  chainBody: $('#chain-body'),
+  chainClose: $('#chain-close'),
+  chainScrim: $('#chain-scrim'),
+  setupScrim: $('#setup-scrim'),
+  setupWizard: $('#setup-wizard'),
+  setupSteps: $('#setup-steps'),
+  setupStepLabel: $('#setup-step-label'),
+  setupError: $('#setup-error'),
+  setupWarning: $('#setup-warning'),
+  setupBody: $('#setup-body'),
+  setupNext: $('#setup-next'),
 };
 
 /* Voice states that mean HAVEN is actively capturing audio. */
@@ -76,7 +91,8 @@ const VOICE_ACTIVE = new Set(['wake', 'listening', 'interpreting']);
 const app = {
   data: null,
   focus: null,      // room id or null
-  view: 'world',    // center view: world | activity | memory | people | automations | system | models | placeholder
+  selectedRoom: null, // room id selected in the rooms view, or null
+  view: 'world',    // center view: world | rooms | activity | memory | people | automations | system | models | placeholder
   glowTarget: null, // authoritative glow target room id from the engine, or null
   preview: null,    // dev-override glow state, null when following server
   completedTimer: null,
@@ -138,6 +154,7 @@ function renderState(payload) {
   renderPill(payload);
   renderVoice(payload);
   renderRooms(payload);
+  renderRoomsView(payload);
   renderContexts(payload);
   renderConversation(payload);
   renderPending(payload);
@@ -150,6 +167,10 @@ function renderState(payload) {
   renderFocusLabel();
   setGlow(payload.glow || 'idle', payload.glow_target);
   if (payload.glow === 'completed') scheduleCompletedFade();
+  // Completed outside the wizard (e.g. another session) — fold it away.
+  if (setupState.open && setupState.setup && setupObj().completed === true) {
+    setSetupOpen(false);
+  }
 }
 
 function renderPill(payload) {
@@ -255,8 +276,11 @@ function renderRooms(payload) {
     }
 
     card.addEventListener('click', () => {
+      // World cards and the rooms view share one selection/focus model.
       app.focus = app.focus === room.id ? null : room.id;
+      app.selectedRoom = app.focus;
       renderRooms(app.data);
+      renderRoomsView(app.data);
       renderFocusLabel();
     });
 
@@ -270,6 +294,218 @@ function renderFocusLabel() {
   const room = rooms.find((r) => r.id === app.focus);
   els.focusLabel.textContent = 'Focused: ' + (room ? room.name : 'none');
 }
+
+/* ---------- rooms view: navigator chips + room detail ---------- */
+
+function selectRoom(roomId) {
+  if (app.selectedRoom === roomId) {
+    app.selectedRoom = null;
+    app.focus = null;
+  } else {
+    app.selectedRoom = roomId;
+    app.focus = roomId;
+  }
+  renderFocusLabel();
+  if (app.data) {
+    renderRooms(app.data);
+    renderRoomsView(app.data);
+  }
+}
+
+function renderRoomsView(payload) {
+  const rooms = Array.isArray(payload.rooms) ? payload.rooms : [];
+  const occupied = rooms.filter((r) => Array.isArray(r.people) && r.people.length).length;
+  els.roomsCount.textContent = occupied + ' / ' + rooms.length + ' occupied';
+
+  els.roomNav.textContent = '';
+  for (const room of rooms) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'room-chip' + (app.selectedRoom === room.id ? ' selected' : '');
+    chip.dataset.roomId = room.id;
+
+    const dot = document.createElement('span');
+    dot.className = 'room-chip-dot' +
+      (Array.isArray(room.people) && room.people.length ? ' occupied' : '');
+    chip.appendChild(dot);
+
+    const name = document.createElement('span');
+    name.textContent = room.name;
+    chip.appendChild(name);
+
+    chip.addEventListener('click', () => selectRoom(room.id));
+    els.roomNav.appendChild(chip);
+  }
+
+  els.roomDetail.textContent = '';
+  const room = rooms.find((r) => r.id === app.selectedRoom) || null;
+  if (!room) {
+    app.selectedRoom = null;
+    const empty = document.createElement('p');
+    empty.className = 'room-detail-empty muted';
+    empty.textContent = rooms.length ? 'Select a room.' : 'No rooms.';
+    els.roomDetail.appendChild(empty);
+    return;
+  }
+  els.roomDetail.appendChild(makeRoomDetail(room));
+}
+
+function makeRoomDetail(room) {
+  const pane = document.createElement('div');
+  pane.className = 'room-pane';
+
+  const head = document.createElement('div');
+  head.className = 'room-pane-head';
+  const title = document.createElement('h2');
+  title.className = 'room-pane-name';
+  title.textContent = room.name;
+  head.appendChild(title);
+  const who = document.createElement('span');
+  who.className = 'muted';
+  who.textContent = (Array.isArray(room.people) && room.people.length)
+    ? room.people.join(' · ')
+    : 'Empty';
+  head.appendChild(who);
+  pane.appendChild(head);
+
+  if (room.camera) {
+    const cam = room.camera;
+    const online = cam.online !== false; // missing key = online
+    const line = document.createElement('p');
+    line.className = 'room-pane-camera muted';
+    const parts = ['camera · ' + (cam.label || cam.id)];
+    if (online) parts.push(cam.motion ? 'motion' : 'no motion');
+    else parts.push('offline');
+    line.textContent = parts.join(' — ');
+    pane.appendChild(line);
+  }
+
+  const devs = Array.isArray(room.devices) ? room.devices : [];
+  const list = document.createElement('div');
+  list.className = 'device-list';
+  if (!devs.length) {
+    const none = document.createElement('p');
+    none.className = 'sys-unavailable muted';
+    none.textContent = 'No devices in this room.';
+    list.appendChild(none);
+  }
+  for (const dev of devs) list.appendChild(makeDeviceRow(dev));
+  pane.appendChild(list);
+  return pane;
+}
+
+/* State line per role. `is_on` proxies the cover position; devices without
+   an on/off concept render "—". New provenance fields are optional — the
+   backend may not emit them yet. */
+function deviceStateLine(dev) {
+  const role = String(dev.role || '').toLowerCase();
+  if (role === 'cover') return dev.is_on ? 'Open' : 'Closed';
+  if (role === 'light') {
+    if (!dev.is_on) return 'Off';
+    return dev.brightness_pct !== null && dev.brightness_pct !== undefined
+      ? 'On · ' + dev.brightness_pct + '%'
+      : 'On';
+  }
+  if (dev.is_on === true) return 'On';
+  if (dev.is_on === false) return 'Off';
+  return '—';
+}
+
+function deviceProvenanceText(dev) {
+  const parts = [];
+  if (dev.observed_at) {
+    const ago = fmtAgo(dev.observed_at, Date.now());
+    parts.push(ago ? 'observed ' + ago : 'observed ' + fmtDateTime(dev.observed_at));
+  }
+  if (dev.status) parts.push(String(dev.status));
+  if (dev.changed_by) parts.push('by ' + String(dev.changed_by));
+  if (dev.confidence !== null && dev.confidence !== undefined) {
+    parts.push('confidence ' + dev.confidence);
+  }
+  if (dev.source) parts.push(String(dev.source));
+  return parts.join(' · ');
+}
+
+function makeDeviceCommandButton(deviceId, label, body) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn';
+  btn.textContent = label;
+  btn.addEventListener('click', () => sendDeviceCommand(deviceId, body));
+  return btn;
+}
+
+async function sendDeviceCommand(deviceId, body) {
+  const resp = await postJSON(
+    '/api/devices/' + encodeURIComponent(deviceId) + '/command', body);
+  if (resp && resp.ok && resp.state) {
+    renderState(resp.state);
+  } else if (resp && resp.ok === false) {
+    console.warn('device command failed', resp.error);
+  }
+  // null (404 / network) — quiet no-op, per postJSON
+}
+
+function makeDeviceRow(dev) {
+  const row = document.createElement('div');
+  row.className = 'device-row';
+
+  const head = document.createElement('div');
+  head.className = 'device-row-head';
+  head.appendChild(makeCtxRow(
+    (dev.role || 'device') + (dev.id ? ' · ' + dev.id : ''),
+    deviceStateLine(dev)
+  ));
+  row.appendChild(head);
+
+  const role = String(dev.role || '').toLowerCase();
+  if (role === 'light') {
+    const controls = document.createElement('div');
+    controls.className = 'device-controls';
+    if (dev.is_on) {
+      controls.appendChild(makeDeviceCommandButton(
+        dev.id, 'Turn off', { service: 'light.turn_off' }));
+    }
+    if (dev.brightness_pct !== null && dev.brightness_pct !== undefined) {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.min = '0';
+      input.max = '100';
+      input.value = String(dev.brightness_pct);
+      input.className = 'device-brightness';
+      input.setAttribute('aria-label', 'Brightness percent');
+      controls.appendChild(input);
+      const set = document.createElement('button');
+      set.type = 'button';
+      set.className = 'btn';
+      set.textContent = 'Set';
+      set.addEventListener('click', () => {
+        const pct = Math.max(0, Math.min(100, Math.round(Number(input.value) || 0)));
+        sendDeviceCommand(dev.id, { service: 'light.set_brightness', brightness_pct: pct });
+      });
+      controls.appendChild(set);
+    }
+    row.appendChild(controls);
+  } else if (role === 'cover') {
+    const controls = document.createElement('div');
+    controls.className = 'device-controls';
+    controls.appendChild(makeDeviceCommandButton(
+      dev.id, 'Open', { service: 'cover.open' }));
+    controls.appendChild(makeDeviceCommandButton(
+      dev.id, 'Close', { service: 'cover.close' }));
+    row.appendChild(controls);
+  }
+
+  const prov = deviceProvenanceText(dev);
+  if (prov) {
+    const line = document.createElement('p');
+    line.className = 'device-prov';
+    line.textContent = prov;
+    row.appendChild(line);
+  }
+  return row;
+}
+
 
 function makeCtxRow(label, value) {
   const row = document.createElement('div');
@@ -455,12 +691,26 @@ function renderActivity(payload) {
     return;
   }
   for (const ev of events) {
-    els.activityList.appendChild(makeFeedRow(
+    const row = makeFeedRow(
       ev.event_type || '',
       ev.summary || '',
       fmtClock(ev.occurred_at),
       ev.actor_id || ''
-    ));
+    );
+    if (ACTION_EVENT_TYPES.has(ev.event_type) && ev.event_id) {
+      row.classList.add('feed-row-link');
+      row.setAttribute('role', 'button');
+      row.setAttribute('tabindex', '0');
+      row.setAttribute('aria-label', 'Show trust chain: ' + (ev.summary || ev.event_type));
+      row.addEventListener('click', () => openChainPanel(ev.event_id));
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openChainPanel(ev.event_id);
+        }
+      });
+    }
+    els.activityList.appendChild(row);
   }
 }
 
@@ -485,6 +735,690 @@ function renderMemory(payload) {
     ));
   }
 }
+
+/* ---------- trust chain drill-down ---------- */
+
+/* Activity rows expose event ids (not action ids), so the drill-down resolves
+   the row's event server-side; rows without action correlation never get the
+   click affordance. */
+const ACTION_EVENT_TYPES = new Set(['action_authorized', 'action_executed', 'action_blocked']);
+let chainSeq = 0;
+
+function fmtAgo(iso, fromMs) {
+  const then = Date.parse(iso);
+  if (isNaN(then)) return '';
+  const seconds = Math.max(0, (fromMs - then) / 1000);
+  if (seconds < 1.5) return 'just now';
+  if (seconds < 60) return Math.round(seconds) + 's ago';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return minutes + 'm ago';
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours + 'h ago';
+  return Math.floor(hours / 24) + 'd ago';
+}
+
+async function fetchChain(eventId) {
+  try {
+    const res = await fetch('/api/actions/chain?event_id=' + encodeURIComponent(eventId));
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+function chainNote(text) {
+  const p = document.createElement('p');
+  p.className = 'chain-note muted';
+  p.textContent = text;
+  return p;
+}
+
+function chainText(text) {
+  const p = document.createElement('p');
+  p.className = 'chain-text';
+  p.textContent = text;
+  return p;
+}
+
+function chainSection(title) {
+  const section = document.createElement('section');
+  section.className = 'chain-section';
+  const heading = document.createElement('h3');
+  heading.className = 'micro';
+  heading.textContent = title;
+  const body = document.createElement('div');
+  body.className = 'chain-section-body';
+  section.appendChild(heading);
+  section.appendChild(body);
+  return { section, body };
+}
+
+/* One dotted-leader row; a missing value renders as a muted "unavailable". */
+function chainRow(label, value) {
+  const missing = value === null || value === undefined || value === '';
+  const row = makeCtxRow(label, missing ? 'unavailable' : String(value));
+  if (missing) row.querySelector('.ctx-value').classList.add('muted');
+  return row;
+}
+
+function renderChain(chain) {
+  const nowMs = Date.now();
+  els.chainBody.textContent = '';
+
+  const request = (chain && typeof chain.request === 'object' && chain.request) || null;
+  const reqSection = chainSection('REQUEST');
+  if (!request) {
+    reqSection.body.appendChild(chainNote('unavailable'));
+  } else {
+    const requested = request.requested_at
+      ? fmtDateTime(request.requested_at) + (fmtAgo(request.requested_at, nowMs) ? ' · ' + fmtAgo(request.requested_at, nowMs) : '')
+      : null;
+    const parameterKeys = request.parameters && typeof request.parameters === 'object'
+      ? Object.keys(request.parameters) : [];
+    reqSection.body.appendChild(chainRow(
+      'Action',
+      request.capability ? request.capability + ' (' + request.action_kind + ')' : request.action_kind
+    ));
+    reqSection.body.appendChild(chainRow('Target', request.target_device_id));
+    reqSection.body.appendChild(chainRow(
+      'Origin',
+      request.origin === 'rule' ? 'rule · ' + (request.rule_id || '') : 'direct command'
+    ));
+    reqSection.body.appendChild(chainRow('Actor', request.actor));
+    reqSection.body.appendChild(chainRow(
+      'Parameters', parameterKeys.length ? JSON.stringify(request.parameters) : 'none'
+    ));
+    reqSection.body.appendChild(chainRow('Requested', requested));
+  }
+  els.chainBody.appendChild(reqSection.section);
+
+  const interpretation = (chain && typeof chain.interpretation === 'object' && chain.interpretation) || null;
+  const interpSection = chainSection('INTERPRETATION');
+  if (!interpretation || (!interpretation.text && !interpretation.source_text)) {
+    interpSection.body.appendChild(chainNote('unavailable'));
+  } else {
+    if (interpretation.text) interpSection.body.appendChild(chainText(interpretation.text));
+    if (interpretation.source_text && interpretation.source_text !== interpretation.text) {
+      interpSection.body.appendChild(chainNote('rule source: "' + interpretation.source_text + '"'));
+    }
+    const basisLabels = {
+      rule_interpretation: 'the approved rule interpretation',
+      rule_source: 'the rule source text',
+      direct_justification: "the human's stated justification",
+    };
+    if (basisLabels[interpretation.basis]) {
+      interpSection.body.appendChild(chainNote('Basis: ' + basisLabels[interpretation.basis]));
+    }
+  }
+  els.chainBody.appendChild(interpSection.section);
+
+  const evidence = Array.isArray(chain && chain.evidence) ? chain.evidence : [];
+  const evSection = chainSection('EVIDENCE');
+  if (!evidence.length) {
+    evSection.body.appendChild(chainNote('unavailable'));
+  }
+  for (const item of evidence) {
+    if (!item || typeof item !== 'object') continue;
+    evSection.body.appendChild(chainRow(
+      item.kind ? String(item.kind) : 'evidence',
+      (item.subject ? String(item.subject) : '') + (item.status ? ' · ' + item.status : '')
+    ));
+    const parts = [];
+    if (item.observed_at) {
+      const ago = fmtAgo(item.observed_at, nowMs);
+      parts.push(ago ? 'observed ' + ago : 'observed ' + fmtDateTime(item.observed_at));
+    }
+    if (item.fresh === true) parts.push('fresh');
+    if (item.fresh === false) parts.push('stale');
+    if (item.confidence !== null && item.confidence !== undefined) parts.push('confidence ' + item.confidence);
+    if (item.note) parts.push(String(item.note));
+    if (parts.length) evSection.body.appendChild(chainNote(parts.join(' · ')));
+  }
+  els.chainBody.appendChild(evSection.section);
+
+  const authority = (chain && typeof chain.authority === 'object' && chain.authority) || null;
+  const authSection = chainSection('AUTHORITY');
+  if (!authority) {
+    authSection.body.appendChild(chainNote('unavailable'));
+  } else {
+    authSection.body.appendChild(chainRow(
+      'Decision',
+      (authority.status || '') + (authority.code ? ' · ' + authority.code : '')
+    ));
+    authSection.body.appendChild(chainRow('Risk tier', authority.risk_tier));
+    if (authority.required_role) authSection.body.appendChild(chainRow('Required role', authority.required_role));
+    if (authority.risk_note) authSection.body.appendChild(chainNote(String(authority.risk_note)));
+    if (authority.explanation) authSection.body.appendChild(chainText(authority.explanation));
+  }
+  els.chainBody.appendChild(authSection.section);
+
+  const execution = (chain && typeof chain.execution === 'object' && chain.execution) || null;
+  const execSection = chainSection('EXECUTION');
+  if (!execution || !execution.attempted) {
+    execSection.body.appendChild(chainNote('not executed'));
+  } else {
+    execSection.body.appendChild(chainRow('Service', execution.service));
+    execSection.body.appendChild(chainRow('Provider', execution.provider_id));
+    execSection.body.appendChild(chainRow(
+      'Result',
+      execution.success === true ? 'success' : execution.success === false ? 'failed' : null
+    ));
+    if (execution.detail) execSection.body.appendChild(chainText(String(execution.detail)));
+    if (execution.executed_at) {
+      const ago = fmtAgo(execution.executed_at, nowMs);
+      execSection.body.appendChild(chainRow(
+        'Executed',
+        fmtDateTime(execution.executed_at) + (ago ? ' · ' + ago : '')
+      ));
+    }
+  }
+  els.chainBody.appendChild(execSection.section);
+
+  const consequence = (chain && typeof chain.consequence === 'object' && chain.consequence) || null;
+  const consSection = chainSection('CONSEQUENCE');
+  if (!consequence || !consequence.observed) {
+    consSection.body.appendChild(chainNote(
+      consequence && consequence.note ? String(consequence.note) : 'not yet observed'
+    ));
+  } else {
+    if (consequence.summary) consSection.body.appendChild(chainText(String(consequence.summary)));
+    const parts = [];
+    if (consequence.observed_at) {
+      const ago = fmtAgo(consequence.observed_at, nowMs);
+      if (ago) parts.push('observed ' + ago);
+    }
+    if (consequence.delay_ms !== null && consequence.delay_ms !== undefined) {
+      parts.push(consequence.delay_ms + ' ms after execution');
+    }
+    if (parts.length) consSection.body.appendChild(chainNote(parts.join(' · ')));
+  }
+  els.chainBody.appendChild(consSection.section);
+
+  const timeline = Array.isArray(chain && chain.timeline) ? chain.timeline : [];
+  const tlSection = chainSection('TIMELINE');
+  if (!timeline.length) {
+    tlSection.body.appendChild(chainNote('unavailable'));
+  }
+  for (const entry of timeline) {
+    if (!entry || typeof entry !== 'object') continue;
+    const row = document.createElement('div');
+    row.className = 'chain-event';
+    const time = document.createElement('span');
+    time.className = 'chain-event-time';
+    time.textContent = fmtClock(entry.at);
+    const type = document.createElement('span');
+    type.className = 'chain-event-type micro';
+    type.textContent = entry.event_type || '';
+    const summary = document.createElement('span');
+    summary.className = 'chain-event-summary';
+    summary.textContent = entry.summary || '';
+    row.appendChild(time);
+    row.appendChild(type);
+    row.appendChild(summary);
+    tlSection.body.appendChild(row);
+  }
+  els.chainBody.appendChild(tlSection.section);
+}
+
+function setChainOpen(open) {
+  els.chainPanel.hidden = !open;
+  els.chainScrim.hidden = !open;
+}
+
+async function openChainPanel(eventId) {
+  if (!eventId) return;
+  const seq = ++chainSeq;
+  setChainOpen(true);
+  els.chainBody.textContent = '';
+  els.chainBody.appendChild(chainNote('Loading trust chain…'));
+  const resp = await fetchChain(eventId);
+  if (seq !== chainSeq) return; // superseded by a newer open or a close
+  if (!resp || resp.ok !== true || !resp.chain) {
+    els.chainBody.textContent = '';
+    els.chainBody.appendChild(chainNote('Trust chain unavailable for this event.'));
+    return;
+  }
+  renderChain(resp.chain);
+}
+
+function closeChainPanel() {
+  chainSeq += 1; // invalidate any in-flight fetch
+  setChainOpen(false);
+}
+
+
+/* ---------- first-run setup wizard ---------- */
+/* Owns the screen until setup.completed is true. GET /api/setup after the
+   initial state fetch; every POST returns the GET-style envelope, which
+   refreshes setupState. The wizard tolerates a missing backend: failed
+   requests land on the error line, never an uncaught throw. No close
+   affordance — onboarding finishes or the page closes. */
+
+const SETUP_STEP_COUNT = 6;
+
+const setupState = {
+  setup: null,       // last `setup` object from the backend, or null
+  configError: null, // optional quiet config-file warning
+  step: 1,
+  furthest: 1,       // furthest step reached; indicator clicks beyond are locked
+  open: false,
+};
+
+function setupObj() {
+  const s = setupState.setup;
+  return (s && typeof s === 'object') ? s : {};
+}
+
+function setSetupOpen(open) {
+  setupState.open = open;
+  els.setupScrim.hidden = !open;
+  els.setupWizard.hidden = !open;
+  if (open) setupRender();
+}
+
+function showSetupError(msg) {
+  els.setupError.textContent = msg;
+  els.setupError.hidden = false;
+}
+
+function hideSetupError() {
+  els.setupError.textContent = '';
+  els.setupError.hidden = true;
+}
+
+async function fetchSetupStatus() {
+  try {
+    const res = await fetch('/api/setup');
+    if (!res.ok) return null;
+    const data = await res.json();
+    return (data && typeof data === 'object' && data.setup) ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+/* Shared envelope handling for every setup POST. Returns true on ok; the
+   error line carries failures and the body stays put (form values kept). */
+async function setupPost(path, body) {
+  const resp = await postJSON(path, body);
+  if (resp === null) {
+    showSetupError('Setup service unavailable.');
+    return false;
+  }
+  if (resp.ok === false) {
+    showSetupError(typeof resp.error === 'string' ? resp.error : 'Request failed.');
+    return false;
+  }
+  if (resp.setup) setupState.setup = resp.setup;
+  if (typeof resp.config_error === 'string') setupState.configError = resp.config_error;
+  hideSetupError();
+  setupRender();
+  return true;
+}
+
+function setupGotoStep(step) {
+  setupState.step = Math.max(1, Math.min(SETUP_STEP_COUNT, step));
+  if (setupState.step > setupState.furthest) setupState.furthest = setupState.step;
+  setupRender();
+}
+
+function renderSetupIndicator() {
+  els.setupSteps.textContent = '';
+  for (let i = 1; i <= SETUP_STEP_COUNT; i++) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'setup-step' + (i === setupState.step ? ' active' : '');
+    btn.textContent = String(i);
+    if (i > setupState.furthest) {
+      btn.classList.add('locked');
+      btn.disabled = true;
+    } else {
+      btn.addEventListener('click', () => setupGotoStep(i));
+    }
+    els.setupSteps.appendChild(btn);
+  }
+  els.setupStepLabel.textContent = 'STEP ' + setupState.step + ' / ' + SETUP_STEP_COUNT;
+}
+
+function setupText(text) {
+  const p = document.createElement('p');
+  p.className = 'setup-text';
+  p.textContent = text;
+  return p;
+}
+
+/* --- step 1: welcome --- */
+
+function renderSetupWelcome(container) {
+  container.appendChild(setupText(
+    'HAVEN keeps the house\u2019s configuration on this machine \u2014 ' +
+    'local first, no cloud account.'));
+  container.appendChild(setupText('Five short steps.'));
+  container.appendChild(setupText(
+    'Everything except Finish is skippable; each step can be revisited later from System.'));
+}
+
+/* --- step 2: data directory --- */
+
+function renderSetupDataDir(container) {
+  const dataDir = setupObj().data_dir || {};
+  container.appendChild(makeCtxRow('Current folder', dataDir.resolved || '\u2014'));
+  container.appendChild(makeCtxRow(
+    'Source', dataDir.source === 'chosen' ? 'custom' : 'default'));
+
+  const form = document.createElement('form');
+  form.className = 'model-form setup-dir-form';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'custom folder path\u2026';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  const use = document.createElement('button');
+  use.type = 'submit';
+  use.textContent = 'Use this folder';
+  form.appendChild(input);
+  form.appendChild(use);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await setupPost('/api/setup/data-dir', { path: input.value.trim() });
+  });
+  container.appendChild(form);
+
+  const useDefault = document.createElement('button');
+  useDefault.type = 'button';
+  useDefault.className = 'btn';
+  useDefault.textContent = 'Use default';
+  useDefault.addEventListener('click', async () => {
+    await setupPost('/api/setup/data-dir', { path: '' });
+  });
+  container.appendChild(useDefault);
+}
+
+/* --- step 3: provider --- */
+
+function renderSetupProvider(container) {
+  const provider = setupObj().provider || {};
+  if (provider.configured === true) {
+    const line = document.createElement('p');
+    line.className = 'setup-note muted';
+    line.textContent = 'Connected: ' + (provider.base_url || provider.kind || '\u2014');
+    container.appendChild(line);
+    return; // Skip became Next — the foot's Next advances
+  }
+
+  const form = document.createElement('form');
+  form.className = 'model-form setup-provider-form';
+  const url = document.createElement('input');
+  url.type = 'text';
+  url.placeholder = 'home assistant base url, e.g. http://homeassistant.local:8123';
+  url.autocomplete = 'off';
+  url.spellcheck = false;
+  const token = document.createElement('input');
+  token.type = 'password';
+  token.placeholder = 'access token';
+  token.autocomplete = 'off';
+  token.spellcheck = false;
+  const connect = document.createElement('button');
+  connect.type = 'submit';
+  connect.textContent = 'Test & connect';
+  form.appendChild(url);
+  form.appendChild(token);
+  form.appendChild(connect);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await setupPost('/api/setup/provider', {
+      kind: 'home_assistant',
+      base_url: url.value.trim(),
+      token: token.value,
+    });
+    token.value = ''; // never keep the token on screen
+  });
+  container.appendChild(form);
+
+  const skip = document.createElement('button');
+  skip.type = 'button';
+  skip.className = 'btn';
+  skip.textContent = 'Skip for now';
+  skip.addEventListener('click', async () => {
+    await setupPost('/api/setup/provider', { skip: true });
+  });
+  container.appendChild(skip);
+}
+
+/* --- step 4: discovery --- */
+
+const SETUP_DEVICE_TYPES = ['light', 'thermostat', 'switch'];
+
+function renderSetupCandidate(container, candidate, enrolledIds) {
+  const card = document.createElement('div');
+  card.className = 'setup-candidate';
+
+  const parts = [String(candidate.candidate_id || 'unknown')];
+  if (candidate.source) parts.push(String(candidate.source));
+  if (candidate.signal_strength !== null && candidate.signal_strength !== undefined) {
+    parts.push('signal ' + candidate.signal_strength);
+  }
+  const head = document.createElement('div');
+  head.className = 'setup-candidate-head';
+  const id = document.createElement('span');
+  id.className = 'feed-text';
+  id.textContent = parts.join(' \u00b7 ');
+  head.appendChild(id);
+  const dots = document.createElement('span');
+  dots.className = 'ctx-dots';
+  head.appendChild(dots);
+  const suggestion = document.createElement('span');
+  suggestion.className = 'muted';
+  suggestion.textContent =
+    (candidate.suggested_device_type || 'device') +
+    (candidate.suggested_room ? ' \u00b7 ' + candidate.suggested_room : '');
+  head.appendChild(suggestion);
+  card.appendChild(head);
+
+  if (enrolledIds.has(candidate.candidate_id)) {
+    const badge = document.createElement('span');
+    badge.className = 'setup-enrolled micro';
+    badge.textContent = 'ENROLLED';
+    head.appendChild(badge);
+    container.appendChild(card);
+    return;
+  }
+
+  const controls = document.createElement('div');
+  controls.className = 'setup-enroll';
+
+  const select = document.createElement('select');
+  select.setAttribute('aria-label', 'Device type');
+  const suggested = String(candidate.suggested_device_type || '');
+  const options = SETUP_DEVICE_TYPES.includes(suggested)
+    ? SETUP_DEVICE_TYPES
+    : SETUP_DEVICE_TYPES.concat(suggested);
+  for (const type of options) {
+    const opt = document.createElement('option');
+    opt.value = type;
+    opt.textContent = type;
+    if (type === suggested) opt.selected = true;
+    select.appendChild(opt);
+  }
+  controls.appendChild(select);
+
+  const room = document.createElement('input');
+  room.type = 'text';
+  room.placeholder = 'room';
+  room.value = candidate.suggested_room ? String(candidate.suggested_room) : '';
+  room.autocomplete = 'off';
+  room.spellcheck = false;
+  controls.appendChild(room);
+
+  const enroll = document.createElement('button');
+  enroll.type = 'button';
+  enroll.className = 'btn';
+  enroll.textContent = 'Enroll';
+  enroll.addEventListener('click', async () => {
+    await setupPost('/api/setup/enroll', {
+      candidate_id: candidate.candidate_id,
+      device_type: select.value,
+      room: room.value.trim(),
+    });
+  });
+  controls.appendChild(enroll);
+
+  card.appendChild(controls);
+  container.appendChild(card);
+}
+
+function renderSetupDiscovery(container) {
+  const discovery = setupObj().discovery || {};
+  const enrolled = Array.isArray(discovery.enrolled) ? discovery.enrolled : [];
+  const enrolledIds = new Set(enrolled.map((e) => e && e.candidate_id));
+
+  const scan = document.createElement('button');
+  scan.type = 'button';
+  scan.className = 'btn';
+  scan.textContent = 'Scan';
+  scan.addEventListener('click', async () => {
+    await setupPost('/api/setup/discovery/scan', {});
+  });
+  container.appendChild(scan);
+
+  const candidates = Array.isArray(discovery.candidates) ? discovery.candidates : [];
+  if (!candidates.length) {
+    container.appendChild(setupText('No candidates yet \u2014 run a scan.'));
+    return;
+  }
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    renderSetupCandidate(container, candidate, enrolledIds);
+  }
+}
+
+/* --- step 5: preferences --- */
+
+function setupPrefChecked(container, key) {
+  const input = container.querySelector('input[data-pref="' + key + '"]');
+  return !!(input && input.checked);
+}
+
+function makeSetupPref(container, key, label, detail, checked) {
+  const row = document.createElement('label');
+  row.className = 'pending-auto setup-pref';
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.dataset.pref = key;
+  checkbox.checked = checked === true;
+  checkbox.addEventListener('change', async () => {
+    await setupPost('/api/setup/preferences', {
+      voice: setupPrefChecked(container, 'voice'),
+      intelligence: setupPrefChecked(container, 'intelligence'),
+    });
+  });
+  row.appendChild(checkbox);
+  const text = document.createElement('span');
+  text.className = 'setup-pref-text';
+  const name = document.createElement('span');
+  name.textContent = label;
+  const sub = document.createElement('span');
+  sub.className = 'muted';
+  sub.textContent = detail;
+  text.appendChild(name);
+  text.appendChild(sub);
+  row.appendChild(text);
+  return row;
+}
+
+function renderSetupPreferences(container) {
+  const prefs = setupObj().preferences || {};
+  container.appendChild(makeSetupPref(
+    container, 'voice', 'Voice control',
+    'Haven listens for the wake word on this machine.',
+    prefs.voice === true));
+  container.appendChild(makeSetupPref(
+    container, 'intelligence', 'Intelligence model',
+    'Allow HAVEN to use a local model for understanding.',
+    prefs.intelligence === true));
+}
+
+/* --- step 6: finish --- */
+
+function renderSetupFinish(container) {
+  const s = setupObj();
+  const dataDir = (s.data_dir && typeof s.data_dir === 'object') ? s.data_dir : {};
+  container.appendChild(makeCtxRow(
+    'Data folder',
+    dataDir.source === 'chosen' ? 'custom' : 'default'));
+  const provider = (s.provider && typeof s.provider === 'object') ? s.provider : {};
+  container.appendChild(makeCtxRow(
+    'Provider',
+    provider.configured === true
+      ? 'connected \u00b7 ' + (provider.base_url || '')
+      : 'skipped'));
+  const discovery = (s.discovery && typeof s.discovery === 'object') ? s.discovery : {};
+  const enrolled = Array.isArray(discovery.enrolled) ? discovery.enrolled.length : 0;
+  container.appendChild(makeCtxRow(
+    'Devices enrolled', String(enrolled)));
+  const prefs = (s.preferences && typeof s.preferences === 'object') ? s.preferences : {};
+  container.appendChild(makeCtxRow('Voice control', prefs.voice === true ? 'on' : 'off'));
+  container.appendChild(makeCtxRow(
+    'Intelligence model', prefs.intelligence === true ? 'on' : 'off'));
+}
+
+const SETUP_STEP_RENDERERS = {
+  1: renderSetupWelcome,
+  2: renderSetupDataDir,
+  3: renderSetupProvider,
+  4: renderSetupDiscovery,
+  5: renderSetupPreferences,
+  6: renderSetupFinish,
+};
+
+function setupRender() {
+  if (!setupState.open) return;
+  hideSetupError();
+  renderSetupIndicator();
+  els.setupWarning.hidden = !setupState.configError;
+  if (setupState.configError) els.setupWarning.textContent = setupState.configError;
+
+  els.setupBody.textContent = '';
+  const render = SETUP_STEP_RENDERERS[setupState.step] || renderSetupWelcome;
+  render(els.setupBody);
+
+  els.setupBack.hidden = setupState.step === 1;
+  els.setupNext.textContent = setupState.step === SETUP_STEP_COUNT ? 'Finish' : 'Next';
+}
+
+async function onSetupNext() {
+  if (setupState.step < SETUP_STEP_COUNT) {
+    setupGotoStep(setupState.step + 1);
+    return;
+  }
+  const done = await setupPost('/api/setup/complete', {});
+  if (!done) return;
+  setSetupOpen(false);
+  // Setup may have registered providers — resync the app state.
+  try {
+    const res = await fetch('/api/state');
+    if (res.ok) renderState(await res.json());
+  } catch {
+    // SSE will deliver the next full state on its own.
+  }
+}
+
+async function refreshSetupOnBoot() {
+  const resp = await fetchSetupStatus();
+  if (!resp) return; // backend not there yet — no wizard until next load
+  setupState.setup = resp.setup;
+  setupState.configError = typeof resp.config_error === 'string'
+    ? resp.config_error : null;
+  if (resp.setup.completed === true) {
+    setSetupOpen(false);
+    return;
+  }
+  setupState.step = 1;
+  setupState.furthest = 1;
+  setSetupOpen(true);
+}
+
 
 /* ---------- people, automations, system views ---------- */
 
@@ -664,9 +1598,29 @@ function renderSystem(payload) {
     }
   }
 
+  const setupSec = makeSysSection('SETUP');
+  const setupInfo = setupObj();
+  const setupDone = setupInfo.completed === true;
+  setupSec.appendChild(makeCtxRow('Setup state', setupDone ? 'complete' : 'not complete'));
+  const setupBtn = document.createElement('button');
+  setupBtn.type = 'button';
+  setupBtn.className = 'btn';
+  setupBtn.textContent = setupDone ? 'Reopen setup' : 'Open setup';
+  setupBtn.addEventListener('click', async () => {
+    if (setupDone) {
+      const ok = await setupPost('/api/setup/reopen', {});
+      if (!ok) return;
+      setupState.step = SETUP_STEP_COUNT;
+      setupState.furthest = SETUP_STEP_COUNT;
+    }
+    setSetupOpen(true);
+  });
+  setupSec.appendChild(setupBtn);
+
   els.systemBody.appendChild(core);
   els.systemBody.appendChild(engine);
   els.systemBody.appendChild(providers);
+  els.systemBody.appendChild(setupSec);
 }
 
 /* ---------- models view ---------- */
@@ -1606,6 +2560,18 @@ function wireEvents() {
     const resp = await postJSON('/api/demo/camera-up', {});
     if (resp && resp.state) renderState(resp.state);
   });
+
+  /* trust chain slide-over: close affordances, one panel at a time */
+  els.chainClose.addEventListener('click', closeChainPanel);
+  els.chainScrim.addEventListener('click', closeChainPanel);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !els.chainPanel.hidden) closeChainPanel();
+  });
+
+  /* setup wizard: local navigation only — no Escape/scrim close, onboarding
+     must be finished or the page closed */
+  els.setupBack.addEventListener('click', () => setupGotoStep(setupState.step - 1));
+  els.setupNext.addEventListener('click', onSetupNext);
 }
 
 async function boot() {
@@ -1618,6 +2584,8 @@ async function boot() {
   } catch {
     // Backend may not be up yet — the first SSE `state` event will render.
   }
+
+  await refreshSetupOnBoot();
 
   const es = new EventSource('/events');
 

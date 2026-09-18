@@ -15,7 +15,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, time as dt_time, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 from uuid import uuid4
 
 from haven.authority.policy import AuthorityEngine
@@ -388,6 +388,24 @@ class SimulatedHouse:
             device["observed_at"] = command.requested_at
             device["changed_by"] = ChangeOrigin.SYSTEM
             return DeviceResult(True, "Garage door closed.", command.requested_at, "demo.house")
+        # The runtime's ActionKind mapping sends "cover.open_cover" /
+        # "light.turn_on" for direct open/brightness actions; both names land
+        # on the same simulated behavior.
+        if command.service in ("cover.open", "cover.open_cover"):
+            if device["kind"] != "cover":
+                return DeviceResult(False, "cover.open on a non-cover device", command.requested_at, "demo.house")
+            device["open"] = True
+            device["is_on"] = True
+            device["observed_at"] = command.requested_at
+            device["changed_by"] = ChangeOrigin.SYSTEM
+            return DeviceResult(True, "Garage door opened.", command.requested_at, "demo.house")
+        if command.service in ("light.set_brightness", "light.turn_on"):
+            pct = max(0, min(100, int(dict(command.parameters).get("brightness_pct", 100))))
+            device["brightness_pct"] = pct
+            device["is_on"] = pct > 0
+            device["observed_at"] = command.requested_at
+            device["changed_by"] = ChangeOrigin.SYSTEM
+            return DeviceResult(True, f"Brightness set to {pct}%.", command.requested_at, "demo.house")
         if command.service == "light.turn_off":
             device["is_on"] = False
             device["observed_at"] = command.requested_at
@@ -918,6 +936,45 @@ class DemoDirector:
         self._chat_intent(text, focus=focus)
         self._publish_state()
         return self.state()
+
+    # Services the device-command endpoint accepts, mapped to the ActionKind
+    # the authority engine decides on. Garage open/close are GUARDED, so the
+    # engine answers CONFIRMATION_REQUIRED and the normal approve flow runs.
+    _DEVICE_COMMAND_KINDS = {
+        "light.turn_off": ActionKind.TURN_LIGHT_OFF,
+        "light.set_brightness": ActionKind.SET_LIGHT_BRIGHTNESS,
+        "cover.open": ActionKind.OPEN_GARAGE,
+        "cover.close": ActionKind.CLOSE_GARAGE,
+    }
+
+    def device_command(
+        self, device_id: str, service: str, parameters: Mapping | None = None
+    ) -> dict[str, Any]:
+        if not self.registry.is_registered(device_id):
+            return {"ok": False, "error": "unknown device"}
+        action_kind = self._DEVICE_COMMAND_KINDS.get(service)
+        if action_kind is None:
+            return {"ok": False, "error": "unsupported service"}
+        manifest = self.registry.get(device_id)
+        if not any(capability.service == service for capability in manifest.capabilities):
+            return {"ok": False, "error": "unsupported service"}
+        proposal_parameters: tuple[tuple[str, Any], ...] = ()
+        if action_kind is ActionKind.SET_LIGHT_BRIGHTNESS:
+            brightness = (parameters or {}).get("brightness_pct")
+            if isinstance(brightness, bool) or not isinstance(brightness, int):
+                return {"ok": False, "error": "an integer 'brightness_pct' is required"}
+            proposal_parameters = (("brightness_pct", brightness),)
+        proposal = ActionProposal(
+            action_kind=action_kind,
+            target_device_id=device_id,
+            target_selector=None,
+            parameters=proposal_parameters,
+            justification=f"device control: {service}",
+            source_text=f"device control: {service}",
+        )
+        self._run_proposal(proposal)
+        self._publish_state()
+        return {"ok": True, "state": self.state()}
 
     def _chat_intent(self, text: str, focus: str | None = None) -> None:
         """Route one utterance through the provider's proposed intent.
