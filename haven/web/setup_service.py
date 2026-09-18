@@ -33,6 +33,14 @@ from ..devices import CapabilityDescriptor, ControlClass, DeviceManifest
 from ..discovery.enrollment import enroll_device
 from ..discovery.models import DiscoveredDevice
 from ..integrations.home_assistant.client import LiveHomeAssistantAdapter
+from ..providers.plugin import ProviderManifest
+from .provider_install import (
+    find_installed_provider,
+    load_installed_providers,
+    remove_installed_provider,
+    save_installed_provider,
+    set_installed_provider_enabled,
+)
 from .setup_config import (
     SetupConfig,
     SetupConfigError,
@@ -40,6 +48,23 @@ from .setup_config import (
     _write_json_atomic,
     default_data_dir,
 )
+
+
+def _provider_manifest_to_dict(manifest: ProviderManifest) -> dict:
+    return {
+        "provider_id": manifest.provider_id,
+        "kind": manifest.kind,
+        "capabilities": sorted(manifest.capabilities),
+        "display_name": manifest.display_name,
+        "description": manifest.description,
+        "permissions": list(manifest.permissions),
+        "version": manifest.version,
+        "homepage": manifest.homepage,
+        "config_fields": [
+            {"name": f.name, "label": f.label, "required": f.required, "secret": f.secret}
+            for f in manifest.config_fields
+        ],
+    }
 
 _ENROLL_JUSTIFICATION = "enrolled from the setup wizard discovery scan"
 _TOKEN_FILENAME = "ha_token.txt"
@@ -623,6 +648,109 @@ class SetupService:
             return {"ok": False, "error": error}
         self._trigger_rebuild()
         return self.status()
+
+    def list_provider_packages(self) -> dict:
+        """Every `haven.providers` entry point installed in this Python
+        environment, each with its manifest (capabilities, permissions,
+        config fields to ask for) and whether this installation has already
+        activated it -- the listing behind Settings -> Providers.
+
+        Reads package metadata and, to get each manifest, imports each
+        package's `describe()` (side-effect-free by contract, see
+        `haven/providers/plugin.py`); it never calls `build()`, so nothing
+        real is constructed just by looking at this list. A package that
+        fails to import or describe itself is still listed, with `error`
+        set instead of `manifest`, rather than silently dropped -- a broken
+        community package should be visible, not invisible.
+        """
+
+        from haven.providers.loader import ProviderLoadError, discover_provider_packages, inspect_provider_package
+
+        installed_by_entry_point = {p.entry_point_name: p for p in load_installed_providers(self._store)}
+        rows = []
+        for discovered in discover_provider_packages():
+            row: dict = {
+                "entry_point_name": discovered.entry_point_name,
+                "distribution_name": discovered.distribution_name,
+                "distribution_version": discovered.distribution_version,
+            }
+            try:
+                manifest = inspect_provider_package(discovered)
+            except ProviderLoadError as exc:
+                row["error"] = str(exc)
+            else:
+                row["manifest"] = _provider_manifest_to_dict(manifest)
+                installed = installed_by_entry_point.get(discovered.entry_point_name)
+                row["installed"] = installed is not None
+                row["enabled"] = installed.enabled if installed is not None else False
+                row["active"] = installed is not None and self._config.provider_kind == manifest.provider_id
+            rows.append(row)
+        return {"ok": True, "providers": rows}
+
+    def install_provider_package(self, *, entry_point_name: str | None, config: dict | None) -> dict:
+        """Activate a discovered provider package with household-supplied config.
+
+        Building the real instance here (not deferred to the next boot) is
+        deliberate: a bad credential or an unreachable device fails this
+        call immediately, with the household's prior provider (if any)
+        left untouched, rather than being discovered only after a restart
+        already switched over.
+        """
+
+        if not isinstance(entry_point_name, str) or not entry_point_name.strip():
+            return {"ok": False, "error": "a non-empty 'entry_point_name' is required"}
+        entry_point_name = entry_point_name.strip()
+        from haven.providers.loader import ProviderLoadError, build_provider, discover_provider_packages
+
+        discovered = next(
+            (d for d in discover_provider_packages() if d.entry_point_name == entry_point_name), None
+        )
+        if discovered is None:
+            return {"ok": False, "error": f"no installed package declares the entry point {entry_point_name!r}"}
+        try:
+            manifest, _instance = build_provider(discovered, config=config or {})
+        except ProviderLoadError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": f"could not activate {entry_point_name!r}: {exc}"}
+        save_installed_provider(
+            self._store, provider_id=manifest.provider_id, entry_point_name=entry_point_name, config=config or {}
+        )
+        self._config = replace(self._config, provider_kind=manifest.provider_id)
+        error = self._save()
+        if error is not None:
+            return {"ok": False, "error": error}
+        self._trigger_rebuild()
+        return {"ok": True, "provider_id": manifest.provider_id}
+
+    def set_provider_package_enabled(self, *, provider_id: str | None, enabled: bool) -> dict:
+        if not isinstance(provider_id, str) or not provider_id.strip():
+            return {"ok": False, "error": "a non-empty 'provider_id' is required"}
+        provider_id = provider_id.strip()
+        if find_installed_provider(self._store, provider_id) is None:
+            return {"ok": False, "error": f"no installed provider {provider_id!r}"}
+        set_installed_provider_enabled(self._store, provider_id, enabled)
+        self._trigger_rebuild()
+        return {"ok": True}
+
+    def uninstall_provider_package(self, *, provider_id: str | None) -> dict:
+        """Deactivate a provider package without touching `provider_kind`.
+
+        A household configured for this provider stays configured for it --
+        `provider_kind` names what the household *wants*, not whether a
+        package for it happens to be installed right now. Clearing it here
+        would resurface the demo fixture on the next rebuild for a household
+        with real enrolled devices and declared people, exactly the silent
+        fallback item 3 of this wave removed. With the package gone, the
+        household simply gets the same honest "no live evidence" world any
+        other unreachable provider already degrades to.
+        """
+
+        if not isinstance(provider_id, str) or not provider_id.strip():
+            return {"ok": False, "error": "a non-empty 'provider_id' is required"}
+        remove_installed_provider(self._store, provider_id.strip())
+        self._trigger_rebuild()
+        return {"ok": True}
 
     def run_discovery(self) -> dict:
         """Scan for enrollment candidates: the demo set, plus real HA entities.

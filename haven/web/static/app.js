@@ -1829,6 +1829,7 @@ function renderSystem(payload) {
   els.systemBody.appendChild(core);
   els.systemBody.appendChild(engine);
   els.systemBody.appendChild(providers);
+  els.systemBody.appendChild(makeProviderPackagesSection());
   els.systemBody.appendChild(setupSec);
   els.systemBody.appendChild(makeDiagnosticsSection());
   els.systemBody.appendChild(makeBackupSection());
@@ -1851,6 +1852,10 @@ const diagState = {
   service: null,     // last GET /api/system/service payload (the .service object)
   serviceBusy: false,
   serviceNote: null, // {tone, text} inline install/uninstall result
+  providerPackages: null,   // array | null (null = not fetched yet)
+  providerBusy: new Set(),  // entry_point_name / provider_id with an in-flight action
+  providerNotes: {},        // entry_point_name -> {tone, text}, per-package feedback
+  providerDrafts: {},       // entry_point_name -> {fieldName: value}, in-progress config form input
 };
 
 /* postJSON swallows non-2xx bodies; the diagnostics endpoints signal
@@ -2036,6 +2041,15 @@ async function refreshSystemDetails() {
     }
   } catch {
     // Same — the status row renders '—' until fetched.
+  }
+  try {
+    const res = await fetch('/api/setup/providers/packages');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.ok && Array.isArray(data.providers)) diagState.providerPackages = data.providers;
+    }
+  } catch {
+    // Same — the list renders 'unavailable' until fetched.
   }
   diagRerender();
 }
@@ -2226,6 +2240,193 @@ async function runServiceAction(action) {
     };
   } else {
     diagState.serviceNote = { tone: 'diag-warn', text: diagBackupError(resp, 'Request failed') };
+  }
+  await refreshSystemDetails();
+}
+
+/* ---------- provider packages (installable community providers) ---------- */
+/* GET /api/setup/providers/packages lists every `haven.providers` entry
+   point discovered on this machine, each with its manifest (capabilities,
+   permissions, config fields) -- see haven/providers/loader.py. Installing
+   one calls POST /api/setup/providers/install with whatever config fields
+   the manifest declared; the household reviews permissions before that
+   happens, matching the model manager's inspect-before-install shape. */
+
+function makeProviderPackagesSection() {
+  const sec = makeSysSection('PROVIDER PACKAGES');
+  const packages = diagState.providerPackages;
+  if (!packages) {
+    sec.appendChild(makeSysUnavailable());
+    return sec;
+  }
+  if (!packages.length) {
+    const none = document.createElement('p');
+    none.className = 'sys-unavailable muted';
+    none.textContent = 'No provider packages installed in this Python environment.';
+    sec.appendChild(none);
+    return sec;
+  }
+  for (const row of packages) sec.appendChild(makeProviderPackageRow(row));
+  return sec;
+}
+
+function providerConfigDraft(entryPointName) {
+  if (!diagState.providerDrafts[entryPointName]) diagState.providerDrafts[entryPointName] = {};
+  return diagState.providerDrafts[entryPointName];
+}
+
+function makeProviderPackageRow(row) {
+  const wrap = document.createElement('div');
+  wrap.className = 'provider-pkg';
+
+  const entryPointName = typeof row.entry_point_name === 'string' ? row.entry_point_name : '';
+
+  if (row.error) {
+    const head = document.createElement('div');
+    head.className = 'ctx-row';
+    const name = document.createElement('span');
+    name.className = 'ctx-label';
+    name.textContent = entryPointName || 'unknown package';
+    head.appendChild(name);
+    wrap.appendChild(head);
+    wrap.appendChild(makeDiagNote('diag-warn', 'Could not load: ' + row.error));
+    return wrap;
+  }
+
+  const manifest = (row.manifest && typeof row.manifest === 'object') ? row.manifest : {};
+  const head = document.createElement('div');
+  head.className = 'ctx-row';
+  const name = document.createElement('span');
+  name.className = 'ctx-label';
+  name.textContent = manifest.display_name || entryPointName;
+  head.appendChild(name);
+  if (row.active) {
+    const badge = document.createElement('span');
+    badge.className = 'ctx-value ok';
+    badge.textContent = 'ACTIVE';
+    head.appendChild(badge);
+  } else if (row.installed) {
+    const badge = document.createElement('span');
+    badge.className = 'ctx-value muted';
+    badge.textContent = row.enabled ? 'installed' : 'disabled';
+    head.appendChild(badge);
+  }
+  wrap.appendChild(head);
+
+  if (manifest.description) {
+    const desc = document.createElement('p');
+    desc.className = 'diag-note';
+    desc.textContent = manifest.description;
+    wrap.appendChild(desc);
+  }
+
+  const caps = Array.isArray(manifest.capabilities) ? manifest.capabilities : [];
+  if (caps.length) {
+    const capsEl = document.createElement('p');
+    capsEl.className = 'muted';
+    capsEl.textContent = 'Capabilities: ' + caps.join(', ');
+    wrap.appendChild(capsEl);
+  }
+
+  const perms = Array.isArray(manifest.permissions) ? manifest.permissions : [];
+  if (perms.length) {
+    const permsEl = document.createElement('p');
+    permsEl.className = 'muted';
+    permsEl.textContent = 'Needs: ' + perms.join('; ');
+    wrap.appendChild(permsEl);
+  }
+
+  const note = diagState.providerNotes[entryPointName];
+  if (note) wrap.appendChild(makeDiagNote(note.tone, note.text));
+
+  const busy = diagState.providerBusy.has(entryPointName) || (row.manifest && diagState.providerBusy.has(manifest.provider_id));
+
+  if (!row.installed) {
+    const fields = Array.isArray(manifest.config_fields) ? manifest.config_fields : [];
+    const draft = providerConfigDraft(entryPointName);
+    const form = document.createElement('div');
+    form.className = 'model-form';
+    for (const field of fields) {
+      const input = document.createElement('input');
+      input.type = field.secret ? 'password' : 'text';
+      input.placeholder = field.label + (field.required ? '' : ' (optional)');
+      input.autocomplete = 'off';
+      input.value = draft[field.name] || '';
+      input.addEventListener('input', () => { draft[field.name] = input.value; });
+      form.appendChild(input);
+    }
+    const installBtn = document.createElement('button');
+    installBtn.type = 'button';
+    installBtn.textContent = busy ? 'Installing…' : 'Install';
+    installBtn.disabled = busy;
+    installBtn.addEventListener('click', () => installProviderPackage(entryPointName, fields, draft));
+    form.appendChild(installBtn);
+    wrap.appendChild(form);
+  } else {
+    const providerId = manifest.provider_id;
+    const toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.className = 'btn btn-sm';
+    toggleBtn.textContent = busy ? 'Working…' : (row.enabled ? 'Disable' : 'Enable');
+    toggleBtn.disabled = busy;
+    toggleBtn.addEventListener('click', () => toggleProviderPackage(entryPointName, providerId, !row.enabled));
+    wrap.appendChild(toggleBtn);
+
+    const uninstallBtn = document.createElement('button');
+    uninstallBtn.type = 'button';
+    uninstallBtn.className = 'btn btn-sm';
+    uninstallBtn.textContent = 'Uninstall';
+    uninstallBtn.disabled = busy;
+    uninstallBtn.addEventListener('click', () => uninstallProviderPackage(entryPointName, providerId));
+    wrap.appendChild(uninstallBtn);
+  }
+
+  return wrap;
+}
+
+async function installProviderPackage(entryPointName, fields, draft) {
+  for (const field of fields) {
+    if (field.required && !draft[field.name]) {
+      diagState.providerNotes[entryPointName] = { tone: 'diag-warn', text: field.label + ' is required' };
+      diagRerender();
+      return;
+    }
+  }
+  diagState.providerBusy.add(entryPointName);
+  diagState.providerNotes[entryPointName] = null;
+  diagRerender();
+  const resp = await diagPost('/api/setup/providers/install', { entry_point_name: entryPointName, config: draft });
+  diagState.providerBusy.delete(entryPointName);
+  const data = resp && resp.data && typeof resp.data === 'object' ? resp.data : null;
+  if (data && data.ok === true) {
+    diagState.providerNotes[entryPointName] = { tone: 'diag-ok', text: 'Installed and activated.' };
+    delete diagState.providerDrafts[entryPointName];
+  } else {
+    diagState.providerNotes[entryPointName] = { tone: 'diag-warn', text: diagBackupError(resp, 'Install failed') };
+  }
+  await refreshSystemDetails();
+}
+
+async function toggleProviderPackage(entryPointName, providerId, enabled) {
+  diagState.providerBusy.add(entryPointName);
+  diagRerender();
+  const resp = await diagPost('/api/setup/providers/enable', { provider_id: providerId, enabled });
+  diagState.providerBusy.delete(entryPointName);
+  const data = resp && resp.data && typeof resp.data === 'object' ? resp.data : null;
+  if (!(data && data.ok === true)) {
+    diagState.providerNotes[entryPointName] = { tone: 'diag-warn', text: diagBackupError(resp, 'Request failed') };
+  }
+  await refreshSystemDetails();
+}
+
+async function uninstallProviderPackage(entryPointName, providerId) {
+  diagState.providerBusy.add(entryPointName);
+  diagRerender();
+  const resp = await diagPost('/api/setup/providers/uninstall', { provider_id: providerId });
+  diagState.providerBusy.delete(entryPointName);
+  const data = resp && resp.data && typeof resp.data === 'object' ? resp.data : null;
+  if (!(data && data.ok === true)) {
+    diagState.providerNotes[entryPointName] = { tone: 'diag-warn', text: diagBackupError(resp, 'Request failed') };
   }
   await refreshSystemDetails();
 }

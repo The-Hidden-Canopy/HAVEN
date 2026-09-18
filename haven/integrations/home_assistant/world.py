@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta
+from typing import Callable
 from uuid import uuid4
 
 from haven.core.domain import ContextState, DeviceState, EvidenceStatus, PresenceState, WorldSnapshot
@@ -36,6 +37,32 @@ from haven.core.domain import ContextState, DeviceState, EvidenceStatus, Presenc
 from .observer import DEFAULT_SNAPSHOT_TTL, HomeAssistantObserver
 
 _Evidence = ContextState | DeviceState | PresenceState
+
+
+class HomeAssistantObservationAdapter:
+    """Adapts `HomeAssistantObserver` to the generic `ObservationProvider` shape.
+
+    `HomeAssistantObserver.observe(now=...)` already assembles a full
+    `WorldSnapshot` -- it knows the household's device registry and a
+    snapshot's validity window, which a raw `ObservationProvider` does not.
+    This adapter is what lets Home Assistant sit alongside any number of
+    other providers (community or built-in) as just one more source
+    `CompositeObserver` (`haven/providers/world.py`) folds together: it
+    flattens HA's own snapshot into the flat `Observation` batch shape and
+    lets the *outer* assembler own the snapshot envelope (id, captured_at,
+    valid_until) that only ever needs to exist once, not once per source.
+    A fetch failure propagates as-is; `CompositeObserver` isolates one
+    failing source from the rest rather than this adapter inventing its own
+    empty-on-failure behavior.
+    """
+
+    def __init__(self, *, observer: HomeAssistantObserver, clock: Callable[[], datetime]) -> None:
+        self._observer = observer
+        self._clock = clock
+
+    def observe(self) -> tuple[_Evidence, ...]:
+        snapshot = self._observer.observe(now=self._clock())
+        return (*snapshot.presence, *snapshot.contexts, *snapshot.devices)
 
 
 def _demote_to_fallback(item: _Evidence) -> _Evidence:
@@ -88,4 +115,4 @@ class HomeAssistantWorldProvider:
         return snapshot
 
 
-__all__ = ["HomeAssistantWorldProvider"]
+__all__ = ["HomeAssistantObservationAdapter", "HomeAssistantWorldProvider"]
