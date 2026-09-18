@@ -27,6 +27,12 @@
             <span class="nav-label">Home</span>
           </a>
         </li>
+        <li data-view="rooms">
+          <a href="#">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.6" y="2.6" width="4.5" height="4.5"/><rect x="8.9" y="2.6" width="4.5" height="4.5"/><rect x="2.6" y="8.9" width="4.5" height="4.5"/><rect x="8.9" y="8.9" width="4.5" height="4.5"/></svg>
+            <span class="nav-label">Rooms</span>
+          </a>
+        </li>
         <li data-view="people">
           <a href="#">
             <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="5.2" r="2.5"/><path d="M2.8 13.5c.7-2.7 2.8-4 5.2-4s4.5 1.3 5.2 4"/></svg>
@@ -74,6 +80,15 @@
           <span id="center-meta" class="muted">&mdash;</span>
         </div>
         <section id="rooms" class="card-grid" aria-label="Rooms"></section>
+      </section>
+
+      <section class="view view-rooms" aria-label="Rooms">
+        <div class="center-head">
+          <h1>ROOMS</h1>
+          <span id="rooms-count" class="muted">&mdash;</span>
+        </div>
+        <div id="room-nav" class="room-nav" aria-label="Room navigator"></div>
+        <div id="room-detail" class="room-detail"></div>
       </section>
 
       <section class="view view-activity" aria-label="Activity">
@@ -241,6 +256,31 @@
       <button type="button" id="demo-cam-down" title="Camera down — driveway critical">Cam &#9660;</button>
       <button type="button" id="demo-cam-up" title="Camera up — clear critical">Cam &#9650;</button>
       <button type="button" id="demo-wake" title="Fire wake word — voice wake">&#9678; Wake</button>
+    </div>
+  </div>
+
+  <div id="chain-scrim" class="chain-scrim" hidden></div>
+  <aside id="chain-panel" class="chain-panel" role="dialog" aria-label="Action trust chain" hidden>
+    <div class="chain-head">
+      <h2 class="micro">TRUST CHAIN</h2>
+      <button id="chain-close" type="button" class="chain-close" aria-label="Close trust chain">&times;</button>
+    </div>
+    <div id="chain-body" class="chain-body"></div>
+  </aside>
+
+  <div id="setup-scrim" class="setup-scrim" hidden></div>
+  <div id="setup-wizard" class="setup-wizard" role="dialog" aria-label="HAVEN setup" hidden>
+    <div class="setup-head">
+      <span class="micro">HAVEN SETUP</span>
+      <div id="setup-steps" class="setup-steps"></div>
+      <span id="setup-step-label" class="setup-step-label muted"></span>
+    </div>
+    <p id="setup-error" class="model-error" hidden></p>
+    <p id="setup-warning" class="setup-warning" hidden></p>
+    <div id="setup-body" class="setup-body"></div>
+    <div class="setup-foot">
+      <button id="setup-back" type="button" class="btn">Back</button>
+      <button id="setup-next" type="button" class="btn">Next</button>
     </div>
   </div>
 

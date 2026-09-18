@@ -26,16 +26,20 @@ from .models_api import (
     scan_payload,
 )
 from .receipts_api import action_chain, event_action_id
+from .setup_config import SetupConfigStore, default_data_dir
+from .setup_service import SetupService
 
 HEARTBEAT_SECONDS = 15
 
 _MODELS_ROOT_ENV = "HAVEN_MODELS_ROOT"
+_DATA_DIR_ENV = "HAVEN_DATA_DIR"
 # Lifecycle failures (BACKEND_MISSING, unknown id, ...) are recorded on the
 # records, so the error envelope still carries the fresh models/roots lists.
 _MODEL_LIFECYCLE_PATHS = ("/api/models/load", "/api/models/unload", "/api/models/remove")
 
 _APPROVE_PATH = re.compile(r"^/api/requests/([^/]+)/approve$")
 _DENY_PATH = re.compile(r"^/api/requests/([^/]+)/deny$")
+_DEVICE_COMMAND_PATH = re.compile(r"^/api/devices/([^/]+)/command$")
 _SCHEDULER_ENABLED_PATH = re.compile(r"^/api/scheduler/rules/([^/]+)/enabled$")
 _JOB_DETAIL_PATH = re.compile(r"^/api/models/jobs/([^/]+)$")
 _JOB_CANCEL_PATH = re.compile(r"^/api/models/jobs/([^/]+)/cancel$")
@@ -52,6 +56,7 @@ class HavenWebServer(ThreadingHTTPServer):
         *,
         clock: Clock | None = None,
         models_root: str | Path | None = None,
+        data_dir: str | Path | None = None,
     ) -> None:
         self.static_root = static_root
         env_root = os.environ.get(_MODELS_ROOT_ENV)
@@ -61,6 +66,13 @@ class HavenWebServer(ThreadingHTTPServer):
             resolved_models_root = models_root
         else:
             resolved_models_root = default_models_root()
+        env_data_dir = os.environ.get(_DATA_DIR_ENV)
+        if env_data_dir:
+            resolved_data_dir: str | Path = env_data_dir
+        elif data_dir is not None:
+            resolved_data_dir = data_dir
+        else:
+            resolved_data_dir = default_data_dir()
         # One manager per server: storage/registry are file-based, but the
         # in-memory backend registry and loaded handles are shared state, so
         # every handler thread must talk to this single instance. The job
@@ -72,6 +84,12 @@ class HavenWebServer(ThreadingHTTPServer):
         # manager, so a model loaded in the UI is a model the demo can speak
         # with.
         self.director = DemoDirector(clock=clock, model_manager=self.models)
+        # First-run onboarding state lives in `<data_dir>/haven.json`, next to
+        # the enrolled-devices sidecar. Construction stays lazy: the data dir
+        # is created by the setup steps, not by booting the server, and a
+        # broken config surfaces through the endpoints instead of failing here.
+        self.setup_store = SetupConfigStore(Path(resolved_data_dir) / "haven.json")
+        self.setup = SetupService(store=self.setup_store, director=self.director, clock=clock)
         super().__init__(server_address, _Handler)
         # The demo schedules for real: a daemon tick every 20 s asks the
         # runtime which approved rules are due. Stopped in server_close.
@@ -100,6 +118,10 @@ class _Handler(BaseHTTPRequestHandler):
     def model_jobs(self) -> DownloadJobManager:
         return self.server.model_jobs
 
+    @property
+    def setup_service(self) -> SetupService:
+        return self.server.setup
+
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/api/state":
@@ -110,6 +132,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, overview_payload(self.models))
         elif path == "/api/models/jobs":
             self._send_json(200, {"ok": True, "jobs": [job_to_dict(job) for job in self.model_jobs.list()]})
+        elif path == "/api/setup":
+            self._send_json(200, self.setup_service.status())
         else:
             match = _JOB_DETAIL_PATH.match(path)
             if match:
@@ -135,6 +159,28 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             state = self.director.chat(str(body.get("text", "")), body.get("focus"))
             self._send_json(200, {"ok": True, "state": state})
+            return
+        match = _DEVICE_COMMAND_PATH.match(path)
+        if match:
+            body = self._read_json()
+            if body is None:
+                return
+            service = body.get("service")
+            if not isinstance(service, str) or not service.strip():
+                self._send_json(400, {"ok": False, "error": "a non-empty 'service' is required"})
+                return
+            parameters = None
+            if service == "light.set_brightness":
+                brightness = body.get("brightness_pct")
+                if isinstance(brightness, bool) or not isinstance(brightness, int):
+                    self._send_json(400, {"ok": False, "error": "an integer 'brightness_pct' is required"})
+                    return
+                parameters = {"brightness_pct": brightness}
+            result = self.director.device_command(match.group(1), service, parameters)
+            if not result.get("ok"):
+                self._send_json(400, result)
+            else:
+                self._send_json(200, result)
             return
         match = _APPROVE_PATH.match(path)
         if match:
@@ -205,7 +251,65 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/models" or path.startswith("/api/models/"):
             self._handle_models_post(path)
             return
+        if path == "/api/setup" or path.startswith("/api/setup/"):
+            self._handle_setup_post(path)
+            return
         self._send_json(404, {"error": "not found"})
+
+    def _handle_setup_post(self, path: str) -> None:
+        setup = self.server.setup
+        if path == "/api/setup/discovery/scan":
+            self._send_json(200, setup.run_discovery())
+            return
+        if path == "/api/setup/complete":
+            self._send_json(200, setup.complete())
+            return
+        if path == "/api/setup/reopen":
+            self._send_json(200, setup.reopen())
+            return
+        body = self._read_json(optional=True)
+        if body is None:
+            return
+        if path == "/api/setup/data-dir":
+            value = body.get("path")
+            result = setup.choose_data_dir(value if isinstance(value, str) else None)
+        elif path == "/api/setup/provider":
+            kind = body.get("kind")
+            base_url = body.get("base_url")
+            token = body.get("token")
+            result = setup.connect_provider(
+                kind=kind if isinstance(kind, str) else None,
+                base_url=base_url if isinstance(base_url, str) else None,
+                token=token if isinstance(token, str) else None,
+                skip=bool(body.get("skip", False)),
+            )
+        elif path == "/api/setup/enroll":
+            candidate_id = body.get("candidate_id")
+            device_type = body.get("device_type")
+            room = body.get("room")
+            if not isinstance(candidate_id, str) or not candidate_id.strip():
+                self._send_json(400, {"ok": False, "error": "a non-empty 'candidate_id' is required"})
+                return
+            if not isinstance(device_type, str) or not device_type.strip():
+                self._send_json(400, {"ok": False, "error": "a non-empty 'device_type' is required"})
+                return
+            result = setup.enroll(
+                candidate_id.strip(),
+                device_type=device_type.strip(),
+                room=room if isinstance(room, str) and room.strip() else None,
+            )
+        elif path == "/api/setup/preferences":
+            result = setup.set_preferences(voice=body.get("voice"), intelligence=body.get("intelligence"))
+        else:
+            self._send_json(404, {"error": "not found"})
+            return
+        self._send_setup_result(result)
+
+    def _send_setup_result(self, result: dict) -> None:
+        if result.get("ok"):
+            self._send_json(200, result)
+        else:
+            self._send_json(400, result)
 
     def _handle_models_post(self, path: str) -> None:
         manager = self.models
@@ -479,9 +583,12 @@ def make_server(
     clock: Clock | None = None,
     static_root: str | Path | None = None,
     models_root: str | Path | None = None,
+    data_dir: str | Path | None = None,
 ) -> tuple[HavenWebServer, DemoDirector]:
     root = Path(static_root) if static_root is not None else Path(__file__).parent / "static"
-    server = HavenWebServer(("127.0.0.1", port), root, clock=clock, models_root=models_root)
+    server = HavenWebServer(
+        ("127.0.0.1", port), root, clock=clock, models_root=models_root, data_dir=data_dir
+    )
     return server, server.director
 
 
