@@ -18,6 +18,7 @@ _CONFIG_KEYS = (
     "version",
     "completed",
     "data_dir",
+    "household_id",
     "provider_kind",
     "provider_base_url",
     "provider_token_file",
@@ -54,11 +55,19 @@ class SetupConfig:
 
     Token material is never stored here: `provider_token_file` is only the
     filename of a sidecar the provider step writes next to the config.
+
+    `household_id` is `None` until this installation has a real household to
+    identify (see `haven.web.application.ensure_household_id`): a pure demo
+    run never mints one, but the moment a provider is configured, one is
+    generated and persisted here permanently, so restarts and rebuilds always
+    read back the same identity instead of a hardcoded literal every
+    installation would otherwise share.
     """
 
     version: int = _CONFIG_VERSION
     completed: bool = False
     data_dir: str | None = None
+    household_id: str | None = None
     provider_kind: str | None = None
     provider_base_url: str | None = None
     provider_token_file: str | None = None
@@ -68,7 +77,7 @@ class SetupConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.version, int) or isinstance(self.version, bool) or self.version != _CONFIG_VERSION:
             raise ValueError(f"unsupported setup config version: {self.version!r}")
-        for name in ("data_dir", "provider_kind", "provider_base_url", "provider_token_file"):
+        for name in ("data_dir", "household_id", "provider_kind", "provider_base_url", "provider_token_file"):
             value = getattr(self, name)
             if value is None:
                 continue
@@ -126,7 +135,7 @@ class SetupConfigStore:
             value = data.get(name, False)
             if not isinstance(value, bool):
                 raise SetupConfigError(f"setup config field {name!r} must be a boolean")
-        for name in ("data_dir", "provider_kind", "provider_base_url", "provider_token_file"):
+        for name in ("data_dir", "household_id", "provider_kind", "provider_base_url", "provider_token_file"):
             value = data.get(name)
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise SetupConfigError(
@@ -136,6 +145,7 @@ class SetupConfigStore:
             version=version,
             completed=data.get("completed", False),
             data_dir=data.get("data_dir"),
+            household_id=data.get("household_id"),
             provider_kind=data.get("provider_kind"),
             provider_base_url=data.get("provider_base_url"),
             provider_token_file=data.get("provider_token_file"),
@@ -150,6 +160,7 @@ class SetupConfigStore:
                 "version": config.version,
                 "completed": config.completed,
                 "data_dir": config.data_dir,
+                "household_id": config.household_id,
                 "provider_kind": config.provider_kind,
                 "provider_base_url": config.provider_base_url,
                 "provider_token_file": config.provider_token_file,

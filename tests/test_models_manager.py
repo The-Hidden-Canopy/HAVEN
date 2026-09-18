@@ -567,7 +567,7 @@ def test_backend_availability_probes_the_lazy_reference_runtimes():
 
         availability = {item.backend: item for item in manager.backend_availability()}
 
-        assert set(availability) == {"http", "transformers", "llama_cpp", "onnx"}
+        assert set(availability) == {"http", "transformers", "llama_cpp", "onnx", "piper"}
         assert availability["http"].available is True
         for name, package in (
             ("transformers", "transformers"),
@@ -581,6 +581,12 @@ def test_backend_availability_probes_the_lazy_reference_runtimes():
                 assert "importable" in item.detail
             else:
                 assert item.detail == f"package not importable: install {package} to enable"
+
+        from haven.models.backends.piper_native import piper_executable_path
+
+        piper_item = availability["piper"]
+        piper_installed = piper_executable_path().is_file()
+        assert piper_item.available is piper_installed
 
 
 def test_backend_availability_names_the_missing_runtime_package(monkeypatch):

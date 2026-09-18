@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from haven.core.domain import (
     ActionKind,
+    CoverState,
     DecisionStatus,
     DeviceSelector,
     DeviceState,
@@ -39,6 +40,24 @@ def _device() -> DeviceState:
     )
 
 
+def test_device_to_dict_surfaces_cover_state_never_collapsing_open_to_none() -> None:
+    garage = DeviceState(
+        device_id="cover.garage_door",
+        kind="cover",
+        room_id="garage",
+        is_on=True,
+        brightness_pct=None,
+        observed_at=NOW,
+        source="home_assistant.rest",
+        raw_state="open",
+        cover_state=CoverState.OPEN,
+    )
+    payload = serialize.device_to_dict(garage, role="cover")
+    assert payload["raw_state"] == "open"
+    assert payload["cover_state"] == "open"
+    assert payload["is_on"] is True
+
+
 def test_to_json_value_maps_enums_datetimes_tuples_and_role_tiers() -> None:
     assert serialize.to_json_value(DecisionStatus.ALLOW) == "allow"
     assert serialize.to_json_value(NOW) == NOW.isoformat()
@@ -61,6 +80,14 @@ def test_device_to_dict_uses_iso_datetime_and_plain_types() -> None:
         "changed_by": "system",
         "confidence": 1.0,
         "source": "demo.house",
+        "raw_state": None,
+        "cover_state": None,
+        "lock_state": None,
+        "climate_mode": None,
+        "current_temperature": None,
+        "target_temperature": None,
+        "camera_available": None,
+        "motion_detected": None,
     }
 
 

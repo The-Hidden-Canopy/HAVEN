@@ -9,7 +9,8 @@ from haven.devices import CapabilityDescriptor, ControlClass, DeviceManifest
 from haven.integrations.home_assistant import HomeAssistantWorldProvider
 from haven.intelligence.gateway import ScriptedIntelligenceProvider
 from haven.models.bridge import ModelIntelligenceProvider
-from haven.web.application import HA_PROVIDER_ID, build_application
+from haven.web.application import HA_PROVIDER_ID, build_application, ensure_household_id
+from haven.web.demo import HOUSEHOLD_ID
 from haven.web.setup_config import SetupConfig, SetupConfigStore
 from haven.web.setup_service import _ENROLLED_FILENAME, _TOKEN_FILENAME
 
@@ -106,15 +107,86 @@ def test_configured_provider_builds_the_real_world():
     # The world observes through the injected client, never the network.
     snapshot = director.world.observe(NOW)
     assert [device.device_id for device in snapshot.devices] == ["light.living_room"]
+    # A real household never carries the shared demo fixture id.
+    assert director.household_id != HOUSEHOLD_ID
+    assert director.resident.household_id == director.household_id
+    assert director.owner.household_id == director.household_id
 
 
-def test_configured_provider_with_missing_token_falls_back_to_demo():
+def test_household_id_is_minted_once_and_persisted_across_boots():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _seed_real_setup(Path(tmp))
+        first = build_application(store=store, model_manager=None, clock=lambda: NOW, ha_client=_FakeHAClient())
+        # The mint was persisted: a fresh SetupConfigStore reading the same
+        # file sees the id build_application just wrote, not None.
+        reloaded_id = SetupConfigStore(store.path).load().household_id
+        assert reloaded_id == first.household_id
+
+        second = build_application(store=store, model_manager=None, clock=lambda: NOW, ha_client=_FakeHAClient())
+        assert second.household_id == first.household_id
+
+
+def test_two_installations_never_share_a_household_id():
+    with tempfile.TemporaryDirectory() as tmp_a, tempfile.TemporaryDirectory() as tmp_b:
+        store_a = _seed_real_setup(Path(tmp_a))
+        store_b = _seed_real_setup(Path(tmp_b))
+        director_a = build_application(store=store_a, model_manager=None, clock=lambda: NOW, ha_client=_FakeHAClient())
+        director_b = build_application(store=store_b, model_manager=None, clock=lambda: NOW, ha_client=_FakeHAClient())
+        assert director_a.household_id != director_b.household_id
+
+
+def test_ensure_household_id_mints_only_when_absent():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = SetupConfigStore(Path(tmp) / "haven.json")
+        config = SetupConfig(provider_kind="home_assistant")
+        updated, minted = ensure_household_id(store, config)
+        assert minted
+        assert updated.household_id == minted
+
+        again, unchanged = ensure_household_id(store, updated)
+        assert unchanged == minted
+
+
+def test_configured_provider_with_missing_token_stays_real_but_unreachable():
     with tempfile.TemporaryDirectory() as tmp:
         store = _seed_real_setup(Path(tmp))
         (Path(tmp) / _TOKEN_FILENAME).unlink()
         director = build_application(
             store=store, model_manager=None, clock=lambda: NOW, ha_client=_FakeHAClient()
         )
+
+    # An unreadable token must never produce the demo fixture: this is the
+    # household's real installation (its enrolled device is still there),
+    # just with a world reporting no live evidence rather than a fictional
+    # house that looks real.
+    assert director.house is None
+    assert isinstance(director.world, HomeAssistantWorldProvider)
+    assert director.registry.is_registered("light.living_room")
+    assert director.ha_states_source is None
+    snapshot = director.world.observe(NOW)
+    assert snapshot.devices == ()
+    # No execution provider either: nothing can reach a command anywhere.
+    assert director.runtime.execution_providers.is_registered(HA_PROVIDER_ID) is False
+
+
+def test_configured_provider_with_no_base_url_stays_real_but_unreachable():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        store = SetupConfigStore(data_dir / "haven.json")
+        store.save(SetupConfig(completed=True, data_dir=str(data_dir), provider_kind="home_assistant"))
+        director = build_application(
+            store=store, model_manager=None, clock=lambda: NOW, ha_client=_FakeHAClient()
+        )
+
+    assert director.house is None
+    assert isinstance(director.world, HomeAssistantWorldProvider)
+    assert director.ha_states_source is None
+
+
+def test_no_provider_configured_yet_builds_the_demo_household():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = SetupConfigStore(Path(tmp) / "haven.json")
+        director = build_application(store=store, model_manager=None, clock=lambda: NOW)
 
     assert director.house is not None
     assert not isinstance(director.world, HomeAssistantWorldProvider)

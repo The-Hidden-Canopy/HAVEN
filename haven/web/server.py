@@ -19,7 +19,7 @@ from ..models import ModelManager, inspect_folder
 from ..models.jobs import DownloadJobManager, job_to_dict
 from ..models.storage import default_models_root
 from .application import build_application
-from .demo import Clock, DemoDirector
+from .haven_application import Clock, HavenApplication
 from .diagnostics import BackupManager, SystemDiagnostics
 from .models_api import (
     assign_payload,
@@ -92,6 +92,13 @@ class HavenWebServer(ThreadingHTTPServer):
         # is created by the setup steps, not by booting the server, and a
         # broken config surfaces through the endpoints instead of failing here.
         self.setup_store = SetupConfigStore(Path(resolved_data_dir) / "haven.json")
+        # Kept so `rebuild_director` can re-run the same composition with the
+        # freshly saved setup config; `demo` and `ha_client` are constructor
+        # overrides that must survive a rebuild unchanged (an operator who
+        # started with --demo stays in demo even if setup writes a provider).
+        self._director_clock = clock
+        self._director_demo = demo
+        self._director_ha_client = ha_client
         # One manager per server: storage/registry are file-based, but the
         # in-memory backend registry and loaded handles are shared state, so
         # every handler thread must talk to this single instance. The job
@@ -104,14 +111,13 @@ class HavenWebServer(ThreadingHTTPServer):
         # The director's model bridge routes chat/asr/tts through this same
         # manager, so a model loaded in the UI is a model the demo can speak
         # with.
-        self.director = build_application(
+        self.director = self._build_director()
+        self.setup = SetupService(
             store=self.setup_store,
-            model_manager=self.models,
+            director=self.director,
             clock=clock,
-            demo=demo,
-            ha_client=ha_client,
+            on_rebuild=self.rebuild_director,
         )
-        self.setup = SetupService(store=self.setup_store, director=self.director, clock=clock)
         # Diagnostics reads through the server itself; backups own the
         # `backups/` subtree of the same single-root data dir.
         self._started_monotonic = time.monotonic()
@@ -133,9 +139,66 @@ class HavenWebServer(ThreadingHTTPServer):
         # The demo schedules for real: a daemon tick every 20 s asks the
         # runtime which approved rules are due. Stopped in server_close.
         self.director.start_scheduler()
+        # A real always-on voice loop, when native audio and a wake+ASR
+        # model pair are available; a no-op (returns False) otherwise, so
+        # boot never fails or blocks on missing hardware/models.
+        self.director.start_voice()
+
+    def _build_director(self) -> HavenApplication:
+        # The application factory reads the saved setup and builds the user's
+        # house when a provider is configured, the demo household otherwise.
+        # The director's model bridge routes chat/asr/tts through this same
+        # manager, so a model loaded in the UI is a model the demo can speak
+        # with.
+        return build_application(
+            store=self.setup_store,
+            model_manager=self.models,
+            clock=self._director_clock,
+            demo=self._director_demo,
+            ha_client=self._director_ha_client,
+        )
+
+    def rebuild_director(self) -> None:
+        """Re-run composition from the just-saved setup config, live.
+
+        Without this, the setup wizard could persist a valid Home Assistant
+        connection to disk while the running server kept serving the demo
+        household it built at process start -- a resident would see their
+        real house only after manually restarting HAVEN. `SetupService`
+        calls this immediately after a step changes provider connection, so
+        the swap happens in place instead.
+
+        Existing `/events` subscribers are not migrated: `_stream_events`
+        notices `self.server.director` no longer matches the director it
+        subscribed to and closes the connection, and the browser's
+        `EventSource` reconnects automatically, subscribing to the live
+        director on its next request.
+        """
+
+        old = self.director
+        # Stopped and flushed before the new director builds: `_build_director`
+        # opens its own connection to the same history.db and loads from it
+        # immediately, so old's history must be fully durable and its
+        # connection closed first, not just eventually. The old real
+        # microphone/speaker (if any) must also release the device before
+        # the new director tries to open its own.
+        old.stop_scheduler()
+        old.stop_voice()
+        old.close_history()
+        new = self._build_director()
+        self.director = new
+        self.setup.set_director(new)
+        # Mirrors the same wiring `__init__` does for the first director:
+        # discovery scans must list the new world's real HA entities, not
+        # the one this composition replaced.
+        self.setup.attach_ha_states_source(getattr(new, "ha_states_source", None))
+        new.start_scheduler()
+        new.start_voice()
 
     def server_close(self) -> None:
         self.director.stop_scheduler()
+        self.director.stop_voice()
+        self.director.close_history()
         super().server_close()
 
 
@@ -146,7 +209,7 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
     @property
-    def director(self) -> DemoDirector:
+    def director(self) -> HavenApplication:
         return self.server.director
 
     @property
@@ -622,7 +685,12 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.close_connection = False
-        subscriber = self.director.subscribe()
+        # Captured once: if the composition root rebuilds the household
+        # mid-stream (setup just connected a provider), this subscriber
+        # queue belongs to the director being retired and will never
+        # receive another event.
+        director = self.director
+        subscriber = director.subscribe()
 
         def emit(event: str, payload: dict) -> None:
             data = json.dumps(payload)
@@ -635,8 +703,14 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             self.wfile.write(b"retry: 3000\n\n")
             self.wfile.flush()
-            emit("state", self.director.state())
+            emit("state", director.state())
             while True:
+                if self.server.director is not director:
+                    # `rebuild_director` swapped in a new household: end this
+                    # connection so the browser's EventSource reconnects and
+                    # subscribes to the live director instead of one that has
+                    # stopped receiving events.
+                    break
                 try:
                     kind, payload = subscriber.get(timeout=HEARTBEAT_SECONDS)
                 except queue.Empty:
@@ -653,7 +727,7 @@ class _Handler(BaseHTTPRequestHandler):
             # The stream is over once this generator exits; without this the
             # handler loops back into readline() on an aborted connection.
             self.close_connection = True
-            self.director.unsubscribe(subscriber)
+            director.unsubscribe(subscriber)
 
     def _stream_model_events(self) -> None:
         self.send_response(200)
@@ -703,7 +777,7 @@ def make_server(
     data_dir: str | Path | None = None,
     demo: bool = False,
     ha_client=None,
-) -> tuple[HavenWebServer, DemoDirector]:
+) -> tuple[HavenWebServer, HavenApplication]:
     root = Path(static_root) if static_root is not None else Path(__file__).parent / "static"
     server = HavenWebServer(
         ("127.0.0.1", port), root, clock=clock, models_root=models_root, data_dir=data_dir,

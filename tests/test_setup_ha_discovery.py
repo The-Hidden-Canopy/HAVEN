@@ -167,3 +167,39 @@ def test_fan_and_cover_presets_enroll_guarded_capabilities() -> None:
         assert open_cap.control_class is ControlClass.GUARDED
         # The default room falls back to the candidate's suggestion.
         assert cover.room == "garage"
+
+
+def test_camera_candidate_enrolls_as_observation_only() -> None:
+    """A camera discovered through HA state enrolls, but never claims control.
+
+    Before this preset existed, `_CAPABILITY_PRESETS` had no "camera" entry
+    at all, so discovery could surface a camera candidate that enrollment
+    then flatly refused with "unsupported device_type" -- exactly the
+    discovery/enrollment mismatch this covers. The fix must not overclaim
+    control HA's camera domain can't back: the manifest carries a single
+    readable capability, and nothing writable.
+    """
+
+    with tempfile.TemporaryDirectory() as tmp:
+        director = DemoDirector(clock=lambda: NOW)
+        camera_states = CANNED_STATES + (
+            {"entity_id": "camera.driveway", "state": "idle"},
+        )
+        service = _service(Path(tmp) / "data", director=director, source=_StubStatesSource(camera_states))
+
+        candidates = _candidates_by_id(service.run_discovery())
+        assert candidates["camera.driveway"]["suggested_device_type"] == "camera"
+
+        result = service.enroll("camera.driveway", device_type="camera", room="driveway")
+        assert result["ok"] is True
+        manifest = director.registry.get("camera.driveway")
+        assert manifest.provider_id == "home_assistant"
+        assert [cap.name for cap in manifest.capabilities] == ["live_stream"]
+        assert manifest.capabilities[0].readable is True
+        assert manifest.capabilities[0].writable is False
+        assert not any(cap.writable for cap in manifest.capabilities)
+
+        # Honest refusal, not a fabricated capability: nothing on this
+        # manifest can actually be commanded.
+        denied = director.device_command("camera.driveway", "camera.turn_on")
+        assert denied["ok"] is False

@@ -95,10 +95,11 @@ class HavenStore:
     def restore_rules(self, rules: tuple[Rule, ...]) -> None:
         """Rehydrate automations saved by a previous process lifetime.
 
-        This is the ONLY non-transition mutation of the store, and it exists
-        solely at the process-lifetime boundary: rehydration replays NO
-        transitions and emits NO domain events, because the transitions that
-        proposed and approved these rules already happened in a previous
+        This and its `restore_actions`/`restore_memory`/`restore_events`
+        siblings are the only non-transition mutations of the store, and
+        they exist solely at the process-lifetime boundary: rehydration
+        replays NO transitions and emits NO new domain events, because the
+        transitions that produced this state already happened in a previous
         process lifetime. Replaying them here would fabricate activity this
         process never governed. The rules enter as already-accepted state --
         exactly what a restarted household means by "my automations survived
@@ -113,6 +114,54 @@ class HavenStore:
         if len(rule_ids) != len(set(rule_ids)):
             raise InvalidTransition("restored rules contain duplicate rule_ids")
         self._state = replace(self._state, rules=rules)
+
+    def restore_actions(self, actions: tuple[ActionRecord, ...]) -> None:
+        """Rehydrate the action ledger saved by a previous process lifetime.
+
+        Same discipline as `restore_rules`: no transitions replay, no events
+        emit. Actions arrive as already-decided history -- `get_action` and
+        the receipts drill-down (`haven.web.receipts_api`) are what read
+        this back, not `execute_transition`.
+        """
+
+        actions = tuple(actions)
+        for action in actions:
+            if action.request.household_id != self._household_id:
+                raise ScopeViolation("restored action household does not match this store")
+        action_ids = [action.action_id for action in actions]
+        if len(action_ids) != len(set(action_ids)):
+            raise InvalidTransition("restored actions contain duplicate action_ids")
+        self._state = replace(self._state, actions=actions)
+
+    def restore_memory(self, memory: tuple[MemoryEntry, ...]) -> None:
+        """Rehydrate memory entries saved by a previous process lifetime."""
+
+        memory = tuple(memory)
+        for entry in memory:
+            if entry.household_id != self._household_id:
+                raise ScopeViolation("restored memory household does not match this store")
+        entry_ids = [entry.entry_id for entry in memory]
+        if len(entry_ids) != len(set(entry_ids)):
+            raise InvalidTransition("restored memory entries contain duplicate entry_ids")
+        self._state = replace(self._state, memory=memory)
+
+    def restore_events(self, events: tuple[DomainEvent, ...]) -> None:
+        """Rehydrate the domain event log saved by a previous process lifetime.
+
+        Unlike `append_domain_event`, this replaces `self._events` wholesale
+        rather than appending -- it is meant to run exactly once, before any
+        live transition of this process lifetime, the same as the other
+        `restore_*` methods.
+        """
+
+        events = tuple(events)
+        for event in events:
+            if event.household_id != self._household_id:
+                raise ScopeViolation("restored event household does not match this store")
+        event_ids = [event.event_id for event in events]
+        if len(event_ids) != len(set(event_ids)):
+            raise InvalidTransition("restored events contain duplicate event_ids")
+        self._events = events
 
     def get_rule(self, rule_id: str) -> Rule:
         for rule in self._state.rules:

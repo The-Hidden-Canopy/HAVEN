@@ -39,7 +39,7 @@ from haven.web.demo import HOUSEHOLD_ID, DemoDirector
 from haven.web.rules_persist import RulesPersistence, rule_from_dict, rule_to_dict
 from haven.web.server import make_server
 from haven.web.setup_config import SetupConfig, SetupConfigStore
-from haven.web.setup_service import _ENROLLED_FILENAME, _TOKEN_FILENAME
+from haven.web.setup_service import _ENROLLED_FILENAME, _HOUSEHOLD_FILENAME, _TOKEN_FILENAME
 
 UTC = timezone.utc
 NOW = datetime(2026, 9, 16, 22, 35, tzinfo=UTC)
@@ -320,6 +320,34 @@ def test_director_with_scenario_and_empty_sidecar_keeps_seeded_rules() -> None:
         assert director.scheduler.is_enabled(director.office_light_rule_id) is True
 
 
+def test_director_boot_drops_rules_from_a_different_household_id() -> None:
+    """A sidecar written under a different household_id must never crash boot.
+
+    This is the migration hazard `ensure_household_id` introduces: a
+    `rules.json` written by an older process lifetime (or, before every
+    installation had its own permanent id, literally every installation)
+    can name a household_id that no longer matches this run's. `HavenStore`
+    already refuses that at the transition boundary (`ScopeViolation`); the
+    director must degrade by dropping the untrusted rules, not propagate the
+    exception into a boot crash.
+    """
+
+    with tempfile.TemporaryDirectory() as tmp:
+        persistence = RulesPersistence(Path(tmp) / "rules.json")
+        persistence.save((_office_light_rule(household_id="household-other"),))
+
+        director = DemoDirector(
+            clock=lambda: NOW,
+            scenario=False,
+            household_id="household-mine",
+            resident=Principal(actor_id="resident-1", household_id="household-mine", role_tier=RoleTier.MEMBER),
+            owner=Principal(actor_id="owner-1", household_id="household-mine", role_tier=RoleTier.OWNER),
+            rules_persistence=persistence,
+        )
+
+    assert director.store.state.rules == ()
+
+
 def test_director_without_persistence_writes_nothing_and_stays_ephemeral() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         director = _director(None)
@@ -368,6 +396,26 @@ def _seed_real_setup(data_dir: Path) -> None:
     )
     (data_dir / _TOKEN_FILENAME).write_text("secret-token", encoding="utf-8")
     (data_dir / _ENROLLED_FILENAME).write_text(json.dumps({"version": 2, "manifests": []}), encoding="utf-8")
+    # A declared owner: governed actions (chat rule drafting/approval) now
+    # refuse without one, and this test is about persistence surviving a
+    # restart, not about that separate refusal.
+    (data_dir / _HOUSEHOLD_FILENAME).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "people": [
+                    {
+                        "person_id": "resident-1",
+                        "name": "Resident One",
+                        "role": "owner",
+                        "sources": [],
+                    }
+                ],
+                "contexts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 @contextmanager

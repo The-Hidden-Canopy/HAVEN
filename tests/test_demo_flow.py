@@ -20,6 +20,7 @@ from haven.devices import CapabilityDescriptor, ControlClass, DeviceManifest
 from haven.models import BackendRegistry, ModelKind, ModelManager
 from haven.models.manifest import ModelManifest, manifest_filename
 from haven.providers import ProviderCapabilities, build_default_registry
+from haven.speech.events import TranscriptFinal
 from haven.web.demo import PROVIDER_ID, DemoDirector
 
 UTC = timezone.utc
@@ -705,7 +706,7 @@ def test_voice_stop_denies_a_pending_permission_request() -> None:
     assert state["pending"] == []
     assert state["glow"] == "idle"
     texts = [entry["text"] for entry in state["conversation"]]
-    assert "Understood — I'll leave the garage as it is." in texts
+    assert "Understood — I'll leave it as it is." in texts
     assert director.house.garage_open() is True
     assert [c for c in director.adapter.commands] == []
 
@@ -921,3 +922,42 @@ def test_reset_stops_and_restarts_the_scheduler_thread() -> None:
     assert not first.is_alive()
     director.stop_scheduler()
     assert director._scheduler_thread is None
+
+
+def _final(text: str) -> TranscriptFinal:
+    return TranscriptFinal(text=text, start_ms=0, end_ms=1000, confidence=1.0, at_ms=1000)
+
+
+def test_on_real_utterance_routes_a_command_through_chat_intent_like_typed_text() -> None:
+    """A real SpeechService's committed transcript reaches the same
+    _chat_intent path -- and so the same authority/execution path -- as
+    typed chat, proving the item 10 acceptance chain end to end short of
+    real audio hardware and a real model (both covered elsewhere)."""
+
+    director = _director()
+    director._on_real_utterance(_final("turn off the office light"))
+
+    texts = [entry["text"] for entry in director._conversation]
+    assert "turn off the office light" in texts
+    assert director.registry.get("office_light") is not None
+    action = next(a for a in director.store.state.actions if a.status == ActionStatus.EXECUTED)
+    assert action.request.target_device_id == "office_light"
+
+
+def test_on_real_utterance_stop_with_nothing_pending_says_stopped() -> None:
+    director = DemoDirector(clock=lambda: NOW, scenario=False)
+    director._on_real_utterance(_final("haven, stop"))
+
+    texts = [entry["text"] for entry in director._conversation]
+    assert "Stopped." in texts
+    assert director.pending_requests == ()
+
+
+def test_on_real_utterance_stop_denies_a_pending_request() -> None:
+    director = _director()
+    director.start_scenario()
+    assert director.pending_requests  # the seeded garage-close ask
+
+    director._on_real_utterance(_final("stop"))
+
+    assert director.pending_requests == ()

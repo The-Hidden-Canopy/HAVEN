@@ -7,16 +7,50 @@ returns a valid empty WorldSnapshot for the household (captured at ``now``,
 valid for one TTL window, no presence/contexts/devices). Consumers downstream
 -- chat grounding, authority evidence, state rendering -- see "nothing
 observed yet", which the authority engine already treats as fail-closed.
+
+Keeping the last good snapshot for UI continuity ("last known: garage closed
+2m ago") is deliberate; returning it as if THIS poll had succeeded is not.
+Every entry the last good snapshot carries is still stamped
+``EvidenceStatus.OBSERVED`` from whenever it really was fetched, so serving
+it verbatim after a failed refresh would let a household's evidence look
+fresh (and authorizable) for as long as the snapshot's original TTL window
+happens to still cover ``now`` -- even though the very poll that just ran
+found nothing. ``_as_fallback`` demotes every such entry to
+``EvidenceStatus.FALLBACK`` before it is returned, so
+``WorldSnapshot.evidence_problem`` (which only ever treats OBSERVED as
+fresh) fails closed on it exactly as it already does for genuinely stale
+evidence, while the retained values, ``observed_at``, and ``source`` still
+let the UI say how old the last real reading was. An entry that was already
+``UNAVAILABLE`` at capture time keeps that more specific status rather than
+being overwritten to the vaguer FALLBACK.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-from haven.core.domain import WorldSnapshot
+from haven.core.domain import ContextState, DeviceState, EvidenceStatus, PresenceState, WorldSnapshot
 
 from .observer import DEFAULT_SNAPSHOT_TTL, HomeAssistantObserver
+
+_Evidence = ContextState | DeviceState | PresenceState
+
+
+def _demote_to_fallback(item: _Evidence) -> _Evidence:
+    if item.status == EvidenceStatus.UNAVAILABLE:
+        return item
+    return replace(item, status=EvidenceStatus.FALLBACK)
+
+
+def _as_fallback(snapshot: WorldSnapshot) -> WorldSnapshot:
+    return replace(
+        snapshot,
+        devices=tuple(_demote_to_fallback(item) for item in snapshot.devices),
+        presence=tuple(_demote_to_fallback(item) for item in snapshot.presence),
+        contexts=tuple(_demote_to_fallback(item) for item in snapshot.contexts),
+    )
 
 
 class HomeAssistantWorldProvider:
@@ -43,7 +77,7 @@ class HomeAssistantWorldProvider:
             snapshot = self._observer.observe(now=now)
         except Exception:
             if self._last_good is not None:
-                return self._last_good
+                return _as_fallback(self._last_good)
             return WorldSnapshot(
                 snapshot_id=f"empty-{uuid4().hex}",
                 household_id=self._household_id,

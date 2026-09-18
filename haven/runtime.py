@@ -433,6 +433,7 @@ class HavenRuntime:
         world: WorldSnapshot,
         now: datetime,
         confirmation_token: ConfirmationToken | None = None,
+        capability: str | None = None,
     ) -> ActionReceipt:
         """Execute one HUMAN-INITIATED action straight through authority.
 
@@ -458,6 +459,13 @@ class HavenRuntime:
         it; one that resolves to more than one raises `AmbiguousTargetError`
         with the resolved count, since a direct action addresses one device
         rather than fanning out.
+
+        `capability`, like `RuleDraft.capability`, routes risk and service
+        resolution through the target device's own manifest instead of the
+        closed `ActionKind` set -- the direct-command analogue of
+        `_service_for_device`, so a device whose capability has no
+        dedicated `ActionKind` (a switch or fan's plain "power") is still
+        commandable without inventing one.
         """
 
         now = require_aware_utc(now, name="action time")
@@ -483,6 +491,7 @@ class HavenRuntime:
             requested_at=now,
             origin=ActionOrigin.DIRECT,
             confirmation_token=confirmation_token,
+            capability=capability,
         )
         decision = self.authority.decide_direct(
             request,
@@ -509,7 +518,7 @@ class HavenRuntime:
             interpretation=justification,
             evidence=(),
             decision=decision,
-            service=self._service_for(action_kind),
+            service=self._resolve_service(capability=capability, action_kind=action_kind, target_device_id=target_device_id),
             correlation_id=rule_id,
             principal=principal,
             now=now,
@@ -680,10 +689,19 @@ class HavenRuntime:
         mapping, which does not vary per device.
         """
 
-        if draft.capability is None:
-            return self._service_for(draft.action_kind)
+        return self._resolve_service(
+            capability=draft.capability, action_kind=draft.action_kind, target_device_id=target_device_id
+        )
+
+    def _resolve_service(self, *, capability: str | None, action_kind: ActionKind, target_device_id: str) -> str:
+        """Shared by the rule path (`_service_for_device`) and `run_action`:
+        a named capability resolves through that device's own manifest;
+        with none, the closed `ActionKind` -> service mapping applies."""
+
+        if capability is None:
+            return self._service_for(action_kind)
         manifest = self.authority.device_registry.get(target_device_id)
-        return manifest.capability(draft.capability).service
+        return manifest.capability(capability).service
 
     @staticmethod
     def _service_for(action_kind) -> str:

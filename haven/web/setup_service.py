@@ -243,6 +243,13 @@ _CAPABILITY_PRESETS: dict[str, tuple[CapabilityDescriptor, ...]] = {
         CapabilityDescriptor("close", ControlClass.GUARDED, writable=True, service="cover.close"),
         CapabilityDescriptor("open", ControlClass.GUARDED, writable=True, service="cover.open"),
     ),
+    # A camera discovered through the setup wizard's HA-state scan is
+    # observation-only: HA's camera domain doesn't expose PTZ/privacy-shutter
+    # itself (those are separate entities when they exist at all), so this
+    # preset never claims control this discovery path can't back. The richer
+    # `haven.cameras` PTZ/privacy-shutter bridge is for cameras discovered as
+    # hardware, a different discovery path from this one.
+    "camera": (CapabilityDescriptor("live_stream", ControlClass.READ, readable=True),),
 }
 
 
@@ -436,6 +443,7 @@ class SetupService:
         director,
         clock: Callable[[], datetime] | None = None,
         ha_states_source=None,
+        on_rebuild: Callable[[], None] | None = None,
     ) -> None:
         self._store = store
         self._director = director
@@ -443,6 +451,11 @@ class SetupService:
         # Structural: anything with `fetch_states() -> tuple[dict, ...]`, the
         # same contract `LiveHomeAssistantAdapter` implements.
         self._ha_states_source = ha_states_source
+        # Called after a step changes provider connection, so the composition
+        # root can rebuild the live household from the config this step just
+        # saved instead of leaving the running app on whatever it built at
+        # boot until someone restarts the process.
+        self._on_rebuild = on_rebuild
         self._config_error: str | None = None
         self._config = self._load_config()
         self._enrolled: dict[str, dict] = self._load_enrolled()
@@ -457,6 +470,21 @@ class SetupService:
         """
 
         self._ha_states_source = source
+
+    def set_director(self, director) -> None:
+        """Rebind to a freshly built director after the composition root rebuilds it.
+
+        Called by `HavenWebServer.rebuild_director` immediately after it
+        swaps the live director, so enrollment and status calls that follow
+        act on the current household rather than the one that existed before
+        this step changed provider connection.
+        """
+
+        self._director = director
+
+    def _trigger_rebuild(self) -> None:
+        if self._on_rebuild is not None:
+            self._on_rebuild()
 
     def status(self) -> dict:
         config = self._config
@@ -556,6 +584,7 @@ class SetupService:
             error = self._save()
             if error is not None:
                 return {"ok": False, "error": error}
+            self._trigger_rebuild()
             return self.status()
         if kind != "home_assistant":
             return {"ok": False, "error": f"unsupported provider kind: {kind!r}"}
@@ -592,6 +621,7 @@ class SetupService:
         error = self._save()
         if error is not None:
             return {"ok": False, "error": error}
+        self._trigger_rebuild()
         return self.status()
 
     def run_discovery(self) -> dict:
@@ -630,6 +660,12 @@ class SetupService:
         return {"ok": True, "candidates": [asdict(candidate) for candidate in self._last_scan]}
 
     def enroll(self, candidate_id: str, *, device_type: str, room: str | None = None) -> dict:
+        if not self._director.has_declared_owner:
+            # `approved_by` must name a real person: a real household with
+            # nobody declared yet has no one to attribute enrollment to, and
+            # falling back to a fixture identity is exactly the silent
+            # gerron-as-default this refuses.
+            return {"ok": False, "error": "declare a household owner before enrolling devices"}
         candidate = self._lookup_candidate(candidate_id)
         if candidate is None:
             return {"ok": False, "error": f"unknown candidate: {candidate_id!r}"}
@@ -669,6 +705,16 @@ class SetupService:
         return self.status()
 
     def complete(self) -> dict:
+        # A real provider means real actions are possible once the wizard
+        # closes; a household that has connected one must declare a real
+        # owner before that happens, or every governed action would run as
+        # whatever fixture identity `DemoDirector` falls back to. A pure
+        # demo run (no provider chosen) has no such requirement -- its
+        # fixture identity is the point, not a gap.
+        if self._config.provider_kind is not None and not any(
+            person.role == "owner" for person in self.household.people
+        ):
+            return {"ok": False, "error": "declare a household owner before finishing setup"}
         self._config = replace(self._config, completed=True)
         error = self._save()
         if error is not None:
@@ -715,6 +761,7 @@ class SetupService:
                 error = self._persist_household()
                 if error is not None:
                     return {"ok": False, "error": error}
+                self._trigger_rebuild()
                 return self.status()
             if any(source.entity_id == entity_id for source in person.sources):
                 return self.status()
@@ -726,6 +773,7 @@ class SetupService:
             error = self._persist_household()
             if error is not None:
                 return {"ok": False, "error": error}
+            self._trigger_rebuild()
             return self.status()
         people.append(
             DeclaredPerson(
@@ -739,6 +787,7 @@ class SetupService:
         error = self._persist_household()
         if error is not None:
             return {"ok": False, "error": error}
+        self._trigger_rebuild()
         return self.status()
 
     def remove_person(self, *, person_id: str) -> dict:
@@ -753,6 +802,7 @@ class SetupService:
         error = self._persist_household()
         if error is not None:
             return {"ok": False, "error": error}
+        self._trigger_rebuild()
         return self.status()
 
     def declare_context(self, *, label: str, entity_id: str) -> dict:
@@ -784,12 +834,14 @@ class SetupService:
             error = self._persist_household()
             if error is not None:
                 return {"ok": False, "error": error}
+            self._trigger_rebuild()
             return self.status()
         contexts.append(DeclaredContext(context_id=context_id, label=label, entity_id=entity_id))
         self.household = replace(self.household, contexts=tuple(contexts))
         error = self._persist_household()
         if error is not None:
             return {"ok": False, "error": error}
+        self._trigger_rebuild()
         return self.status()
 
     def remove_context(self, *, context_id: str) -> dict:
@@ -804,6 +856,7 @@ class SetupService:
         error = self._persist_household()
         if error is not None:
             return {"ok": False, "error": error}
+        self._trigger_rebuild()
         return self.status()
 
     def _config_dir(self) -> Path:
