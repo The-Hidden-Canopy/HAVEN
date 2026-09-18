@@ -20,22 +20,30 @@ one that quietly breaks an invariant a test won't catch.
 
 ## Before you start: the one boundary that matters everywhere
 
-**A provider proposes or observes. It never decides, and it never
-executes.** Concretely:
+**Intelligence and observation never execute. Execution providers execute
+only after HAVEN authorization. Nobody except HAVEN decides authority.**
+Concretely:
 
 - An `IntelligenceProvider` can draft a rule, answer a question, or explain
   a decision -- it cannot create a rule, approve one, or command a device.
+  It proposes; it never decides and never executes.
 - An `ObservationProvider` or `DiscoveryProvider` can report what it sees --
   it cannot turn that sighting into a controllable device or an authorized
-  action.
-- An `ExecutionAdapter` only runs a command `AuthorityEngine` has *already*
-  allowed. It never sees a request before authority has decided on it.
+  action. It observes; it never decides and never executes.
+- An `ExecutionAdapter` executes -- that is its entire job -- but only a
+  command `AuthorityEngine` has *already* allowed. It never sees a request
+  before authority has decided on it, and it never decides anything itself:
+  it does not classify risk, does not check scope or role, and does not
+  choose whether a command is permitted. `AuthorityEngine` is the only thing
+  in HAVEN that decides.
 
 If you find yourself wanting your provider to skip a step -- have your LLM
 call a device directly, have your scanner auto-enroll a device it finds, have
-your backend cache a "yes" so authority doesn't have to re-check -- that's a
-sign you're about to reintroduce the exact failure mode this architecture
-exists to prevent. Route around the urge, not around the boundary.
+your backend cache a "yes" so authority doesn't have to re-check, or have
+your execution adapter add its own permission logic on top of what it was
+handed -- that's a sign you're about to reintroduce the exact failure mode
+this architecture exists to prevent. Route around the urge, not around the
+boundary.
 
 ## `IntelligenceProvider` — proposal-only intelligence
 
@@ -289,8 +297,11 @@ you can't serve.
 
 ## Checklist before you ship a provider
 
-- [ ] Your provider proposes or observes; it never mutates the store,
-      creates a rule, or calls an execution adapter directly.
+- [ ] If your provider is intelligence, observation, or discovery, it
+      proposes or observes only -- it never mutates the store, creates a
+      rule, or calls an execution adapter directly. If it's an
+      `ExecutionAdapter`, it executes only what `AuthorityEngine` already
+      allowed -- it never adds its own permission logic on top.
 - [ ] Every confidence value you emit reflects real uncertainty, not a
       default you never bothered to change.
 - [ ] Your `provider_id` is stable across restarts if device identity or

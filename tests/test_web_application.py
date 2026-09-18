@@ -3,14 +3,18 @@
 import json
 import tempfile
 from datetime import datetime, timezone
+from importlib import metadata
 from pathlib import Path
 
+from haven.core.domain import DeviceResult
 from haven.devices import CapabilityDescriptor, ControlClass, DeviceManifest
 from haven.integrations.home_assistant import HomeAssistantWorldProvider
 from haven.intelligence.gateway import ScriptedIntelligenceProvider
 from haven.models.bridge import ModelIntelligenceProvider
+from haven.providers.plugin import ProviderManifest
 from haven.web.application import HA_PROVIDER_ID, build_application, ensure_household_id
 from haven.web.demo import HOUSEHOLD_ID
+from haven.web.provider_install import save_installed_provider
 from haven.web.setup_config import SetupConfig, SetupConfigStore
 from haven.web.setup_service import _ENROLLED_FILENAME, _TOKEN_FILENAME
 
@@ -181,6 +185,123 @@ def test_configured_provider_with_no_base_url_stays_real_but_unreachable():
     assert director.house is None
     assert isinstance(director.world, HomeAssistantWorldProvider)
     assert director.ha_states_source is None
+
+
+class _FakePhilipsHueProvider:
+    """Both an `ObservationProvider` and an `ExecutionAdapter`, like `BluetoothProvider`."""
+
+    def __init__(self, config):
+        self.config = dict(config)
+
+    def observe(self):
+        from haven.core.domain import DeviceState
+
+        return (
+            DeviceState(
+                device_id="hue.living_room",
+                kind="light",
+                room_id="living_room",
+                is_on=True,
+                brightness_pct=80,
+                observed_at=NOW,
+                source="philips_hue",
+            ),
+        )
+
+    def execute(self, command):
+        return DeviceResult(success=True, detail="ok", observed_at=NOW, source="philips_hue")
+
+
+class FakeHuePluginForApplicationTest:
+    def describe(self) -> ProviderManifest:
+        return ProviderManifest(
+            provider_id="philips_hue",
+            kind="execution",
+            capabilities=frozenset({"light.turn_on"}),
+            display_name="Philips Hue",
+            description="test fixture",
+        )
+
+    def build(self, *, config):
+        return _FakePhilipsHueProvider(config)
+
+
+FAKE_HUE_PLUGIN = FakeHuePluginForApplicationTest()
+
+
+def test_activated_community_provider_supplies_real_world_and_execution(monkeypatch):
+    fake_entry_point = metadata.EntryPoint(
+        name="philips_hue", value=f"{__name__}:FAKE_HUE_PLUGIN", group="haven.providers"
+    )
+    monkeypatch.setattr(
+        metadata, "entry_points", lambda *, group: (fake_entry_point,) if group == "haven.providers" else ()
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        store = SetupConfigStore(data_dir / "haven.json")
+        store.save(SetupConfig(completed=True, data_dir=str(data_dir), provider_kind="philips_hue"))
+        save_installed_provider(
+            store, provider_id="philips_hue", entry_point_name="philips_hue", config={"bridge_ip": "10.0.0.5"}
+        )
+        director = build_application(store=store, model_manager=None, clock=lambda: NOW)
+
+    assert director.house is None
+    snapshot = director.world.observe(NOW)
+    assert [d.device_id for d in snapshot.devices] == ["hue.living_room"]
+    assert director.runtime.execution_providers.get("philips_hue") is not None
+
+
+def test_a_disabled_installed_provider_is_treated_as_unavailable(monkeypatch):
+    fake_entry_point = metadata.EntryPoint(
+        name="philips_hue", value=f"{__name__}:FAKE_HUE_PLUGIN", group="haven.providers"
+    )
+    monkeypatch.setattr(
+        metadata, "entry_points", lambda *, group: (fake_entry_point,) if group == "haven.providers" else ()
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        store = SetupConfigStore(data_dir / "haven.json")
+        store.save(SetupConfig(completed=True, data_dir=str(data_dir), provider_kind="philips_hue"))
+        save_installed_provider(
+            store, provider_id="philips_hue", entry_point_name="philips_hue", config={"bridge_ip": "10.0.0.5"}
+        )
+        from haven.web.provider_install import set_installed_provider_enabled
+
+        set_installed_provider_enabled(store, "philips_hue", False)
+        director = build_application(store=store, model_manager=None, clock=lambda: NOW)
+
+    snapshot = director.world.observe(NOW)
+    assert snapshot.devices == ()
+    assert director.runtime.execution_providers.is_registered("philips_hue") is False
+
+
+def test_unknown_provider_kind_stays_real_but_unreachable():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        store = SetupConfigStore(data_dir / "haven.json")
+        # A provider this composition root has no adapter for at all -- a
+        # community provider (Philips Hue, Google Home, Matter, ...) whose
+        # own package would register an adapter this repo never imports.
+        # This must never quietly become the demo fixture: a household that
+        # has named ANY provider gets its own real, if currently
+        # evidence-less, installation.
+        store.save(SetupConfig(completed=True, data_dir=str(data_dir), provider_kind="philips_hue"))
+        (data_dir / _ENROLLED_FILENAME).write_text(
+            json.dumps({"version": 2, "manifests": [_enrolled_manifest().to_dict()]}), encoding="utf-8"
+        )
+        director = build_application(store=store, model_manager=None, clock=lambda: NOW)
+
+    assert director.house is None
+    assert isinstance(director.world, HomeAssistantWorldProvider)
+    assert director.registry.is_registered("light.living_room")
+    assert director.ha_states_source is None
+    snapshot = director.world.observe(NOW)
+    assert snapshot.devices == ()
+    assert director.runtime.execution_providers.is_registered(HA_PROVIDER_ID) is False
+    # A real household id was minted, not the shared demo fixture id.
+    assert director.household_id != HOUSEHOLD_ID
 
 
 def test_no_provider_configured_yet_builds_the_demo_household():

@@ -25,6 +25,8 @@ runtime that loads one.
 
 from __future__ import annotations
 
+import array
+import json
 import os
 import platform
 import subprocess
@@ -35,12 +37,49 @@ from ..contracts import ModelDescriptor
 
 # Piper writes clean, unframed 16-bit PCM at the voice's own sample rate to
 # stdout under these two flags -- no WAV header, no log lines mixed in
-# (verified: --quiet leaves stderr completely empty). A voice manifest
-# should declare a 16000 Hz voice (e.g. a Piper "low" quality voice) to
-# match HAVEN's pinned wire contract with no resampling step.
+# (verified: --quiet leaves stderr completely empty). A "low" quality voice
+# (16000 Hz) needs no resampling to match HAVEN's pinned wire contract; a
+# "medium"/"high" voice (typically 22050 Hz) is resampled below rather than
+# restricting every voice manifest to "low" -- "low" voices trade audio
+# quality (audible loudness/prosody artifacts) for that exact rate match.
 _SYNTHESIS_TIMEOUT_SECONDS = 60
 _CHUNK_BYTES = 4000
 _EXECUTABLE_ENV = "HAVEN_PIPER_EXECUTABLE"
+
+# HAVEN's pinned wire contract (`haven.speech.events.SAMPLE_RATE_HZ`),
+# repeated here rather than imported: `haven.models` is the more foundational
+# package and does not depend on `haven.speech`, a consumer of it.
+_TARGET_SAMPLE_RATE_HZ = 16000
+
+
+def _resample_pcm16_mono(pcm: bytes, from_rate: int, to_rate: int) -> bytes:
+    """Linear-interpolation resample of 16-bit mono PCM -- stdlib only.
+
+    Good enough for spoken TTS output (no third-party DSP library needed):
+    a voice assistant's synthesized speech has no content above a few kHz,
+    well under either rate here, so linear interpolation introduces no
+    audible artifact of its own.
+    """
+
+    if from_rate == to_rate:
+        return pcm
+    samples = array.array("h")
+    samples.frombytes(pcm[: len(pcm) - (len(pcm) % 2)])
+    n_in = len(samples)
+    if n_in < 2:
+        return pcm
+    n_out = max(1, round(n_in * to_rate / from_rate))
+    out = array.array("h", bytes(n_out * 2))
+    step = (n_in - 1) / (n_out - 1) if n_out > 1 else 0.0
+    for i in range(n_out):
+        pos = i * step
+        idx = int(pos)
+        frac = pos - idx
+        if idx + 1 < n_in:
+            out[i] = int(samples[idx] + (samples[idx + 1] - samples[idx]) * frac)
+        else:
+            out[i] = samples[idx]
+    return out.tobytes()
 
 
 def default_piper_root() -> Path:
@@ -64,6 +103,26 @@ def piper_executable_path() -> Path:
     return default_piper_root() / exe_name
 
 
+def _read_sample_rate(config_path: Path | None) -> int | None:
+    """The voice's own sample rate from its `.onnx.json` config, or None.
+
+    None means "assume Piper's stdout is already at HAVEN's target rate" --
+    the config is optional on the descriptor (`_model_path` role "config"),
+    and a missing/unreadable/malformed config should not turn synthesis
+    into a hard failure over what was already the documented default
+    before resampling existed.
+    """
+
+    if config_path is None:
+        return None
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    rate = data.get("audio", {}).get("sample_rate")
+    return rate if isinstance(rate, int) and rate > 0 else None
+
+
 def _model_path(descriptor: ModelDescriptor, model_dir: Path | None, *, role: str) -> Path | None:
     rel = descriptor.files.get(role)
     if not rel:
@@ -84,6 +143,7 @@ class PiperLoadedModel:
         self._executable = executable
         self._model_path = model_path
         self._config_path = config_path
+        self._source_sample_rate = _read_sample_rate(config_path)
 
     @property
     def descriptor(self) -> ModelDescriptor:
@@ -123,7 +183,9 @@ class PiperLoadedModel:
         if result.returncode != 0:
             detail = result.stderr.decode("utf-8", errors="replace").strip()
             raise RuntimeError(f"piper synthesis failed (exit {result.returncode}): {detail or 'no output'}")
-        return result.stdout
+        if self._source_sample_rate is None:
+            return result.stdout
+        return _resample_pcm16_mono(result.stdout, self._source_sample_rate, _TARGET_SAMPLE_RATE_HZ)
 
     def unload(self) -> None:
         pass
