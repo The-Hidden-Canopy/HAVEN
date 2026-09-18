@@ -161,6 +161,26 @@ class ChangeOrigin(str, Enum):
     SYSTEM = "system"
 
 
+class CoverState(str, Enum):
+    """A cover's own state vocabulary -- open/closed is not a boolean.
+
+    `opening`/`closing` are real, observed transitional states, not "unknown
+    partway between two booleans": a garage door mid-travel is neither on
+    nor off, and collapsing it to `None` would make it indistinguishable
+    from missing evidence.
+    """
+
+    OPEN = "open"
+    CLOSED = "closed"
+    OPENING = "opening"
+    CLOSING = "closing"
+
+
+class LockState(str, Enum):
+    LOCKED = "locked"
+    UNLOCKED = "unlocked"
+
+
 class EventType(str, Enum):
     RULE_PROPOSED = "rule_proposed"
     RULE_CLARIFIED = "rule_clarified"
@@ -242,6 +262,22 @@ class ContextState:
 
 @dataclass(frozen=True)
 class DeviceState:
+    """One device's observed evidence.
+
+    `is_on`/`brightness_pct` are the right shape for a simple actuator --
+    lights, switches, fans -- where "on" is the entire physical question. A
+    cover, lock, climate entity, or camera has its own state vocabulary that
+    is not a boolean, and forcing one onto it is how "open" silently becomes
+    `None`: a cover's own `cover_state` (open/closed/opening/closing), a
+    lock's `lock_state` (locked/unlocked), a climate entity's `climate_mode`
+    plus `current_temperature`/`target_temperature`, and a camera's
+    `camera_available`/`motion_detected` each carry that device kind's real
+    state directly, independent of `is_on`. Every device also preserves the
+    provider's own literal value in `raw_state`, regardless of which typed
+    field(s) it was mapped onto, so nothing is lost even when a mapping
+    turns out to be incomplete for some provider's quirk.
+    """
+
     device_id: str
     kind: str
     room_id: str
@@ -252,6 +288,14 @@ class DeviceState:
     status: EvidenceStatus = EvidenceStatus.OBSERVED
     changed_by: ChangeOrigin = ChangeOrigin.SYSTEM
     confidence: float = 1.0
+    raw_state: str | None = None
+    cover_state: CoverState | None = None
+    lock_state: LockState | None = None
+    climate_mode: str | None = None
+    current_temperature: float | None = None
+    target_temperature: float | None = None
+    camera_available: bool | None = None
+    motion_detected: bool | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.device_id, name="device_id")
@@ -264,6 +308,14 @@ class DeviceState:
         _require_confidence(self.confidence, name="device confidence")
         if self.brightness_pct is not None and not 0 <= self.brightness_pct <= 100:
             raise ValueError("brightness_pct must be between 0 and 100")
+        if self.cover_state is not None and not isinstance(self.cover_state, CoverState):
+            raise ValueError("cover_state must be a CoverState")
+        if self.lock_state is not None and not isinstance(self.lock_state, LockState):
+            raise ValueError("lock_state must be a LockState")
+        if self.climate_mode is not None:
+            object.__setattr__(self, "climate_mode", _require_text(self.climate_mode, name="climate_mode"))
+        if self.raw_state is not None:
+            object.__setattr__(self, "raw_state", _require_text(self.raw_state, name="raw_state"))
         object.__setattr__(self, "observed_at", require_aware_utc(self.observed_at, name="observed_at"))
         _require_text(self.source, name="device source")
 

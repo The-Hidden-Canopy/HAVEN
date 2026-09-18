@@ -260,15 +260,25 @@ def test_factory_derives_the_actor_from_the_declared_owner() -> None:
             assert body["chain"]["request"]["actor"] != "gerron"
 
 
-def test_factory_falls_back_to_the_bootstrap_identity_without_declarations() -> None:
+def test_factory_refuses_governed_actions_without_a_declared_owner() -> None:
+    """A real household with nobody declared must never act as a fixture identity.
+
+    Before this behavior existed, an undeclared real household silently
+    executed every action as `gerron` -- the demo fixture's person. Now
+    `has_declared_owner` is false in exactly this state, and
+    `DemoDirector.device_command` refuses instead of falling back.
+    """
+
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp) / "data"
         _seed_real_setup(data_dir, household={"version": 1, "people": [], "contexts": []})
-        with _boot(data_dir, _StubStatesSource(LIVE_STATES)) as (_, _, port):
+        with _boot(data_dir, _StubStatesSource(LIVE_STATES)) as (_, director, port):
+            assert director.has_declared_owner is False
             status, body = _post(port, "/api/devices/light.office_desk/command", {"service": "light.turn_off"})
-            assert status == 200
+            assert status == 400
+            assert body["ok"] is False
+            assert "owner" in body["error"]
 
+            # Nothing executed: no action_executed row exists to chase.
             _, state = _get_json(port, "/api/state")
-            event_id = next(row["event_id"] for row in state["activity"] if row["event_type"] == "action_executed")
-            _, body = _get_json(port, f"/api/actions/chain?event_id={event_id}")
-            assert body["chain"]["request"]["actor"] == "gerron"
+            assert all(row["event_type"] != "action_executed" for row in state["activity"])

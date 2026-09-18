@@ -401,7 +401,36 @@ function makeRoomDetail(room) {
    backend may not emit them yet. */
 function deviceStateLine(dev) {
   const role = String(dev.role || '').toLowerCase();
-  if (role === 'cover') return dev.is_on ? 'Open' : 'Closed';
+  if (role === 'cover') {
+    // cover_state carries the real opening/closing transition; is_on stays
+    // the fallback for a backend that only ever reports open/closed.
+    if (dev.cover_state === 'opening') return 'Opening…';
+    if (dev.cover_state === 'closing') return 'Closing…';
+    if (dev.cover_state === 'open') return 'Open';
+    if (dev.cover_state === 'closed') return 'Closed';
+    return dev.is_on ? 'Open' : 'Closed';
+  }
+  if (role === 'lock') {
+    if (dev.lock_state === 'locked') return 'Locked';
+    if (dev.lock_state === 'unlocked') return 'Unlocked';
+    return '—';
+  }
+  if (role === 'thermostat') {
+    if (dev.current_temperature === null || dev.current_temperature === undefined) {
+      return dev.climate_mode || '—';
+    }
+    let line = dev.current_temperature + '°';
+    if (dev.target_temperature !== null && dev.target_temperature !== undefined) {
+      line += ' → ' + dev.target_temperature + '°';
+    }
+    return dev.climate_mode ? line + ' · ' + dev.climate_mode : line;
+  }
+  if (role === 'camera') {
+    if (dev.camera_available === false) return 'Unavailable';
+    if (dev.motion_detected === true) return 'Motion';
+    if (dev.camera_available === true) return 'Idle';
+    return '—';
+  }
   if (role === 'light') {
     if (!dev.is_on) return 'Off';
     return dev.brightness_pct !== null && dev.brightness_pct !== undefined
@@ -1190,7 +1219,7 @@ function renderSetupProvider(container) {
 
 /* --- step 4: discovery --- */
 
-const SETUP_DEVICE_TYPES = ['light', 'thermostat', 'switch'];
+const SETUP_DEVICE_TYPES = ['light', 'thermostat', 'switch', 'fan', 'cover', 'camera'];
 
 function renderSetupCandidate(container, candidate, enrolledIds) {
   const card = document.createElement('div');

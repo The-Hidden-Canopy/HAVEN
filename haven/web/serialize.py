@@ -44,6 +44,16 @@ def device_to_dict(device: DeviceState, *, role: str) -> dict[str, Any]:
         "changed_by": device.changed_by.value,
         "confidence": device.confidence,
         "source": device.source,
+        # The provider's literal state, always -- and each device kind's own
+        # vocabulary alongside the boolean fields, never squeezed into them.
+        "raw_state": device.raw_state,
+        "cover_state": device.cover_state.value if device.cover_state is not None else None,
+        "lock_state": device.lock_state.value if device.lock_state is not None else None,
+        "climate_mode": device.climate_mode,
+        "current_temperature": device.current_temperature,
+        "target_temperature": device.target_temperature,
+        "camera_available": device.camera_available,
+        "motion_detected": device.motion_detected,
     }
 
 

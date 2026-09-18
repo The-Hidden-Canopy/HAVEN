@@ -7,6 +7,7 @@ test_home_assistant_observer.py.
 
 from datetime import datetime, timedelta, timezone
 
+from haven.core.domain import EvidenceStatus
 from haven.devices import CapabilityDescriptor, ControlClass, DeviceManifest, DeviceRegistry
 from haven.integrations.home_assistant import HomeAssistantObserver, HomeAssistantWorldProvider
 from haven.web.demo import HOUSEHOLD_ID, SimulatedHouse, SimulatedWorldProvider
@@ -92,11 +93,51 @@ def test_ha_world_provider_returns_last_good_snapshot_when_fetch_fails():
     client = _FakeClient(states=(_entity("light.living_room", "on"),))
     provider = _provider(client)
     good = provider.observe(NOW)
+    assert good.devices[0].status == EvidenceStatus.OBSERVED
 
     client._error = ConnectionError("network down")
     fallback = provider.observe(NOW + timedelta(seconds=30))
 
-    assert fallback is good
+    # Same values (UI continuity: "last known: on, 30s ago") but never the
+    # same object -- a failed refresh must not be indistinguishable from a
+    # fresh, successful one to whatever reads the snapshot next.
+    assert fallback is not good
+    assert fallback.devices[0].device_id == good.devices[0].device_id
+    assert fallback.devices[0].is_on == good.devices[0].is_on
+    assert fallback.devices[0].observed_at == good.devices[0].observed_at
+    # The load-bearing change: authority's freshness check only ever treats
+    # OBSERVED as fresh, so this must fail closed exactly like stale evidence.
+    assert fallback.devices[0].status == EvidenceStatus.FALLBACK
+    assert fallback.evidence_problem(
+        status=fallback.devices[0].status,
+        observed_at=fallback.devices[0].observed_at,
+        confidence=fallback.devices[0].confidence,
+        at=NOW + timedelta(seconds=30),
+        minimum_confidence=1.0,
+    ) is not None
+
+    # A later successful poll clears the fallback marking entirely -- this
+    # is not a permanent scar on the cached snapshot.
+    client._error = None
+    recovered = provider.observe(NOW + timedelta(seconds=60))
+    assert recovered.devices[0].status == EvidenceStatus.OBSERVED
+
+
+def test_ha_world_provider_fallback_keeps_unavailable_devices_unavailable():
+    client = _FakeClient(
+        states=(
+            _entity("light.living_room", "unavailable"),
+        )
+    )
+    provider = _provider(client)
+    good = provider.observe(NOW)
+    assert good.devices[0].status == EvidenceStatus.UNAVAILABLE
+
+    client._error = ConnectionError("network down")
+    fallback = provider.observe(NOW + timedelta(seconds=30))
+    # Already-UNAVAILABLE evidence keeps its more specific status rather
+    # than being overwritten to the vaguer FALLBACK.
+    assert fallback.devices[0].status == EvidenceStatus.UNAVAILABLE
 
 
 def test_ha_world_provider_returns_empty_valid_snapshot_before_first_good():

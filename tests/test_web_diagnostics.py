@@ -87,7 +87,13 @@ def _seed_real_setup(data_dir: Path) -> None:
 
 @contextmanager
 def _boot(data_dir: Path, ha_client=None):
-    instance, director = make_server(0, data_dir=str(data_dir), clock=lambda: NOW, ha_client=ha_client)
+    instance, director = make_server(
+        0,
+        data_dir=str(data_dir),
+        clock=lambda: NOW,
+        ha_client=ha_client,
+        models_root=data_dir / "models-root",
+    )
     thread = threading.Thread(target=instance.serve_forever, daemon=True)
     thread.start()
     try:
@@ -128,14 +134,20 @@ def test_diagnostics_shape_in_real_mode() -> None:
         data_dir = Path(tmp) / "data"
         _seed_real_setup(data_dir)
         with _boot(data_dir, _StubStatesSource(LIVE_STATES)) as (_, _, port):
-            # One more enrolled device and one declared person, via the API.
-            status, body = _post(port, "/api/setup/enroll", {"candidate_id": "ble:bulb-a1f2", "device_type": "light"})
-            assert status == 200
+            # A declared owner first: enrollment now refuses without one.
             status, body = _post(
                 port,
                 "/api/setup/household/people",
-                {"name": "Gerron Smith", "entity_id": "binary_sensor.gerron_office_occupancy", "room_id": "office"},
+                {
+                    "name": "Gerron Smith",
+                    "entity_id": "binary_sensor.gerron_office_occupancy",
+                    "room_id": "office",
+                    "role": "owner",
+                },
             )
+            assert status == 200
+            # One more enrolled device, via the API.
+            status, body = _post(port, "/api/setup/enroll", {"candidate_id": "ble:bulb-a1f2", "device_type": "light"})
             assert status == 200
 
             status, body = _get_json(port, "/api/system/diagnostics")

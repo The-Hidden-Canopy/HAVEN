@@ -502,9 +502,11 @@ class ModelManager:
         """One availability probe per registered backend.
 
         "http" is stdlib and always available. The lazy reference loaders
-        probe `importlib.util.find_spec` for their runtime package.
-        Custom-registered backends report available with a note that there
-        is nothing to probe -- only their loader is known.
+        probe `importlib.util.find_spec` for their runtime package. "piper"
+        is a native executable, not a Python package, so it probes its own
+        install location instead. Custom-registered backends report
+        available with a note that there is nothing to probe -- only their
+        loader is known.
         """
 
         availability = []
@@ -513,6 +515,17 @@ class ModelManager:
                 availability.append(
                     BackendAvailability(name, True, "stdlib backend; always available")
                 )
+            elif name == "piper":
+                from .backends.piper_native import piper_executable_path
+
+                exe = piper_executable_path()
+                found = exe.is_file()
+                detail = (
+                    f"native executable found at {exe}"
+                    if found
+                    else f"no executable at {exe}: run scripts/install_piper.py"
+                )
+                availability.append(BackendAvailability(name, found, detail))
             elif name in _LAZY_RUNTIME_PACKAGES:
                 package = _LAZY_RUNTIME_PACKAGES[name]
                 try:

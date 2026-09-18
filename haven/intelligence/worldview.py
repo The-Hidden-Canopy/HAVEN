@@ -457,6 +457,25 @@ class WorldView:
                 pairs.append(("is_on", state.is_on))
             if state.brightness_pct is not None:
                 pairs.append(("brightness_pct", state.brightness_pct))
+            # Each device kind's own vocabulary, alongside the boolean pair
+            # above -- a cover's real open/closed/opening/closing (etc.)
+            # never has to be reconstructed by an agent from `is_on` alone.
+            if state.raw_state is not None:
+                pairs.append(("raw_state", state.raw_state))
+            if state.cover_state is not None:
+                pairs.append(("cover_state", state.cover_state.value))
+            if state.lock_state is not None:
+                pairs.append(("lock_state", state.lock_state.value))
+            if state.climate_mode is not None:
+                pairs.append(("climate_mode", state.climate_mode))
+            if state.current_temperature is not None:
+                pairs.append(("current_temperature", state.current_temperature))
+            if state.target_temperature is not None:
+                pairs.append(("target_temperature", state.target_temperature))
+            if state.camera_available is not None:
+                pairs.append(("camera_available", state.camera_available))
+            if state.motion_detected is not None:
+                pairs.append(("motion_detected", state.motion_detected))
             return tuple(pairs)
 
         def capabilities(device_id: str) -> tuple[str, ...]:

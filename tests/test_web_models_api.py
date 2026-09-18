@@ -85,13 +85,13 @@ def test_get_models_empty_lists_models_roots_catalog_backends_and_assignments(se
     }
     # the default reference set reports per-backend availability
     backends = {row["backend"]: row for row in body["backends"]}
-    assert set(backends) == {"http", "transformers", "llama_cpp", "onnx"}
+    assert set(backends) == {"http", "transformers", "llama_cpp", "onnx", "piper"}
     assert backends["http"] == {
         "backend": "http",
         "available": True,
         "detail": "stdlib backend; always available",
     }
-    for name in ("transformers", "llama_cpp", "onnx"):
+    for name in ("transformers", "llama_cpp", "onnx", "piper"):
         assert set(backends[name]) == {"backend", "available", "detail"}
         assert backends[name]["backend"] == name
 

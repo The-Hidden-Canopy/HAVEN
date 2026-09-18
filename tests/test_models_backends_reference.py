@@ -449,11 +449,11 @@ def test_lazy_loader_requires_a_model_file(name, loader_type, runtime, checks_fi
 # -- the reference set and protocol conformance -----------------------------------
 
 
-def test_reference_backends_registers_all_four() -> None:
+def test_reference_backends_registers_all_five() -> None:
     registry = reference_backends()
     assert isinstance(registry, BackendRegistry)
-    assert registry.registered() == ("http", "transformers", "llama_cpp", "onnx")
-    for name in ("http", "transformers", "llama_cpp", "onnx"):
+    assert registry.registered() == ("http", "transformers", "llama_cpp", "onnx", "piper")
+    for name in ("http", "transformers", "llama_cpp", "onnx", "piper"):
         assert registry.resolve(name) is not None
     assert registry.resolve("mlx") is None  # unknown names still miss cleanly
 

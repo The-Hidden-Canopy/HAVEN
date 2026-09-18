@@ -20,3 +20,6 @@ native/haven-bt/build/
 data/
 receipts/
 traces/
+
+# Recorded audio from scripts/smoke_mic_loopback.py: real mic input, never a repo artifact.
+scripts/*.wav

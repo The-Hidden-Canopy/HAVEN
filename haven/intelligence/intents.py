@@ -71,6 +71,7 @@ class ActionProposal(IntentForm):
     parameters: tuple[tuple[str, Any], ...]
     justification: str
     source_text: str
+    capability: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.action_kind, ActionKind):
@@ -83,6 +84,8 @@ class ActionProposal(IntentForm):
             )
         if self.target_selector is not None and not isinstance(self.target_selector, DeviceSelector):
             raise ValueError("target_selector must be a DeviceSelector")
+        if self.capability is not None:
+            object.__setattr__(self, "capability", _require_text(self.capability, name="capability"))
         object.__setattr__(self, "parameters", _normalize_parameters(self.parameters))
         object.__setattr__(self, "justification", _require_text(self.justification, name="justification"))
         object.__setattr__(self, "source_text", _require_text(self.source_text, name="source_text"))

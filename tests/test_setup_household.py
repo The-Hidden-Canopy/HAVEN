@@ -12,6 +12,7 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -234,6 +235,49 @@ def test_remove_person_and_context() -> None:
         # The removal is persisted: a fresh service sees the empty household.
         second = _service(Path(tmp) / "data")
         assert second.status()["setup"]["household"] == {"people": [], "contexts": []}
+
+
+class _FakeUrlopenResponse:
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+def test_complete_refuses_a_configured_provider_with_no_declared_owner() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        service = _service(Path(tmp) / "data")
+        with patch(
+            "haven.integrations.home_assistant.client.urlopen",
+            return_value=_FakeUrlopenResponse(json.dumps([]).encode("utf-8")),
+        ):
+            connected = service.connect_provider(kind="home_assistant", base_url="http://ha.local:8123", token="secret")
+        assert connected["ok"] is True
+
+        result = service.complete()
+        assert result["ok"] is False
+        assert "owner" in result["error"]
+        assert service.status()["setup"]["completed"] is False
+
+        service.declare_person(name="Ada Lovelace", entity_id="binary_sensor.ada", room_id="office", role="owner")
+        result = service.complete()
+        assert result["ok"] is True
+        assert result["setup"]["completed"] is True
+
+
+def test_complete_without_a_provider_never_requires_an_owner() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        service = _service(Path(tmp) / "data")
+        result = service.complete()
+        assert result["ok"] is True
+        assert result["setup"]["completed"] is True
 
 
 def test_status_envelope_carries_the_household_key() -> None:

@@ -167,6 +167,47 @@ def test_member_direct_safe_action_executes_without_creating_a_rule() -> None:
     assert tuple(event.event_id for event in store.events) == receipt.event_ids
 
 
+def test_direct_action_with_capability_routes_service_from_the_manifest() -> None:
+    """A direct command for a device kind with no dedicated ActionKind.
+
+    A switch or fan's plain "power" has no `ActionKind` of its own; routing
+    by `capability` instead resolves both risk (from the capability's own
+    `ControlClass`, bypassing the closed `ActionKind` set entirely) and the
+    provider `service` from the device's manifest -- the direct-command
+    analogue of a capability-routed `RuleDraft`.
+    """
+
+    registry = DeviceRegistry()
+    registry.register(
+        DeviceManifest(
+            device_id="office_fan",
+            device_type="fan",
+            provider_id="home_assistant",
+            room="office",
+            capabilities=(
+                CapabilityDescriptor("power", ControlClass.LOW_RISK, writable=True, service="fan.turn_off"),
+            ),
+        )
+    )
+    runtime, store, adapter, resident, owner = _runtime(registry)
+
+    receipt = runtime.run_action(
+        principal=resident,
+        action_kind=ActionKind.UNSCOPED_EXECUTION,
+        capability="power",
+        target_device_id="office_fan",
+        justification="turning off the office fan",
+        world=_direct_world(resident),
+        now=BASE_TIME + timedelta(minutes=2),
+    )
+
+    assert receipt.outcome == "executed"
+    assert receipt.decision.code.value == "allowed"
+    assert receipt.requested_action.capability == "power"
+    assert len(adapter.commands) == 1
+    assert adapter.commands[0].service == "fan.turn_off"
+
+
 def test_direct_action_requires_exactly_one_target() -> None:
     runtime, store, adapter, resident, owner = _runtime()
     with pytest.raises(ValueError, match="exactly one of target_device_id or target_selector"):
