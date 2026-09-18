@@ -14,10 +14,12 @@ import json
 import tempfile
 import threading
 from contextlib import contextmanager
+from importlib import metadata
 from pathlib import Path
 from unittest.mock import patch
 
 from haven.integrations.home_assistant import HomeAssistantWorldProvider
+from haven.providers.plugin import ProviderManifest
 from haven.web.server import make_server
 
 CANNED_STATES = [
@@ -103,6 +105,53 @@ def test_connecting_a_provider_rebuilds_the_live_director_without_a_restart() ->
         assert response.status == 200
         response.read()
         connection.close()
+
+
+class _FakeHueInstance:
+    def __init__(self, config):
+        self.config = dict(config)
+
+    def observe(self):
+        return ()
+
+
+class FakeHuePluginForRebuildTest:
+    def describe(self) -> ProviderManifest:
+        return ProviderManifest(
+            provider_id="philips_hue",
+            kind="observation",
+            capabilities=frozenset({"light.read"}),
+            display_name="Philips Hue",
+            description="test fixture",
+        )
+
+    def build(self, *, config):
+        return _FakeHueInstance(config)
+
+
+FAKE_HUE_PLUGIN = FakeHuePluginForRebuildTest()
+
+
+def test_installing_a_community_provider_package_rebuilds_the_live_director() -> None:
+    ep = metadata.EntryPoint(name="philips_hue", value=f"{__name__}:FAKE_HUE_PLUGIN", group="haven.providers")
+    with tempfile.TemporaryDirectory() as tmp, _boot(Path(tmp)) as (server, port):
+        assert server.director.house is not None
+        original_director = server.director
+
+        with patch.object(metadata, "entry_points", lambda *, group: (ep,) if group == "haven.providers" else ()):
+            status, body = _post(
+                port,
+                "/api/setup/providers/install",
+                {"entry_point_name": "philips_hue", "config": {}},
+            )
+
+        assert status == 200
+        assert body["ok"] is True
+        assert body["provider_id"] == "philips_hue"
+        # The live director was swapped in place, exactly like connecting HA.
+        assert server.director is not original_director
+        assert server.director.house is None
+        assert isinstance(server.director.world, HomeAssistantWorldProvider)
 
 
 def test_skipping_the_provider_after_connecting_rebuilds_back_to_demo() -> None:

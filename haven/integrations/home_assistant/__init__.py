@@ -4,13 +4,14 @@ from .adapter import FixtureHomeAssistant, HomeAssistantAdapter
 from .client import HomeAssistantConfigError, HomeAssistantStateError, LiveHomeAssistantAdapter
 from .observer import ContextSource, HomeAssistantObserver, HomeAssistantStateSource, PresenceSource
 from .state import device_states_from_ha
-from .world import HomeAssistantWorldProvider
+from .world import HomeAssistantObservationAdapter, HomeAssistantWorldProvider
 
 __all__ = [
     "ContextSource",
     "FixtureHomeAssistant",
     "HomeAssistantAdapter",
     "HomeAssistantConfigError",
+    "HomeAssistantObservationAdapter",
     "HomeAssistantObserver",
     "HomeAssistantStateError",
     "HomeAssistantStateSource",

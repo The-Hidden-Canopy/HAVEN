@@ -105,7 +105,10 @@ def inspect_provider_package(discovered: DiscoveredProviderPackage) -> ProviderM
     """
 
     plugin = discovered.load_plugin()
-    manifest = plugin.describe()
+    try:
+        manifest = plugin.describe()
+    except Exception as exc:
+        raise ProviderLoadError(f"{discovered.entry_point_name!r}.describe() raised: {exc}") from exc
     if not isinstance(manifest, ProviderManifest):
         raise ProviderLoadError(f"{discovered.entry_point_name!r}.describe() did not return a ProviderManifest")
     return manifest
@@ -123,7 +126,12 @@ def build_provider(
     """
 
     plugin = discovered.load_plugin()
-    manifest = plugin.describe()
+    try:
+        manifest = plugin.describe()
+    except Exception as exc:
+        raise ProviderLoadError(f"{discovered.entry_point_name!r}.describe() raised: {exc}") from exc
+    if not isinstance(manifest, ProviderManifest):
+        raise ProviderLoadError(f"{discovered.entry_point_name!r}.describe() did not return a ProviderManifest")
     instance = plugin.build(config=dict(config or {}))
     return manifest, instance
 

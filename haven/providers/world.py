@@ -62,7 +62,21 @@ class CompositeObserver:
         contexts: list[ContextState] = []
         devices: dict[str, DeviceState] = {}
         for provider in self._providers:
-            for observation in provider.observe():
+            try:
+                observations = provider.observe()
+            except Exception:
+                # One provider's outage (Home Assistant unreachable, a
+                # community provider's device offline) must not sink every
+                # other provider's evidence -- the whole point of a
+                # multi-provider household is that Hue going down still
+                # leaves HAVEN able to see and act on everything else. This
+                # source simply contributes nothing to this snapshot; a
+                # provider that was already OBSERVED in a *previous*
+                # snapshot is unaffected here (fallback/staleness is the
+                # outer `HomeAssistantWorldProvider` wrapper's job, over the
+                # whole composite, not any one source's).
+                continue
+            for observation in observations:
                 if isinstance(observation, PresenceState):
                     presence.append(observation)
                 elif isinstance(observation, ContextState):

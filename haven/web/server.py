@@ -248,6 +248,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "jobs": [job_to_dict(job) for job in self.model_jobs.list()]})
         elif path == "/api/setup":
             self._send_json(200, self.setup_service.status())
+        elif path == "/api/setup/providers/packages":
+            self._send_json(200, self.setup_service.list_provider_packages())
         elif path == "/api/system/diagnostics":
             self._send_json(200, self.diagnostics.collect())
         elif path == "/api/system/backups":
@@ -421,6 +423,16 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/setup/data-dir":
             value = body.get("path")
             result = setup.choose_data_dir(value if isinstance(value, str) else None)
+        elif path == "/api/setup/providers/install":
+            result = setup.install_provider_package(
+                entry_point_name=body.get("entry_point_name"), config=body.get("config")
+            )
+        elif path == "/api/setup/providers/enable":
+            result = setup.set_provider_package_enabled(
+                provider_id=body.get("provider_id"), enabled=bool(body.get("enabled", True))
+            )
+        elif path == "/api/setup/providers/uninstall":
+            result = setup.uninstall_provider_package(provider_id=body.get("provider_id"))
         elif path == "/api/setup/provider":
             kind = body.get("kind")
             base_url = body.get("base_url")

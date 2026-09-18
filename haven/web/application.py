@@ -8,22 +8,31 @@ disabled HAVEN runs its deterministic floor.
 The demo household (``SimulatedHouse``, the garage/camera/office-light
 scenario, the ``gerron`` fixture identity) is reserved for exactly those two
 cases -- nothing configured yet, or an explicit ``demo=True``. Once a
-household has named ``home_assistant`` as its provider, it never falls back
-to that fixture again: if its connection details cannot be read right now
-(a missing endpoint, an unreadable token sidecar), HAVEN still builds the
-household's *real* registry, declarations, and rules, just with a world that
-reports no live evidence -- the same honest "nothing observed yet" a real
-provider that is merely unreachable already degrades to
-(`HomeAssistantWorldProvider`), never a fictional house that looks real.
+household has named a provider (Home Assistant, or an installed community
+package), it never falls back to that fixture again: if a provider's
+connection details cannot be read or its own ``build()`` fails right now,
+HAVEN still builds the household's *real* registry, declarations, and rules,
+just with less live evidence -- the same honest "nothing observed yet" a
+real provider that is merely unreachable already degrades to, never a
+fictional house that looks real.
+
+A household's world and execution are a *composite* of every provider it has
+enabled, not a single exclusive choice: Home Assistant (this repo's one
+built-in integration) and any number of installed community providers
+(``haven/providers/loader.py``) all contribute their own observations and
+execution capability into one shared ``CompositeObserver`` /
+``ExecutionProviderRegistry``, via ``build_provider_composition``. One
+provider being unreachable degrades only its own contribution -- it never
+takes the rest of the household's evidence or control down with it.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from haven.core.domain import Principal, RoleTier
-from haven.core.world import WorldProvider
 from haven.devices import DeviceRegistry
 from haven.execution import ExecutionProviderRegistry
 from haven.integrations.home_assistant.client import LiveHomeAssistantAdapter
@@ -32,14 +41,16 @@ from haven.integrations.home_assistant.observer import (
     HomeAssistantObserver,
     PresenceSource,
 )
-from haven.integrations.home_assistant.world import HomeAssistantWorldProvider
+from haven.integrations.home_assistant.world import HomeAssistantObservationAdapter, HomeAssistantWorldProvider
 from haven.intelligence.gateway import ScriptedIntelligenceProvider
 from haven.models import ModelManager
+from haven.perception.observation import ObservationProvider
+from haven.providers.world import CompositeObserver
 
 from .demo import DemoDirector
 from .haven_application import Clock, HavenApplication
 from .history_persist import HistoryStore
-from .provider_install import find_installed_provider, load_installed_provider_config
+from .provider_install import load_installed_providers, load_installed_provider_config
 from .rules_persist import RulesPersistence
 from .setup_config import SetupConfig, SetupConfigError, SetupConfigStore, _write_json_atomic
 from .setup_service import (
@@ -54,55 +65,100 @@ from .setup_service import (
 HA_PROVIDER_ID = "home_assistant"
 
 
-def _build_installed_provider_world_and_execution(
-    *, store: SetupConfigStore, provider_kind: str, household_id: str
-) -> tuple[WorldProvider, ExecutionProviderRegistry] | None:
-    """Try to build the world/execution wiring for an activated community
-    provider named as this installation's `provider_kind`.
+@dataclass(frozen=True)
+class ProviderComposition:
+    """Every provider this installation has wired in, folded together.
 
-    Returns `None` (never raises) whenever this cannot be done right now --
-    nothing installed under this id, its entry point disappeared (the
-    package was uninstalled), it was explicitly disabled, or `build()`
-    itself failed (a bad credential, an unreachable device at construction
-    time). `build_application` treats `None` exactly like "no adapter
-    exists": the household's real installation with no live evidence, never
-    the demo fixture and never a crashed boot.
+    `ha_states_source` is kept separately (rather than only living inside
+    `observation_providers`) because diagnostics' provider-reachability
+    probe (`haven/web/diagnostics.py`) and `HavenApplication`'s device-state
+    projection both need Home Assistant's raw client specifically, not the
+    generic `Observation` shape every other source is folded down to.
     """
 
-    installed = find_installed_provider(store, provider_kind)
-    if installed is None or not installed.enabled:
-        return None
+    observation_providers: tuple[ObservationProvider, ...]
+    execution: ExecutionProviderRegistry
+    ha_states_source: object | None
+
+
+def build_provider_composition(
+    *,
+    store: SetupConfigStore,
+    config: SetupConfig,
+    registry: DeviceRegistry,
+    household_id: str,
+    presence_sources: tuple[PresenceSource, ...],
+    context_sources: tuple[ContextSource, ...],
+    clock: Clock,
+    ha_client=None,
+) -> ProviderComposition:
+    """Build one composite world/execution wiring from every enabled provider.
+
+    Home Assistant (this repo's one built-in integration, wired through its
+    own dedicated `SetupConfig` fields) and every *enabled* installed
+    community provider (`haven/providers/loader.py`,
+    `haven/web/provider_install.py`) all contribute independently: a
+    provider that cannot be built right now (unreachable, uninstalled,
+    disabled, a bad credential) simply contributes nothing rather than
+    taking the whole boot down or blocking every other provider from
+    working. This is what lets a household run Home Assistant and a Hue
+    bridge and a Matter controller all at once, none of them "the" provider.
+    """
+
+    observation_providers: list[ObservationProvider] = []
+    execution = ExecutionProviderRegistry()
+    ha_states_source = None
+
+    if config.provider_kind == HA_PROVIDER_ID and config.provider_base_url:
+        token = _read_provider_token(store, config)
+        if token is not None:
+            adapter = LiveHomeAssistantAdapter(base_url=config.provider_base_url, access_token=token)
+            source = ha_client if ha_client is not None else adapter
+            observation_providers.append(
+                HomeAssistantObservationAdapter(
+                    observer=HomeAssistantObserver(
+                        client=source,
+                        device_registry=registry,
+                        household_id=household_id,
+                        presence_sources=presence_sources,
+                        context_sources=context_sources,
+                    ),
+                    clock=clock,
+                )
+            )
+            execution.register(HA_PROVIDER_ID, adapter)
+            ha_states_source = source
+
     from haven.providers.loader import build_provider, discover_provider_packages
 
-    discovered = next(
-        (d for d in discover_provider_packages() if d.entry_point_name == installed.entry_point_name), None
+    discovered_by_entry_point = {d.entry_point_name: d for d in discover_provider_packages()}
+    for installed in load_installed_providers(store):
+        if not installed.enabled:
+            continue
+        discovered = discovered_by_entry_point.get(installed.entry_point_name)
+        if discovered is None:
+            # The package that was activated is no longer installed in this
+            # Python environment -- contributes nothing, same as any other
+            # provider that can't be reached right now.
+            continue
+        try:
+            manifest, instance = build_provider(
+                discovered, config=load_installed_provider_config(store, installed.provider_id)
+            )
+        except Exception:
+            # A provider package's own build() failing (bad credential,
+            # device unreachable at construction, a bug in the package)
+            # must never take this installation's boot down with it, and
+            # must never block every OTHER provider from working either.
+            continue
+        if callable(getattr(instance, "execute", None)):
+            execution.register(manifest.provider_id, instance)
+        if callable(getattr(instance, "observe", None)):
+            observation_providers.append(instance)
+
+    return ProviderComposition(
+        observation_providers=tuple(observation_providers), execution=execution, ha_states_source=ha_states_source
     )
-    if discovered is None:
-        return None
-    try:
-        _manifest, instance = build_provider(
-            discovered, config=load_installed_provider_config(store, provider_kind)
-        )
-    except Exception:
-        # A provider package's own build() failing (bad credential, device
-        # unreachable at construction, a bug in the package) must never take
-        # this installation's boot down with it -- degrade to no live
-        # evidence, the same as any other unreachable provider.
-        return None
-
-    providers = ExecutionProviderRegistry()
-    if callable(getattr(instance, "execute", None)):
-        providers.register(provider_kind, instance)
-    if callable(getattr(instance, "observe", None)):
-        from haven.providers.world import CompositeObserver
-
-        world: WorldProvider = HomeAssistantWorldProvider(
-            observer=CompositeObserver(providers=(instance,), household_id=household_id),
-            empty_household_id=household_id,
-        )
-    else:
-        world = HomeAssistantWorldProvider(observer=_UnconfiguredObserver(), empty_household_id=household_id)
-    return world, providers
 
 
 def ensure_household_id(store: SetupConfigStore, config: SetupConfig) -> tuple[SetupConfig, str]:
@@ -130,24 +186,6 @@ def ensure_household_id(store: SetupConfigStore, config: SetupConfig) -> tuple[S
     return config, household_id
 
 
-class _UnconfiguredObserver:
-    """Always fails, so `HomeAssistantWorldProvider` degrades to its honest
-    empty snapshot instead of this module inventing a second "no evidence"
-    representation.
-
-    Used whenever `build_application` has no live adapter to build for the
-    household's configured provider right now -- a provider this
-    composition root has no adapter for at all, or `home_assistant` with
-    connection details that cannot be read right now (see
-    `build_application`). `HomeAssistantWorldProvider` itself is generic
-    over any object satisfying `observer.observe(now=...)`; nothing here is
-    HA-specific beyond this module's current provider roster.
-    """
-
-    def observe(self, *, now):  # noqa: ARG002 -- matches HomeAssistantObserver.observe
-        raise RuntimeError("provider is configured but not reachable")
-
-
 def build_application(
     *,
     store: SetupConfigStore,
@@ -162,14 +200,14 @@ def build_application(
     household (scenario, `SimulatedHouse`, the `gerron` fixture identity).
     Once a household has named ANY provider, every other case builds the
     *real* composition -- enrolled devices, declared people, persisted
-    rules, preferences -- and only the world/execution wiring changes: a
-    recognized provider (``home_assistant``, today) with a readable base URL
-    and token gets its live adapter; a provider this composition root does
-    not know how to build (a community provider not yet registered here, or
-    a known one with an unreadable endpoint/token) gets a world that reports
-    no live evidence rather than the demo fixture. A household that has
-    connected a provider never sees a fictional house again, regardless of
-    which provider it named.
+    rules, preferences -- with a world and execution registry that are a
+    *composite* of every provider this installation has enabled
+    (`build_provider_composition`): Home Assistant if configured and
+    reachable, plus every installed community provider that is enabled and
+    can be built right now. A provider that cannot be built degrades only
+    its own contribution -- a household with nothing reachable at all still
+    gets its real registry/declarations/rules, just with no live evidence,
+    never the demo fixture.
     """
 
     try:
@@ -179,6 +217,7 @@ def build_application(
     if demo or config.provider_kind is None:
         return DemoDirector(clock=clock, model_manager=model_manager)
 
+    resolved_clock: Clock = clock or (lambda: datetime.now(timezone.utc))
     config, household_id = ensure_household_id(store, config)
     registry = DeviceRegistry()
     enrolled = load_enrolled_sidecar(store.path.parent / _ENROLLED_FILENAME)
@@ -200,52 +239,22 @@ def build_application(
         ContextSource(entity_id=context.entity_id, context_id=context.context_id)
         for context in declarations.contexts
     )
-    token = _read_provider_token(store, config)
-    providers = ExecutionProviderRegistry()
-    if config.provider_kind == HA_PROVIDER_ID and config.provider_base_url and token is not None:
-        adapter = LiveHomeAssistantAdapter(base_url=config.provider_base_url, access_token=token)
-        world: WorldProvider = HomeAssistantWorldProvider(
-            observer=HomeAssistantObserver(
-                client=ha_client if ha_client is not None else adapter,
-                device_registry=registry,
-                household_id=household_id,
-                presence_sources=presence_sources,
-                context_sources=context_sources,
-            ),
-            empty_household_id=household_id,
-        )
-        providers.register(HA_PROVIDER_ID, adapter)
-        ha_states_source = ha_client if ha_client is not None else adapter
-    else:
-        installed_wiring = _build_installed_provider_world_and_execution(
-            store=store, provider_kind=config.provider_kind, household_id=household_id
-        )
-        ha_states_source = None
-        if installed_wiring is not None:
-            # A household activated a community provider package (see
-            # `docs/authoring-providers.md` and `haven/providers/loader.py`)
-            # under this exact provider_kind: its own instance supplies
-            # whatever world/execution wiring it declared, through the same
-            # generic seams (`ObservationProvider`, `ExecutionAdapter`) any
-            # other provider satisfies.
-            world, providers = installed_wiring
-        else:
-            # No adapter can be built for this installation right now:
-            # nothing is installed under this provider_kind at all, the
-            # package that was installed got uninstalled or disabled, its
-            # own build() failed, or it is `home_assistant` with connection
-            # details that cannot be read right now (no endpoint, or the
-            # token sidecar is missing or unreadable). Either way this is
-            # the household's real installation with a provider that is
-            # simply not reachable right now, not an unconfigured one: its
-            # enrolled devices, declared people, and rules all still apply,
-            # they simply have no live evidence -- exactly how a live
-            # adapter that starts failing every fetch already degrades,
-            # never the demo fixture. No execution provider is registered
-            # either: a command against a device with no reachable adapter
-            # fails as an ordinary execution result, the same as any other
-            # unregistered provider_id.
-            world = HomeAssistantWorldProvider(observer=_UnconfiguredObserver(), empty_household_id=household_id)
+    composition = build_provider_composition(
+        store=store,
+        config=config,
+        registry=registry,
+        household_id=household_id,
+        presence_sources=presence_sources,
+        context_sources=context_sources,
+        clock=resolved_clock,
+        ha_client=ha_client,
+    )
+    world = HomeAssistantWorldProvider(
+        observer=CompositeObserver(providers=composition.observation_providers, household_id=household_id),
+        empty_household_id=household_id,
+    )
+    providers = composition.execution
+    ha_states_source = composition.ha_states_source
     # Automations survive a restart: the director rehydrates rules.json (next
     # to the setup sidecars) at construction, after its own scenario prep.
     rules_persistence = RulesPersistence(store.path.parent / "rules.json")

@@ -123,6 +123,18 @@ def test_composite_observer_plugs_into_the_generic_world_provider_wrapper():
     assert len(snapshot.presence) == 1
 
 
+def test_one_failing_provider_does_not_sink_the_others():
+    class _BrokenProvider:
+        def observe(self):
+            raise RuntimeError("bridge unreachable")
+
+    working = FixtureObservationProvider((_presence(), _device()))
+    observer = CompositeObserver(providers=(_BrokenProvider(), working), household_id="house-1")
+    snapshot = observer.observe(now=NOW)
+    assert len(snapshot.presence) == 1
+    assert len(snapshot.devices) == 1
+
+
 def test_household_id_must_be_non_empty():
     with pytest.raises(ValueError):
         CompositeObserver(providers=(), household_id="  ")
