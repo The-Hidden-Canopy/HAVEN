@@ -30,6 +30,13 @@ Routing rules, per method:
   malformed payload -- falls back to the default. Structured intent remains
   the scripted/fallback path until a real structured-output contract
   exists; models upgrade chat/explain today.
+- `interpret_intent`: the same honesty constraint, over the whole intent
+  union. Free-text chat models cannot reliably produce structured intents,
+  so this delegates to the default (deterministic) provider unless the
+  resolved handle exposes the capability-gated `structured_intent` method
+  AND the returned payload validates as exactly one of the five intent
+  forms (query, action, rule, clarification, conversation). Any gap or
+  exception falls back to the default.
 - Every model invocation failure (connection error, unrecognized envelope)
   falls back to the default provider rather than failing the call: a model
   is an upgrade, never a single point of failure.
@@ -54,12 +61,19 @@ import json
 from datetime import datetime
 from typing import Any
 
-from haven.core.domain import ActionKind, AuthorityDecision, Principal, RuleDraft
+from haven.core.domain import ActionKind, AuthorityDecision, DeviceSelector, Principal, RuleDraft
 from haven.intelligence.gateway import (
     AgentContext,
     AgentResponse,
     IntelligenceProvider,
     ScriptedIntelligenceProvider,
+)
+from haven.intelligence.intents import (
+    ActionProposal,
+    ClarificationRequest,
+    ConversationMessage,
+    Intent,
+    QueryRequest,
 )
 from haven.models.contracts import ModelKind
 from haven.models.manager import (
@@ -90,6 +104,15 @@ _DRAFT_REQUIRED_KEYS = (
     "interpretation",
     "action_kind",
 )
+
+# Keys each non-rule intent form must carry in a structured-intent payload.
+# A payload with no "form" but all rule-draft keys is read as a rule.
+_INTENT_FORM_KEYS = {
+    "query": ("text",),
+    "action": ("action_kind", "justification", "source_text"),
+    "clarification": ("question", "source_text"),
+    "conversation": ("text",),
+}
 
 
 def _extract_text(result: Any) -> str:
@@ -159,6 +182,72 @@ def _draft_from_payload(payload: dict[str, Any]) -> RuleDraft:
         unresolved=tuple(payload.get("unresolved", ())),
         capability=payload.get("capability"),
     )
+
+
+def _action_from_payload(payload: dict[str, Any]) -> ActionProposal:
+    """Map the action form onto an ActionProposal; gaps raise, never guess."""
+
+    selector_data = payload.get("target_selector")
+    target_device_id = payload.get("target_device_id")
+    if (target_device_id is None) == (selector_data is None):
+        raise ValueError("an action intent must set exactly one of target_device_id or target_selector")
+    target_selector = None
+    if selector_data is not None:
+        if not isinstance(selector_data, dict):
+            raise ValueError("target_selector must be a JSON object")
+        target_selector = DeviceSelector(
+            role=selector_data.get("role"),
+            room=selector_data.get("room"),
+            device_type=selector_data.get("device_type"),
+            requires_capability=selector_data.get("requires_capability"),
+        )
+    return ActionProposal(
+        action_kind=(
+            payload["action_kind"]
+            if isinstance(payload["action_kind"], ActionKind)
+            else ActionKind(payload["action_kind"])
+        ),
+        target_device_id=target_device_id,
+        target_selector=target_selector,
+        parameters=payload.get("parameters", ()),
+        justification=payload["justification"],
+        source_text=payload["source_text"],
+    )
+
+
+def _intent_from_payload(payload: dict[str, Any]) -> Intent:
+    """Map a structured-intent payload onto any of the five intent forms.
+
+    A payload carrying all rule-draft keys (with or without form="rule") is a
+    rule proposal; otherwise "form" names the shape and every required key of
+    that shape must be present. Any gap raises -- a malformed model payload
+    degrades to the deterministic floor, never to a guessed intent.
+    """
+
+    if not isinstance(payload, dict):
+        raise ValueError("structured intent payload must be a JSON object")
+    form = payload.get("form")
+    if form is None and all(key in payload for key in _DRAFT_REQUIRED_KEYS):
+        return _draft_from_payload(payload)
+    if form == "rule":
+        return _draft_from_payload(payload)
+    required = _INTENT_FORM_KEYS.get(form)
+    if required is None:
+        raise ValueError(f"structured intent payload has an unknown form: {form!r}")
+    missing = [key for key in required if key not in payload]
+    if missing:
+        raise ValueError(f"structured intent payload is missing keys: {sorted(missing)}")
+    if form == "query":
+        return QueryRequest(text=payload["text"])
+    if form == "action":
+        return _action_from_payload(payload)
+    if form == "clarification":
+        return ClarificationRequest(
+            question=payload["question"],
+            source_text=payload["source_text"],
+            options=tuple(payload.get("options", ())),
+        )
+    return ConversationMessage(text=payload["text"])
 
 
 class ModelIntelligenceProvider:
@@ -250,13 +339,12 @@ class ModelIntelligenceProvider:
             return None
         return self._model_manager.loaded_handle(descriptor.id)
 
-    def _structured_intent(self, *, context: AgentContext | None, text: str) -> RuleDraft | None:
-        """A RuleDraft from a capability-gated structured-intent handle, or None.
+    def _structured_intent_payload(self, *, context: AgentContext | None, text: str) -> Any:
+        """The raw structured-intent payload from a capability-gated handle.
 
-        None means "the models cannot do this honestly" and the caller
-        delegates to the default. Every failure mode -- no handle, no
-        structured method, invocation error, malformed payload -- collapses
-        to None so structured intent degrades to the scripted path.
+        None means "the models cannot do this honestly" -- no handle, no
+        structured method, or an invocation error -- and the caller
+        delegates to the default.
         """
 
         handle = self._loaded_handle(requires=frozenset({"structured_intent"}))
@@ -269,8 +357,41 @@ class ModelIntelligenceProvider:
         if context is not None:
             payload["context"] = context.to_dict()
         try:
-            result = capability_method("structured_intent", "structured_intent", payload)
+            return capability_method("structured_intent", "structured_intent", payload)
+        except Exception:
+            return None
+
+    def _structured_intent(self, *, context: AgentContext | None, text: str) -> RuleDraft | None:
+        """A RuleDraft from a capability-gated structured-intent handle, or None.
+
+        None means "the models cannot do this honestly" and the caller
+        delegates to the default. Every failure mode -- no handle, no
+        structured method, invocation error, malformed payload -- collapses
+        to None so structured intent degrades to the scripted path.
+        """
+
+        result = self._structured_intent_payload(context=context, text=text)
+        if result is None:
+            return None
+        try:
             return _draft_from_payload(result)
+        except Exception:
+            return None
+
+    def _structured_intent_form(self, *, context: AgentContext, text: str) -> Intent | None:
+        """Any validated intent form from a structured-intent handle, or None.
+
+        The same capability gate as `_structured_intent`, but the payload may
+        map onto any of the five intent forms. A payload that does not
+        validate against one complete form collapses to None so intent
+        classification degrades to the deterministic floor.
+        """
+
+        result = self._structured_intent_payload(context=context, text=text)
+        if result is None:
+            return None
+        try:
+            return _intent_from_payload(result)
         except Exception:
             return None
 
@@ -286,6 +407,14 @@ class ModelIntelligenceProvider:
         if draft is not None:
             return draft
         return self._default.interpret(text, principal=principal, now=now)
+
+    def interpret_intent(
+        self, text: str, *, context: AgentContext, principal: Principal, now: datetime
+    ) -> Intent:
+        intent = self._structured_intent_form(context=context, text=text)
+        if intent is not None:
+            return intent
+        return self._default.interpret_intent(text, context=context, principal=principal, now=now)
 
     def chat(self, context: AgentContext, message: str) -> AgentResponse:
         handle = self._chat_handle()

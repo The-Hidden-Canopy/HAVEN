@@ -14,7 +14,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -25,7 +25,6 @@ from haven.core.domain import (
     ConfirmationToken,
     ContextState,
     DecisionStatus,
-    DeviceSelector,
     DeviceState,
     DeviceResult,
     EvidenceStatus,
@@ -45,7 +44,6 @@ from haven.intelligence.gateway import AgentContext, ScriptedIntelligenceProvide
 from haven.intelligence.intents import (
     ActionProposal,
     ClarificationRequest,
-    ConversationMessage,
     QueryRequest,
 )
 from haven.intelligence.worldview import WorldView
@@ -53,6 +51,7 @@ from haven.models import ModelManager
 from haven.models.bridge import ModelIntelligenceProvider
 from haven.providers import CapabilityRegistry, build_default_registry
 from haven.runtime import HavenRuntime
+from haven.scheduler import SchedulerEngine
 
 from . import serialize
 
@@ -119,11 +118,6 @@ ALREADY_EXECUTING_LINE = "That action is already executing."
 
 # Utterances that mean "Haven, stop" rather than a chat intent.
 STOP_UTTERANCES = ("haven, stop", "stop")
-
-# A direct action's pending card is not tied to any stored rule; the sentinel
-# keeps the PendingRequest envelope honest about that.
-DIRECT_ACTION_RULE_ID = "direct-action"
-
 
 def _is_stop_utterance(text: str) -> bool:
     normalized = " ".join(text.casefold().split()).rstrip(".!?")
@@ -508,6 +502,7 @@ class DemoDirector:
         voice_refractory_seconds: float = VOICE_REFRACTORY_SECONDS,
         capability_registry: CapabilityRegistry | None = None,
         model_manager: ModelManager | None = None,
+        scheduler_tick_seconds: float = 20.0,
     ) -> None:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         now = self._clock()
@@ -542,6 +537,9 @@ class DemoDirector:
         self._direct_actions: dict[str, ActionProposal] = {}
         self._auto_allow: set[str] = set()
         self.receipts: list = []
+        self._scheduler_tick_seconds = scheduler_tick_seconds
+        self._scheduler_thread: threading.Thread | None = None
+        self._scheduler_stop: threading.Event | None = None
         self.voice = VoiceSession(
             self,
             ack_seconds=voice_ack_seconds,
@@ -549,6 +547,17 @@ class DemoDirector:
         )
         self.garage_rule_id = self._prepare_garage_rule(now)
         self.camera_rule_id = self._prepare_camera_rule(now)
+        # The scheduler is another requester over the same runtime, asking as
+        # the resident. It is in-memory only: the demo has no data dir, so
+        # the enabled set lives and dies with the director. The garage and
+        # camera pre-approved rules carry 24h schedule windows purely as an
+        # "evaluates as due whenever the manual flows invoke them"
+        # affordance -- they are not schedules, so the scheduler stays off
+        # them; the office-light rule below is the one real schedule.
+        self.scheduler = SchedulerEngine(runtime=self.runtime, principal=self.resident)
+        self.scheduler.set_enabled(self.garage_rule_id, False)
+        self.scheduler.set_enabled(self.camera_rule_id, False)
+        self.office_light_rule_id = self._prepare_office_light_rule(now)
         self.start_scenario()
 
     @property
@@ -607,6 +616,33 @@ class DemoDirector:
             rule.rule_id,
             principal=self.owner,
             justification="Owner approved the driveway-clip rule for the demo household.",
+            now=now,
+        )
+        return rule.rule_id
+
+    OFFICE_LIGHT_OFF_TIME = dt_time(22, 35)
+
+    def _prepare_office_light_rule(self, now: datetime) -> str:
+        # The demo's one real schedule: a SAFE_AUTOMATIC light-off at 22:35
+        # every day, observable (the office light state flips) and harmless.
+        draft = RuleDraft(
+            draft_id="draft-office-light-off",
+            household_id=HOUSEHOLD_ID,
+            proposed_by=self.resident.actor_id,
+            source_text="turn off the office light at 22:35 every day",
+            interpretation="Turn off the office light at 22:35 every night.",
+            action_kind=ActionKind.TURN_LIGHT_OFF,
+            schedule_trigger=ScheduleTrigger(
+                time_of_day=self.OFFICE_LIGHT_OFF_TIME, window=timedelta(minutes=10)
+            ),
+            target_device_id="office_light",
+            capability="power",
+        )
+        rule = self.runtime.propose_draft(draft, principal=self.resident, now=now)
+        self.runtime.approve_rule(
+            rule.rule_id,
+            principal=self.owner,
+            justification="Owner approved the nightly office light schedule for the demo household.",
             now=now,
         )
         return rule.rule_id
@@ -785,6 +821,98 @@ class DemoDirector:
         self._publish_state()
         return self.state()
 
+    # -- the scheduler: another requester over the same runtime ---------------
+
+    def run_scheduler_tick(self, now: datetime | None = None) -> list:
+        """Run one synchronous scheduler tick; returns the tick's receipts.
+
+        Tests pass a fixed ``now`` to force a due window; the background loop
+        and the HTTP endpoint leave it None and let the clock decide.
+        """
+
+        now = now or self._clock()
+        world = self.house.snapshot(now)
+        receipts = self.scheduler.tick(world=world, now=now)
+        self.receipts.extend(receipts)
+        for receipt in receipts:
+            self._handle_scheduler_receipt(receipt)
+        self._publish_state()
+        return receipts
+
+    def _handle_scheduler_receipt(self, receipt) -> None:
+        # Mirror what the run_rule callers already publish: glow and state
+        # move for every outcome; the conversation only speaks when the
+        # schedule was told no -- a successful firing is quiet architectural
+        # operation.
+        if receipt.decision.status == DecisionStatus.ALLOW:
+            result = receipt.device_result
+            if result is not None and not result.success:
+                self._say("haven", f"I was due to run that but the device refused: {result.detail}")
+                self._set_glow(GLOW_CRITICAL, target=self._device_room(receipt.requested_action.target_device_id))
+                return
+            self._set_glow(GLOW_COMPLETED, target=self._device_room(receipt.requested_action.target_device_id))
+            return
+        try:
+            rule = self.store.get_rule(receipt.requested_action.rule_id)
+            summary = " ".join(rule.draft.source_text.split())
+        except KeyError:
+            summary = receipt.requested_action.rule_id
+        self._say(
+            "haven",
+            f"I was due to run {summary} but {receipt.decision.code.value}: {receipt.decision.explanation}",
+        )
+        self._set_glow(GLOW_CRITICAL, target=self._device_room(receipt.requested_action.target_device_id))
+
+    def start_scheduler(self) -> None:
+        if self._scheduler_thread is not None:
+            return
+        stop = threading.Event()
+        thread = threading.Thread(
+            target=self._scheduler_loop,
+            args=(stop,),
+            daemon=True,
+            name="haven-scheduler",
+        )
+        self._scheduler_stop = stop
+        self._scheduler_thread = thread
+        thread.start()
+
+    def stop_scheduler(self) -> None:
+        thread = self._scheduler_thread
+        if thread is None:
+            return
+        assert self._scheduler_stop is not None
+        self._scheduler_stop.set()
+        thread.join(timeout=5)
+        self._scheduler_thread = None
+        self._scheduler_stop = None
+
+    def _scheduler_loop(self, stop: threading.Event) -> None:
+        # Dumb and lock-free on purpose: the engine's last_fired check is
+        # single-threaded by design, and the demo only ticks from one place
+        # at a time. A failed tick must not kill the loop.
+        while not stop.wait(self._scheduler_tick_seconds):
+            try:
+                self.run_scheduler_tick()
+            except Exception:
+                pass
+
+    def scheduler_status(self) -> list[dict[str, Any]]:
+        now = self._clock()
+        world = self.house.snapshot(now)
+        return [
+            serialize.scheduler_status_to_dict(status)
+            for status in self.scheduler.status(self.store.state.rules, world=world, now=now)
+        ]
+
+    def set_scheduler_enabled(self, rule_id: str, enabled: bool) -> list[dict[str, Any]]:
+        self.scheduler.set_enabled(rule_id, enabled)
+        self._publish_state()
+        return self.scheduler_status()
+
+    def has_rule(self, rule_id: str) -> bool:
+        return any(rule.rule_id == rule_id for rule in self.store.state.rules)
+
     def chat(self, text: str, focus: str | None = None) -> dict[str, Any]:
         self._say("user", text)
         self._chat_intent(text, focus=focus)
@@ -792,24 +920,31 @@ class DemoDirector:
         return self.state()
 
     def _chat_intent(self, text: str, focus: str | None = None) -> None:
-        """Route one utterance over the intent union, deterministically.
+        """Route one utterance through the provider's proposed intent.
 
-        Classification is regex/keyword and case-insensitive; nothing here
-        executes without crossing authority. Voice and typed text share this
-        path; stop-phrases are intercepted before it (VoiceSession).
+        Classification lives in the intelligence seam: the director builds
+        an AgentContext (bounded world + room focus) and the provider
+        proposes exactly one intent, which is routed here. Nothing executes
+        without crossing authority. Voice and typed text share this path;
+        stop-phrases are intercepted before it (VoiceSession).
         """
-        normalized = " ".join(text.casefold().split()).rstrip(".!?")
-        if self._is_rule_phrasing(normalized):
-            self._chat_rule_phrase(text)
-            return
-        intent = self._classify_intent(text, normalized, focus)
+        now = self._clock()
+        intent = self.runtime.intelligence_provider.interpret_intent(
+            text,
+            context=self._agent_context(focus=focus, now=now),
+            principal=self.resident,
+            now=now,
+        )
         if isinstance(intent, QueryRequest):
             self._answer_query(intent, focus=focus)
         elif isinstance(intent, ActionProposal):
             self._run_proposal(intent)
+        elif isinstance(intent, RuleDraft):
+            self._chat_rule_draft(intent, now)
         elif isinstance(intent, ClarificationRequest):
             self._say("haven", intent.question)
         else:
+            normalized = " ".join(text.casefold().split()).rstrip(".!?")
             self._say("haven", self._conversation_fallback(normalized, focus))
 
     def _conversation_fallback(self, normalized: str, focus: str | None) -> str:
@@ -824,26 +959,7 @@ class DemoDirector:
             return f"I don't see a light in the {room}."
         return "I can't do that yet."
 
-    # -- deterministic intent classification --------------------------------
-
-    _QUESTION_LEADERS = ("is", "are", "does", "do", "did", "what", "why", "how", "who", "where", "which", "can")
-
-    def _classify_intent(self, text: str, normalized: str, focus: str | None) -> object:
-        proposal = self._classify_action(normalized, focus, source_text=text)
-        if proposal is not None:
-            return proposal
-        if self._is_question(normalized):
-            return QueryRequest(text=text)
-        return ConversationMessage(text=text)
-
-    @staticmethod
-    def _is_rule_phrasing(normalized: str) -> bool:
-        return normalized.startswith("when ") and not normalized.endswith("?")
-
-    def _is_question(self, normalized: str) -> bool:
-        if normalized.endswith("?"):
-            return True
-        return any(normalized.startswith(leader + " ") for leader in self._QUESTION_LEADERS)
+    # -- the deterministic classification table (now in the seam) -------------
 
     _LIGHT_OFF_PATTERNS = (
         "turn that light off",
@@ -852,55 +968,12 @@ class DemoDirector:
         "turn the light off",
     )
 
-    def _classify_action(self, normalized: str, focus: str | None, *, source_text: str) -> ActionProposal | None:
-        if normalized in ("close the garage", "close the garage door") and self.house.garage_open():
-            return ActionProposal(
-                action_kind=ActionKind.CLOSE_GARAGE,
-                target_device_id="garage_door",
-                target_selector=None,
-                parameters=(),
-                justification="The resident asked HAVEN to close the garage.",
-                source_text=source_text,
-            )
-        if normalized in ("open the garage", "open the garage door"):
-            return ActionProposal(
-                action_kind=ActionKind.OPEN_GARAGE,
-                target_device_id="garage_door",
-                target_selector=None,
-                parameters=(),
-                justification="The resident asked HAVEN to open the garage.",
-                source_text=source_text,
-            )
-        room = self._light_room(normalized)
-        if room is not None and self.registry.find(role="light", room=room):
-            return ActionProposal(
-                action_kind=ActionKind.TURN_LIGHT_OFF,
-                target_device_id=None,
-                target_selector=DeviceSelector(role="light", room=room),
-                parameters=(),
-                justification=f"The resident asked HAVEN to turn off the {room} light.",
-                source_text=source_text,
-            )
-        if focus is not None and any(normalized == pattern for pattern in self._LIGHT_OFF_PATTERNS):
-            if self.registry.find(role="light", room=focus):
-                return ActionProposal(
-                    action_kind=ActionKind.TURN_LIGHT_OFF,
-                    target_device_id=None,
-                    target_selector=DeviceSelector(role="light", room=focus),
-                    parameters=(),
-                    justification=f"The resident asked HAVEN to turn off the {focus} light.",
-                    source_text=source_text,
-                )
-        return None
-
-    _LIGHT_ROOM_PATTERNS = (
-        "turn off the {room} light",
-        "turn the {room} light off",
-        "turn off the light in the {room}",
-    )
-
     def _light_room(self, normalized: str) -> str | None:
-        for pattern in self._LIGHT_ROOM_PATTERNS:
+        for pattern in (
+            "turn off the {room} light",
+            "turn the {room} light off",
+            "turn off the light in the {room}",
+        ):
             prefix, _, suffix = pattern.partition("{room}")
             if normalized.startswith(prefix) and normalized.endswith(suffix):
                 end = len(normalized) - len(suffix) if suffix else len(normalized)
@@ -909,14 +982,9 @@ class DemoDirector:
                     return room
         return None
 
-    def _chat_rule_phrase(self, text: str) -> None:
-        """"when ..." automation phrasing: the propose -> approve lifecycle."""
-        now = self._clock()
-        try:
-            rule = self.runtime.propose_from_text(text, principal=self.resident, now=now)
-        except UnsupportedIntent:
-            self._say("haven", "I can't do that yet.")
-            return
+    def _chat_rule_draft(self, draft: RuleDraft, now: datetime) -> None:
+        """A proposed rule draft from chat: the propose -> approve lifecycle."""
+        rule = self.runtime.propose_draft(draft, principal=self.resident, now=now)
         result = self.runtime.approve_rule(
             rule.rule_id,
             principal=self.owner,
@@ -936,7 +1004,7 @@ class DemoDirector:
         provider = self.runtime.intelligence_provider
         if isinstance(provider, ModelIntelligenceProvider) and provider.chat_handle() is not None:
             try:
-                reply = provider.chat(self._agent_context(focus=focus), intent.text)
+                reply = provider.chat(self._agent_context(focus=focus, now=self._clock()), intent.text)
             except UnsupportedIntent:
                 pass  # the model path failed; the deterministic world answers
             else:
@@ -947,13 +1015,7 @@ class DemoDirector:
     def _deterministic_answer(self, text: str) -> str:
         normalized = " ".join(text.casefold().split()).rstrip(".!?")
         now = self._clock()
-        view = WorldView.from_snapshot(
-            self.house.snapshot(now),
-            now=now,
-            device_registry=self.registry,
-            names=self._world_names(),
-            recent_events=self.store.events,
-        )
+        view = self._world_view(now)
         if "garage" in normalized and ("open" in normalized or "closed" in normalized):
             device = next((item for item in view.devices if item.device_id == "garage_door"), None)
             if device is None:
@@ -993,22 +1055,23 @@ class DemoDirector:
                     return room
         return None
 
-    def _agent_context(self, *, focus: str | None) -> AgentContext:
-        now = self._clock()
-        world = WorldView.from_snapshot(
+    def _world_view(self, now: datetime) -> WorldView:
+        return WorldView.from_snapshot(
             self.house.snapshot(now),
             now=now,
             device_registry=self.registry,
             names=self._world_names(),
             recent_events=self.store.events,
         )
+
+    def _agent_context(self, *, focus: str | None, now: datetime) -> AgentContext:
         return AgentContext(
             household_id=HOUSEHOLD_ID,
             actor_id=self.resident.actor_id,
             actor_role=self.resident.role_tier.name,
             room_focus=focus,
             recent_lines=tuple(entry["text"] for entry in self._conversation[-6:]),
-            world=world,
+            world=self._world_view(now),
         )
 
     def _world_names(self) -> dict[str, str]:
@@ -1075,7 +1138,7 @@ class DemoDirector:
 
     def _ask_direct_action(self, proposal: ActionProposal, receipt, now: datetime) -> None:
         request = receipt.requested_action
-        rule_id = getattr(request, "rule_id", None) or DIRECT_ACTION_RULE_ID
+        rule_id = request.rule_id
         if proposal.action_kind is ActionKind.OPEN_GARAGE:
             title = "Open the garage door?"
             detail = "You asked to open it directly; this action needs your confirmation."
@@ -1117,6 +1180,11 @@ class DemoDirector:
         return {"ok": ok, "state": self.state()}
 
     def reset(self) -> dict[str, Any]:
+        # Keep the background tick from firing into a half-reset house: stop
+        # it first and restart it afterwards if it was running.
+        scheduler_running = self._scheduler_thread is not None
+        if scheduler_running:
+            self.stop_scheduler()
         self.voice.reset()
         self._pending.clear()
         self._direct_actions.clear()
@@ -1125,6 +1193,8 @@ class DemoDirector:
         self._glow = GLOW_IDLE
         self._glow_target = None
         self.start_scenario()
+        if scheduler_running:
+            self.start_scheduler()
         return self.state()
 
     def state(self) -> dict[str, Any]:
@@ -1191,6 +1261,10 @@ class DemoDirector:
             activity=self._activity_payload(),
             memory=self._memory_payload(),
             automations=self._automations_payload(),
+            scheduler=[
+                serialize.scheduler_status_to_dict(status)
+                for status in self.scheduler.status(self.store.state.rules, world=world, now=now)
+            ],
             system=serialize.system_to_dict(
                 revision=self.store.state.revision,
                 event_count=len(self.store.events),

@@ -122,6 +122,21 @@ class ActionStatus(str, Enum):
     BLOCKED = "blocked"
 
 
+class ActionOrigin(str, Enum):
+    """Typed provenance of an action request.
+
+    This is the seam between human-command authorization and automation
+    authorization: `decide_direct()` only accepts DIRECT requests and
+    `decide()` only accepts RULE requests, and the store's AUTHORIZE gate
+    branches on it. Provenance is declared here, never inferred from an
+    id's spelling -- the store must not derive security meaning from
+    string-matching a rule_id.
+    """
+
+    RULE = "rule"
+    DIRECT = "direct"
+
+
 class TransitionKind(str, Enum):
     PROPOSE_RULE = "propose_rule"
     CLARIFY_RULE = "clarify_rule"
@@ -750,17 +765,16 @@ class ConfirmationToken:
         )
 
 
-# A direct (human-initiated, one-shot) action names no rule, but
-# `ActionRequest.rule_id` must be non-empty. `HavenRuntime.run_action` uses
-# this prefix to build a sentinel id of the form "direct-<request_id>":
-# honest about the request's origin, bound to the request it authorized, and
-# guaranteed to collide with no stored rule id. The store's AUTHORIZE_ACTION
-# reducer recognizes the prefix and skips the approved-rule gate for it.
-DIRECT_ACTION_RULE_ID_PREFIX = "direct-"
-
-
 @dataclass(frozen=True)
 class ActionRequest:
+    """One requested action, either rule-authorized automation or a direct command.
+
+    `origin` declares the request's provenance. A DIRECT request names no
+    rule: its `rule_id` carries the request's own id purely as a non-empty
+    correlation key (the field is required, but no rule with that id exists
+    or is created), and only `origin` marks it as a human command.
+    """
+
     request_id: str
     household_id: str
     requested_by: str
@@ -771,6 +785,7 @@ class ActionRequest:
     justification: str
     evidence_snapshot_id: str
     requested_at: datetime
+    origin: ActionOrigin = ActionOrigin.RULE
     confirmation_token: ConfirmationToken | None = None
     capability: str | None = None
 
@@ -786,6 +801,8 @@ class ActionRequest:
             _require_text(getattr(self, field_name), name=field_name)
         if not isinstance(self.action_kind, ActionKind):
             raise ValueError("action_kind must be an ActionKind")
+        if not isinstance(self.origin, ActionOrigin):
+            object.__setattr__(self, "origin", ActionOrigin(self.origin))
         if not isinstance(self.justification, str):
             raise ValueError("justification must be a string")
         if self.confirmation_token is not None and not isinstance(self.confirmation_token, ConfirmationToken):

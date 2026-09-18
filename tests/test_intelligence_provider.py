@@ -22,6 +22,7 @@ from haven.intelligence.gateway import (
     ScriptedIntelligenceProvider,
     UnsupportedIntent,
 )
+from haven.intelligence.intents import ActionProposal, ClarificationRequest, QueryRequest
 from haven.runtime import HavenRuntime
 
 UTC = timezone.utc
@@ -110,7 +111,7 @@ def test_provider_protocol_has_no_mutation_surface() -> None:
     """The seam's method signatures must never reference stateful internals."""
 
     forbidden = ("HavenStore", "ExecutionAdapter", "ExecutionProviderRegistry", "DeviceRegistry", "AuthorityEngine")
-    for name in ("interpret", "chat", "propose_rule", "explain"):
+    for name in ("interpret", "chat", "propose_rule", "explain", "interpret_intent"):
         method = getattr(IntelligenceProvider, name)
         signature = inspect.signature(method)
         annotations = [str(value) for value in signature.parameters.values()]
@@ -172,3 +173,65 @@ def test_interpret_requires_aware_utc_time() -> None:
     with pytest.raises(ValueError):
         provider.interpret(EXAMPLE, principal=RESIDENT, now=NOW.replace(tzinfo=None))
     provider.interpret(EXAMPLE, principal=RESIDENT, now=NOW + timedelta(seconds=1))
+
+
+def test_interpret_intent_proposes_exactly_one_intent_form() -> None:
+    """The fifth seam method classifies any utterance over the intent union."""
+
+    provider = ScriptedIntelligenceProvider()
+    context = _context()
+
+    question = provider.interpret_intent("is the garage open?", context=context, principal=RESIDENT, now=NOW)
+    assert isinstance(question, QueryRequest)
+    assert question.text == "is the garage open?"
+
+    draft = provider.interpret_intent(EXAMPLE, context=context, principal=RESIDENT, now=NOW)
+    assert isinstance(draft, RuleDraft)
+    assert draft.source_text == EXAMPLE
+
+    no_focus = AgentContext(
+        household_id=RESIDENT.household_id,
+        actor_id=RESIDENT.actor_id,
+        actor_role=RESIDENT.role_tier.name,
+    )
+    clarify = provider.interpret_intent("turn that light off", context=no_focus, principal=RESIDENT, now=NOW)
+    assert isinstance(clarify, ClarificationRequest)
+    assert clarify.question == "Which room do you mean?"
+
+
+def test_interpret_intent_grounds_actions_in_the_context_world() -> None:
+    """The AgentContext world/focus feed the interpreter, nothing else."""
+    from test_intent_interpreter import _world
+
+    provider = ScriptedIntelligenceProvider()
+    focused = AgentContext(
+        household_id=RESIDENT.household_id,
+        actor_id=RESIDENT.actor_id,
+        actor_role=RESIDENT.role_tier.name,
+        room_focus="office",
+    )
+
+    proposal = provider.interpret_intent(
+        "turn that light off", context=focused, principal=RESIDENT, now=NOW
+    )
+    assert isinstance(proposal, ActionProposal)
+    assert proposal.target_selector is not None
+    assert proposal.target_selector.room == "office"
+
+    world = AgentContext(
+        household_id=RESIDENT.household_id,
+        actor_id=RESIDENT.actor_id,
+        actor_role=RESIDENT.role_tier.name,
+        world=_world(garage_open=True),
+    )
+    garage = provider.interpret_intent("close the garage", context=world, principal=RESIDENT, now=NOW)
+    assert isinstance(garage, ActionProposal)
+    assert garage.target_device_id == "garage_door"
+
+
+def test_interpret_intent_requires_aware_utc_time() -> None:
+    provider = ScriptedIntelligenceProvider()
+    with pytest.raises(ValueError):
+        provider.interpret_intent(
+            "is the garage open?", context=_context(), principal=RESIDENT, now=NOW.replace(tzinfo=None)
+        )

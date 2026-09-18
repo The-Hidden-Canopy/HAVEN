@@ -33,34 +33,59 @@ from .fixtures import (
 )
 from .protocols import SpeechRecognizer, SpeechSynthesizer, Vad, WakeDetector
 from .ring_buffer import PrerollRingBuffer
+from .service import NoSpeechModelError, SpeechService
 from .session import SpeechSession, SpeechSessionState
+from .shims import (
+    AsrModelRecognizer,
+    SpeechModelCapabilityError,
+    SpeechShims,
+    TtsModelSynthesizer,
+    WakeModelDetector,
+    resolve_speech_shims,
+)
+from .sinks import NullSink, PlaybackSink, WavFileSink
+from .sources import AudioSource, SilenceSource, WavFileSource
 from .vad import EnergyVad
 
 __all__ = [
+    "AsrModelRecognizer",
+    "AudioSource",
     "BYTES_PER_SAMPLE",
     "FRAME_BYTES",
     "FRAME_MS",
     "SAMPLES_PER_FRAME",
     "SAMPLE_RATE_HZ",
     "EnergyVad",
+    "NoSpeechModelError",
+    "NullSink",
+    "PlaybackSink",
     "PrerollRingBuffer",
     "ScriptedAsrProvider",
     "ScriptedSynthesizer",
     "ScriptedVad",
     "ScriptedWakeDetector",
+    "SilenceSource",
     "SpeechContinued",
     "SpeechEnded",
+    "SpeechModelCapabilityError",
     "SpeechRecognizer",
     "SpeechResponseStarted",
     "SpeechResponseStopped",
+    "SpeechService",
     "SpeechSession",
     "SpeechSessionState",
+    "SpeechShims",
     "SpeechStarted",
     "SpeechSynthesizer",
     "SpeakerClaim",
     "TranscriptFinal",
     "TranscriptPartial",
+    "TtsModelSynthesizer",
     "Vad",
     "WakeDetector",
     "WakeEvent",
+    "WakeModelDetector",
+    "WavFileSink",
+    "WavFileSource",
+    "resolve_speech_shims",
 ]

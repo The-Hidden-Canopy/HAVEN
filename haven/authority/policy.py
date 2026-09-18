@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from haven.core.domain import (
     ActionKind,
+    ActionOrigin,
     ActionRequest,
     AuthorityDecision,
     ChangeOrigin,
@@ -129,6 +130,12 @@ class AuthorityEngine:
         now: datetime,
         confirmation_consumed: bool = False,
     ) -> AuthorityDecision:
+        # Origin is the typed seam between human-command authorization and
+        # automation authorization: decide() judges only RULE requests, and
+        # decide_direct() judges only DIRECT ones. Provenance is declared on
+        # the request, never inferred from a rule_id string.
+        if request.origin is not ActionOrigin.RULE:
+            raise ValueError("decide() only evaluates rule-origin actions; direct commands go through decide_direct()")
         # Scope is checked first. No foreign world material should be joined to
         # a request before this branch has passed.
         if (
@@ -315,6 +322,10 @@ class AuthorityEngine:
     ) -> AuthorityDecision:
         """Decide a HUMAN-INITIATED one-shot action.
 
+        `request.origin` must be ActionOrigin.DIRECT: origin is the typed
+        seam between human-command authorization and automation
+        authorization, and this entry point is only for direct commands.
+
         A member directly commanding a device is itself the authorization;
         automation needs a rule, a command does not. So every `decide()`
         check that exists to police a rule is intentionally absent here:
@@ -339,6 +350,8 @@ class AuthorityEngine:
         bound, time-limited confirmation token logic.
         """
 
+        if request.origin is not ActionOrigin.DIRECT:
+            raise ValueError("decide_direct() only evaluates direct-origin actions; rule actions go through decide()")
         if (
             request.household_id != principal.household_id
             or request.household_id != world.household_id

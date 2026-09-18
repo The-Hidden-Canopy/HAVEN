@@ -78,6 +78,7 @@ class ActionReceipt:
                 "household_id": request.household_id,
                 "requested_by": request.requested_by,
                 "rule_id": request.rule_id,
+                "origin": request.origin.value,
                 "action_kind": request.action_kind.value,
                 "target_device_id": request.target_device_id,
                 "capability": request.capability,

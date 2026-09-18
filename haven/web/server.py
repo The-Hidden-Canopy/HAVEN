@@ -12,6 +12,7 @@ import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from ..models import ModelManager, inspect_folder
 from ..models.jobs import DownloadJobManager, job_to_dict
@@ -24,6 +25,7 @@ from .models_api import (
     overview_payload,
     scan_payload,
 )
+from .receipts_api import action_chain, event_action_id
 
 HEARTBEAT_SECONDS = 15
 
@@ -34,8 +36,10 @@ _MODEL_LIFECYCLE_PATHS = ("/api/models/load", "/api/models/unload", "/api/models
 
 _APPROVE_PATH = re.compile(r"^/api/requests/([^/]+)/approve$")
 _DENY_PATH = re.compile(r"^/api/requests/([^/]+)/deny$")
+_SCHEDULER_ENABLED_PATH = re.compile(r"^/api/scheduler/rules/([^/]+)/enabled$")
 _JOB_DETAIL_PATH = re.compile(r"^/api/models/jobs/([^/]+)$")
 _JOB_CANCEL_PATH = re.compile(r"^/api/models/jobs/([^/]+)/cancel$")
+_CHAIN_PATH = re.compile(r"^/api/actions/([^/]+)/chain$")
 
 
 class HavenWebServer(ThreadingHTTPServer):
@@ -69,6 +73,13 @@ class HavenWebServer(ThreadingHTTPServer):
         # with.
         self.director = DemoDirector(clock=clock, model_manager=self.models)
         super().__init__(server_address, _Handler)
+        # The demo schedules for real: a daemon tick every 20 s asks the
+        # runtime which approved rules are due. Stopped in server_close.
+        self.director.start_scheduler()
+
+    def server_close(self) -> None:
+        self.director.stop_scheduler()
+        super().server_close()
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -93,6 +104,8 @@ class _Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/api/state":
             self._send_json(200, self.director.state())
+        elif path == "/api/scheduler":
+            self._send_json(200, {"ok": True, "scheduler": self.director.scheduler_status()})
         elif path == "/api/models":
             self._send_json(200, overview_payload(self.models))
         elif path == "/api/models/jobs":
@@ -105,8 +118,14 @@ class _Handler(BaseHTTPRequestHandler):
                 self._stream_model_events()
             elif path == "/events":
                 self._stream_events()
+            elif path == "/api/actions/chain":
+                self._send_event_chain(parse_qs(urlsplit(self.path).query).get("event_id", [""])[0])
             else:
-                self._serve_static(path)
+                match = _CHAIN_PATH.match(path)
+                if match:
+                    self._send_action_chain(match.group(1))
+                else:
+                    self._serve_static(path)
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
@@ -134,6 +153,24 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": True, "state": self.director.state()})
             else:
                 self._send_json(404, {"error": "unknown request"})
+            return
+        if path == "/api/scheduler/tick":
+            self.director.run_scheduler_tick()
+            self._send_json(200, {"ok": True, "scheduler": self.director.scheduler_status()})
+            return
+        match = _SCHEDULER_ENABLED_PATH.match(path)
+        if match:
+            body = self._read_json()
+            if body is None:
+                return
+            rule_id = match.group(1)
+            if not self.director.has_rule(rule_id):
+                self._send_json(404, {"error": "unknown rule"})
+                return
+            self._send_json(
+                200,
+                {"ok": True, "scheduler": self.director.set_scheduler_enabled(rule_id, bool(body.get("enabled")))},
+            )
             return
         if path == "/api/demo/camera-down":
             self._send_json(200, {"ok": True, "state": self.director.mark_camera_down()})
@@ -314,6 +351,32 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": False, "error": f"unknown job: {job_id}"})
             return
         self._send_json(200, {"ok": True, "job": job_to_dict(job)})
+
+    def _send_action_chain(self, action_id: str) -> None:
+        director = self.director
+        chain = action_chain(
+            action_id,
+            store=director.store,
+            receipts=director.receipts,
+            device_registry=director.engine.device_registry,
+            executed_commands=director.adapter.commands,
+        )
+        if chain is None:
+            self._send_json(200, {"ok": False, "error": f"unknown action: {action_id}"})
+            return
+        self._send_json(200, {"ok": True, "chain": chain})
+
+    def _send_event_chain(self, event_id: str) -> None:
+        # Activity rows expose event ids but not action ids or correlation
+        # ids, so the drill-down resolves the row's event to its action.
+        if not event_id:
+            self._send_json(200, {"ok": False, "error": "an event_id query parameter is required"})
+            return
+        action_id = event_action_id(self.director.store, event_id)
+        if action_id is None:
+            self._send_json(200, {"ok": False, "error": f"unknown or non-action event: {event_id}"})
+            return
+        self._send_action_chain(action_id)
 
     def _start_download(self, url: str) -> None:
         job_id = self.model_jobs.start(url)

@@ -14,6 +14,7 @@ from typing import Any
 from haven.authority.policy import DEFAULT_MINIMUM_CONFIDENCE, HUMAN_OVERRIDE_WINDOW
 from haven.core.domain import DeviceState, DomainEvent, EventType, MemoryEntry, RoleTier, Rule, RuleDraft
 from haven.providers import ProviderCapabilities
+from haven.scheduler import ScheduleStatus
 
 SUMMARY_LIMIT = 90
 
@@ -193,6 +194,18 @@ def rule_to_dict(rule: Rule, *, device_room: str | None = None) -> dict[str, Any
     }
 
 
+def scheduler_status_to_dict(status: ScheduleStatus) -> dict[str, Any]:
+    return {
+        "rule_id": status.rule_id,
+        "summary": status.summary,
+        "enabled": status.enabled,
+        "due_now": status.due_now,
+        "next_run_at": status.next_run_at,
+        "last_fired_at": status.last_fired_at,
+        "last_outcome": status.last_outcome,
+    }
+
+
 def engine_to_dict(*, human_override_window: timedelta, minimum_confidence: float) -> dict[str, Any]:
     minutes = human_override_window.total_seconds() / 60
     return {
@@ -241,6 +254,7 @@ def state_to_dict(
     memory: list[dict[str, Any]] | None = None,
     voice: dict[str, Any] | None = None,
     automations: list[dict[str, Any]] | None = None,
+    scheduler: list[dict[str, Any]] | None = None,
     system: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
@@ -255,6 +269,7 @@ def state_to_dict(
         "activity": [to_json_value(item) for item in (activity or [])],
         "memory": [to_json_value(item) for item in (memory or [])],
         "automations": [to_json_value(item) for item in (automations or [])],
+        "scheduler": [to_json_value(item) for item in (scheduler or [])],
         "status": to_json_value(status),
         "voice": voice if voice is not None else voice_to_dict(state="dormant", mic=False),
         "system": system
@@ -285,6 +300,7 @@ __all__ = [
     "provider_to_dict",
     "room_to_dict",
     "rule_to_dict",
+    "scheduler_status_to_dict",
     "state_to_dict",
     "status_to_dict",
     "system_to_dict",
