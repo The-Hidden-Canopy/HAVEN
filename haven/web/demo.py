@@ -38,6 +38,7 @@ from haven.core.domain import (
     WorldSnapshot,
 )
 from haven.core.store import HavenStore
+from haven.core.world import WorldProvider
 from haven.devices import CapabilityDescriptor, ControlClass, DeviceManifest, DeviceRegistry
 from haven.execution import ExecutionProviderRegistry
 from haven.intelligence.gateway import AgentContext, ScriptedIntelligenceProvider, UnsupportedIntent
@@ -54,6 +55,7 @@ from haven.runtime import HavenRuntime
 from haven.scheduler import SchedulerEngine
 
 from . import serialize
+from .rules_persist import RulesPersistence
 
 HOUSEHOLD_ID = "household-demo"
 PERSON_ID = "gerron"
@@ -427,6 +429,16 @@ class SimulatedHouse:
         )
 
 
+class SimulatedWorldProvider:
+    """WorldProvider over a SimulatedHouse: the demo world's observe call."""
+
+    def __init__(self, house: SimulatedHouse) -> None:
+        self.house = house
+
+    def observe(self, now: datetime) -> WorldSnapshot:
+        return self.house.snapshot(now)
+
+
 class SimulatedExecutionAdapter:
     """Applies authorized commands to the house; never raises."""
 
@@ -508,7 +520,13 @@ def build_registry() -> DeviceRegistry:
 
 
 class DemoDirector:
-    """Owns the runtime, house, and demo flows; publishes state/glow events."""
+    """Owns the runtime, house, and demo flows; publishes state/glow events.
+
+    HAVEN acts as the household's declared people: every governed flow asks
+    authority as `resident` or `owner`. The demo household declares gerron by
+    construction, so the defaults are the gerron pair; the real-mode factory
+    injects principals derived from the household declarations instead.
+    """
 
     CONTEXT_LABELS = {"working_late": "Working late", "vacation_mode": "Vacation mode"}
 
@@ -521,31 +539,65 @@ class DemoDirector:
         capability_registry: CapabilityRegistry | None = None,
         model_manager: ModelManager | None = None,
         scheduler_tick_seconds: float = 20.0,
+        world: WorldProvider | None = None,
+        registry: DeviceRegistry | None = None,
+        execution: ExecutionProviderRegistry | None = None,
+        scenario: bool = True,
+        voice_enabled: bool = True,
+        intelligence_provider=None,
+        ha_states_source=None,
+        person_names: Mapping[str, str] | None = None,
+        rules_persistence: RulesPersistence | None = None,
+        resident: Principal | None = None,
+        owner: Principal | None = None,
     ) -> None:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         now = self._clock()
-        self.house = SimulatedHouse(now=now)
-        self.registry = build_registry()
-        self.adapter = SimulatedExecutionAdapter(self.house)
-        providers = ExecutionProviderRegistry()
-        providers.register(PROVIDER_ID, self.adapter)
+        if world is None:
+            self.house: SimulatedHouse | None = SimulatedHouse(now=now)
+            self.world: WorldProvider = SimulatedWorldProvider(self.house)
+        else:
+            self.house = None
+            self.world = world
+        self.registry = registry if registry is not None else build_registry()
+        self.adapter: SimulatedExecutionAdapter | None = None
+        if execution is None:
+            providers = ExecutionProviderRegistry()
+            if self.house is not None:
+                self.adapter = SimulatedExecutionAdapter(self.house)
+                providers.register(PROVIDER_ID, self.adapter)
+        else:
+            providers = execution
         self.store = HavenStore(household_id=HOUSEHOLD_ID)
         self.capability_registry = capability_registry or build_default_registry()
         self.engine = AuthorityEngine(device_registry=self.registry)
         # The bridge makes models an upgrade path in front of the scripted
         # floor: with no model loaded every chat falls through to the
-        # deterministic demo behavior, exactly as before.
+        # deterministic demo behavior, exactly as before. An injected provider
+        # (e.g. the plain scripted floor when intelligence is disabled) is
+        # used verbatim.
         self.model_manager = model_manager if model_manager is not None else ModelManager()
+        provider = (
+            intelligence_provider
+            if intelligence_provider is not None
+            else ModelIntelligenceProvider(ScriptedIntelligenceProvider(), self.model_manager)
+        )
         self.runtime = HavenRuntime(
             store=self.store,
-            intelligence_provider=ModelIntelligenceProvider(
-                ScriptedIntelligenceProvider(), self.model_manager
-            ),
+            intelligence_provider=provider,
             authority=self.engine,
             execution_providers=providers,
         )
-        self.resident = Principal(actor_id=PERSON_ID, household_id=HOUSEHOLD_ID, role_tier=RoleTier.MEMBER)
-        self.owner = Principal(actor_id=PERSON_ID, household_id=HOUSEHOLD_ID, role_tier=RoleTier.OWNER)
+        self.resident = (
+            resident
+            if resident is not None
+            else Principal(actor_id=PERSON_ID, household_id=HOUSEHOLD_ID, role_tier=RoleTier.MEMBER)
+        )
+        self.owner = (
+            owner
+            if owner is not None
+            else Principal(actor_id=PERSON_ID, household_id=HOUSEHOLD_ID, role_tier=RoleTier.OWNER)
+        )
         self._subscribers: set[queue.Queue] = set()
         self._lock = threading.Lock()
         self._glow = GLOW_IDLE
@@ -555,6 +607,13 @@ class DemoDirector:
         self._direct_actions: dict[str, ActionProposal] = {}
         self._auto_allow: set[str] = set()
         self.receipts: list = []
+        self.voice_enabled = voice_enabled
+        # Real-mode HA states source for the setup discovery scan; None in
+        # demo mode (the scan then lists only local demo candidates).
+        self.ha_states_source = ha_states_source
+        # Declared person names, when a setup layer declares who lives here:
+        # the declared name wins over the title-cased person_id derivation.
+        self._person_names = dict(person_names or {})
         self._scheduler_tick_seconds = scheduler_tick_seconds
         self._scheduler_thread: threading.Thread | None = None
         self._scheduler_stop: threading.Event | None = None
@@ -563,24 +622,55 @@ class DemoDirector:
             ack_seconds=voice_ack_seconds,
             refractory_seconds=voice_refractory_seconds,
         )
-        self.garage_rule_id = self._prepare_garage_rule(now)
-        self.camera_rule_id = self._prepare_camera_rule(now)
         # The scheduler is another requester over the same runtime, asking as
-        # the resident. It is in-memory only: the demo has no data dir, so
-        # the enabled set lives and dies with the director. The garage and
-        # camera pre-approved rules carry 24h schedule windows purely as an
-        # "evaluates as due whenever the manual flows invoke them"
-        # affordance -- they are not schedules, so the scheduler stays off
-        # them; the office-light rule below is the one real schedule.
+        # the resident. Without a rules sidecar the enabled set is in-memory
+        # only: the demo has no data dir, so it lives and dies with the
+        # director. The garage and camera pre-approved rules carry 24h
+        # schedule windows purely as an "evaluates as due whenever the
+        # manual flows invoke them" affordance -- they are not schedules, so
+        # the scheduler stays off them; the office-light rule below is the
+        # one real schedule.
+        self._rules_persistence = rules_persistence
         self.scheduler = SchedulerEngine(runtime=self.runtime, principal=self.resident)
-        self.scheduler.set_enabled(self.garage_rule_id, False)
-        self.scheduler.set_enabled(self.camera_rule_id, False)
-        self.office_light_rule_id = self._prepare_office_light_rule(now)
-        self.start_scenario()
+        if scenario:
+            self.garage_rule_id = self._prepare_garage_rule(now)
+            self.camera_rule_id = self._prepare_camera_rule(now)
+            self.set_scheduler_enabled(self.garage_rule_id, False)
+            self.set_scheduler_enabled(self.camera_rule_id, False)
+            self.office_light_rule_id = self._prepare_office_light_rule(now)
+            self.start_scenario()
+        else:
+            self.garage_rule_id = None
+            self.camera_rule_id = None
+            self.office_light_rule_id = None
+        if self._rules_persistence is not None:
+            # Rehydrate automations saved by a previous process lifetime. The
+            # restore replaces the rule set wholesale (the transitions that
+            # built these rules already happened and were audited then); the
+            # scheduler enabled map is applied only for rule ids the restored
+            # store actually holds, so seeded scenario rules keep their set
+            # unless the file says otherwise.
+            restored = self._rules_persistence.load()
+            if restored.rules:
+                self.store.restore_rules(restored.rules)
+            restored_ids = {rule.rule_id for rule in self.store.state.rules}
+            for rule_id, enabled in restored.scheduler_enabled.items():
+                if rule_id in restored_ids:
+                    self.scheduler.set_enabled(rule_id, enabled)
 
     @property
     def pending_requests(self) -> tuple[PendingRequest, ...]:
         return tuple(self._pending.values())
+
+    def _persist_rules(self) -> None:
+        # The rules sidecar is a real-mode concern; without one this is a
+        # no-op and the demo stays exactly as ephemeral as before.
+        if self._rules_persistence is None:
+            return
+        enabled = {
+            rule.rule_id: self.scheduler.is_enabled(rule.rule_id) for rule in self.store.state.rules
+        }
+        self._rules_persistence.save(self.store.state.rules, enabled)
 
     def _prepare_garage_rule(self, now: datetime) -> str:
         draft = RuleDraft(
@@ -606,6 +696,7 @@ class DemoDirector:
             justification="Owner approved the garage-close rule for the demo household.",
             now=now,
         )
+        self._persist_rules()
         return rule.rule_id
 
     def _prepare_camera_rule(self, now: datetime) -> str:
@@ -636,6 +727,7 @@ class DemoDirector:
             justification="Owner approved the driveway-clip rule for the demo household.",
             now=now,
         )
+        self._persist_rules()
         return rule.rule_id
 
     OFFICE_LIGHT_OFF_TIME = dt_time(22, 35)
@@ -663,9 +755,13 @@ class DemoDirector:
             justification="Owner approved the nightly office light schedule for the demo household.",
             now=now,
         )
+        self._persist_rules()
         return rule.rule_id
 
     def start_scenario(self) -> None:
+        if self.house is None:
+            # The scripted scenario is simulated-house-only.
+            return
         now = self._clock()
         self.house.reset(now=now)
         open_minutes = self.house.garage_open_minutes(at=now)
@@ -679,7 +775,7 @@ class DemoDirector:
         receipt = self.runtime.run_rule(
             self.garage_rule_id,
             principal=self.resident,
-            world=self.house.snapshot(now),
+            world=self.world.observe(now),
             justification="Garage has been open 18 minutes with no nearby motion.",
             now=now,
         )
@@ -730,7 +826,7 @@ class DemoDirector:
         receipt = self.runtime.run_rule(
             pending.rule_id,
             principal=self.resident,
-            world=self.house.snapshot(now),
+            world=self.world.observe(now),
             justification="Owner approved the pending request in the demo UI.",
             now=now,
             confirmation_token=token,
@@ -744,6 +840,7 @@ class DemoDirector:
             self._set_glow(GLOW_PERMISSION, target=self._room_for_rule(pending.rule_id))
         else:
             self._record_block(receipt)
+        self._persist_rules()
         self._publish_state()
         return self.state()
 
@@ -768,7 +865,7 @@ class DemoDirector:
             target_selector=proposal.target_selector,
             parameters=proposal.parameters,
             justification=proposal.justification,
-            world=self.house.snapshot(now),
+            world=self.world.observe(now),
             now=now,
             confirmation_token=token,
         )
@@ -796,12 +893,15 @@ class DemoDirector:
         return True
 
     def mark_camera_down(self) -> dict[str, Any]:
+        if self.house is None:
+            # Camera simulation is demo-only; a live world cannot be marked down.
+            return {"ok": False, "state": self.state()}
         self.house.set_camera_down(True)
         now = self._clock()
         receipt = self.runtime.run_rule(
             self.camera_rule_id,
             principal=self.resident,
-            world=self.house.snapshot(now),
+            world=self.world.observe(now),
             justification="The driveway camera stopped reporting; HAVEN checked whether it can still see.",
             now=now,
         )
@@ -819,12 +919,14 @@ class DemoDirector:
         return self.state()
 
     def mark_camera_up(self) -> dict[str, Any]:
+        if self.house is None:
+            return {"ok": False, "state": self.state()}
         self.house.set_camera_down(False)
         now = self._clock()
         receipt = self.runtime.run_rule(
             self.camera_rule_id,
             principal=self.resident,
-            world=self.house.snapshot(now),
+            world=self.world.observe(now),
             justification="The driveway camera is back online; running the clip rule again.",
             now=now,
         )
@@ -849,7 +951,7 @@ class DemoDirector:
         """
 
         now = now or self._clock()
-        world = self.house.snapshot(now)
+        world = self.world.observe(now)
         receipts = self.scheduler.tick(world=world, now=now)
         self.receipts.extend(receipts)
         for receipt in receipts:
@@ -917,7 +1019,7 @@ class DemoDirector:
 
     def scheduler_status(self) -> list[dict[str, Any]]:
         now = self._clock()
-        world = self.house.snapshot(now)
+        world = self.world.observe(now)
         return [
             serialize.scheduler_status_to_dict(status)
             for status in self.scheduler.status(self.store.state.rules, world=world, now=now)
@@ -925,6 +1027,7 @@ class DemoDirector:
 
     def set_scheduler_enabled(self, rule_id: str, enabled: bool) -> list[dict[str, Any]]:
         self.scheduler.set_enabled(rule_id, enabled)
+        self._persist_rules()
         self._publish_state()
         return self.scheduler_status()
 
@@ -1005,7 +1108,11 @@ class DemoDirector:
             self._say("haven", self._conversation_fallback(normalized, focus))
 
     def _conversation_fallback(self, normalized: str, focus: str | None) -> str:
-        if normalized in ("close the garage", "close the garage door") and not self.house.garage_open():
+        if (
+            normalized in ("close the garage", "close the garage door")
+            and self.house is not None
+            and not self.house.garage_open()
+        ):
             return "The garage is already closed."
         if any(normalized == pattern for pattern in self._LIGHT_OFF_PATTERNS) and focus is None:
             return "Which room do you mean?"
@@ -1054,6 +1161,7 @@ class DemoDirector:
             self._say("haven", "I drafted a rule from that, but it needs clarification before I can set it up.")
         else:
             self._say("haven", f"I couldn't set that up: {result.decision.explanation}")
+        self._persist_rules()
 
     # -- query handling -----------------------------------------------------
 
@@ -1114,7 +1222,7 @@ class DemoDirector:
 
     def _world_view(self, now: datetime) -> WorldView:
         return WorldView.from_snapshot(
-            self.house.snapshot(now),
+            self.world.observe(now),
             now=now,
             device_registry=self.registry,
             names=self._world_names(),
@@ -1151,7 +1259,7 @@ class DemoDirector:
                 target_selector=proposal.target_selector,
                 parameters=proposal.parameters,
                 justification=proposal.justification,
-                world=self.house.snapshot(now),
+                world=self.world.observe(now),
                 now=now,
             )
         except ValueError:
@@ -1201,10 +1309,13 @@ class DemoDirector:
             detail = "You asked to open it directly; this action needs your confirmation."
         else:
             title = "Close the garage door?"
-            detail = (
-                f"It has been open {self.house.garage_open_minutes(at=now)} minutes. "
-                "You asked to close it directly; this action needs your confirmation."
-            )
+            if self.house is not None:
+                detail = (
+                    f"It has been open {self.house.garage_open_minutes(at=now)} minutes. "
+                    "You asked to close it directly; this action needs your confirmation."
+                )
+            else:
+                detail = "You asked to close it directly; this action needs your confirmation."
         pending = PendingRequest(
             request_id=request.request_id,
             rule_id=rule_id,
@@ -1219,16 +1330,22 @@ class DemoDirector:
 
     def voice_focus(self) -> str | None:
         """Room voice input resolves relative to: the present resident's room."""
-        for item in self.house.snapshot(self._clock()).presence:
+        for item in self.world.observe(self._clock()).presence:
             if item.present:
                 return item.room_id
         return None
 
     def voice_wake(self) -> dict[str, Any]:
+        if not self.voice_enabled:
+            self._say("haven", "Voice control is disabled.")
+            return {"ok": False, "state": self.state()}
         ok = self.voice.wake()
         return {"ok": ok, "state": self.state()}
 
     def voice_utterance(self, text: str) -> dict[str, Any]:
+        if not self.voice_enabled:
+            self._say("haven", "Voice control is disabled.")
+            return {"ok": False, "state": self.state()}
         ok = self.voice.utterance(text)
         return {"ok": ok, "state": self.state()}
 
@@ -1237,6 +1354,9 @@ class DemoDirector:
         return {"ok": ok, "state": self.state()}
 
     def reset(self) -> dict[str, Any]:
+        if self.house is None:
+            # Resetting the simulation is demo-only; a live world is not ours to reset.
+            return {"ok": False, "state": self.state()}
         # Keep the background tick from firing into a half-reset house: stop
         # it first and restart it afterwards if it was running.
         scheduler_running = self._scheduler_thread is not None
@@ -1250,13 +1370,15 @@ class DemoDirector:
         self._glow = GLOW_IDLE
         self._glow_target = None
         self.start_scenario()
+        # Post-reset state is authoritative: make the sidecar say so too.
+        self._persist_rules()
         if scheduler_running:
             self.start_scheduler()
         return self.state()
 
     def state(self) -> dict[str, Any]:
         now = self._clock()
-        world = self.house.snapshot(now)
+        world = self.world.observe(now)
         present = {item.person_id: item.room_id for item in world.presence if item.present}
         rooms = []
         for manifest in self.registry.all_devices():
@@ -1273,7 +1395,7 @@ class DemoDirector:
                 room["camera"] = serialize.camera_to_dict(
                     camera_id=manifest.device_id,
                     label=manifest.device_id.removesuffix("_cam").removesuffix("_camera").replace("_", " ").title(),
-                    motion=self.house.motion_detected(),
+                    motion=self.house.motion_detected() if self.house is not None else False,
                     online=camera_state is not None and camera_state.status != EvidenceStatus.UNAVAILABLE,
                 )
         for room in rooms:
@@ -1302,7 +1424,7 @@ class DemoDirector:
             serialize.person_to_dict(person_id=person_id, name=self._person_name(person_id), room=room_id)
             for person_id, room_id in present.items()
         ]
-        if self._glow == GLOW_CRITICAL and self.house.camera_down():
+        if self._glow == GLOW_CRITICAL and self.house is not None and self.house.camera_down():
             line = CAMERA_BLIND_LINE
         else:
             line = ATTENTION_LINE if (self._pending or self._glow in (GLOW_PERMISSION, GLOW_CRITICAL)) else NOMINAL_LINE
@@ -1375,8 +1497,10 @@ class DemoDirector:
             serialize.memory_to_dict(entry) for entry in reversed(self.store.state.memory[-MEMORY_LIMIT:])
         ]
 
-    @staticmethod
-    def _person_name(person_id: str) -> str:
+    def _person_name(self, person_id: str) -> str:
+        declared = self._person_names.get(person_id)
+        if declared is not None:
+            return declared
         return person_id.replace("_", " ").title()
 
     def _record_block(self, receipt) -> None:
@@ -1437,6 +1561,7 @@ __all__ = [
     "PendingRequest",
     "SimulatedExecutionAdapter",
     "SimulatedHouse",
+    "SimulatedWorldProvider",
     "VoiceSession",
     "build_registry",
 ]

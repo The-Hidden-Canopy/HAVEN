@@ -10,6 +10,7 @@ import posixpath
 import queue
 import re
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -17,7 +18,9 @@ from urllib.parse import parse_qs, urlsplit
 from ..models import ModelManager, inspect_folder
 from ..models.jobs import DownloadJobManager, job_to_dict
 from ..models.storage import default_models_root
+from .application import build_application
 from .demo import Clock, DemoDirector
+from .diagnostics import BackupManager, SystemDiagnostics
 from .models_api import (
     assign_payload,
     inspection_payload,
@@ -26,6 +29,7 @@ from .models_api import (
     scan_payload,
 )
 from .receipts_api import action_chain, event_action_id
+from .service_manager import ServiceManager
 from .setup_config import SetupConfigStore, default_data_dir
 from .setup_service import SetupService
 
@@ -45,6 +49,14 @@ _JOB_DETAIL_PATH = re.compile(r"^/api/models/jobs/([^/]+)$")
 _JOB_CANCEL_PATH = re.compile(r"^/api/models/jobs/([^/]+)/cancel$")
 _CHAIN_PATH = re.compile(r"^/api/actions/([^/]+)/chain$")
 
+# Pinned static content types (mimetypes is platform-dependent).
+_STATIC_CONTENT_TYPES = {
+    ".webmanifest": "application/manifest+json",
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".svg": "image/svg+xml",
+}
+
 
 class HavenWebServer(ThreadingHTTPServer):
     daemon_threads = True
@@ -57,6 +69,8 @@ class HavenWebServer(ThreadingHTTPServer):
         clock: Clock | None = None,
         models_root: str | Path | None = None,
         data_dir: str | Path | None = None,
+        demo: bool = False,
+        ha_client=None,
     ) -> None:
         self.static_root = static_root
         env_root = os.environ.get(_MODELS_ROOT_ENV)
@@ -73,6 +87,11 @@ class HavenWebServer(ThreadingHTTPServer):
             resolved_data_dir = data_dir
         else:
             resolved_data_dir = default_data_dir()
+        # First-run onboarding state lives in `<data_dir>/haven.json`, next to
+        # the enrolled-devices sidecar. Construction stays lazy: the data dir
+        # is created by the setup steps, not by booting the server, and a
+        # broken config surfaces through the endpoints instead of failing here.
+        self.setup_store = SetupConfigStore(Path(resolved_data_dir) / "haven.json")
         # One manager per server: storage/registry are file-based, but the
         # in-memory backend registry and loaded handles are shared state, so
         # every handler thread must talk to this single instance. The job
@@ -80,16 +99,36 @@ class HavenWebServer(ThreadingHTTPServer):
         # lock, callbacks fired outside it).
         self.models = ModelManager(resolved_models_root)
         self.model_jobs = DownloadJobManager(self.models)
+        # The application factory reads the saved setup and builds the user's
+        # house when a provider is configured, the demo household otherwise.
         # The director's model bridge routes chat/asr/tts through this same
         # manager, so a model loaded in the UI is a model the demo can speak
         # with.
-        self.director = DemoDirector(clock=clock, model_manager=self.models)
-        # First-run onboarding state lives in `<data_dir>/haven.json`, next to
-        # the enrolled-devices sidecar. Construction stays lazy: the data dir
-        # is created by the setup steps, not by booting the server, and a
-        # broken config surfaces through the endpoints instead of failing here.
-        self.setup_store = SetupConfigStore(Path(resolved_data_dir) / "haven.json")
+        self.director = build_application(
+            store=self.setup_store,
+            model_manager=self.models,
+            clock=clock,
+            demo=demo,
+            ha_client=ha_client,
+        )
         self.setup = SetupService(store=self.setup_store, director=self.director, clock=clock)
+        # Diagnostics reads through the server itself; backups own the
+        # `backups/` subtree of the same single-root data dir.
+        self._started_monotonic = time.monotonic()
+        self.diagnostics = SystemDiagnostics(server=self)
+        self.backups = BackupManager(data_dir=Path(resolved_data_dir))
+        # Logon-startup management: the launch command is built lazily per
+        # call, so the port getter reads the bound port (ephemeral in tests,
+        # fixed in production) at call time, never at construction.
+        self.service = ServiceManager(
+            data_dir=Path(resolved_data_dir),
+            port_getter=lambda: self.server_address[1],
+        )
+        # Real-mode boot: let the setup discovery scan list live Home
+        # Assistant entities. Demo directors carry no source (None) — the
+        # scan then lists only local demo candidates.
+        if getattr(self.director, "ha_states_source", None) is not None:
+            self.setup.attach_ha_states_source(self.director.ha_states_source)
         super().__init__(server_address, _Handler)
         # The demo schedules for real: a daemon tick every 20 s asks the
         # runtime which approved rules are due. Stopped in server_close.
@@ -122,6 +161,18 @@ class _Handler(BaseHTTPRequestHandler):
     def setup_service(self) -> SetupService:
         return self.server.setup
 
+    @property
+    def diagnostics(self) -> SystemDiagnostics:
+        return self.server.diagnostics
+
+    @property
+    def backups(self) -> BackupManager:
+        return self.server.backups
+
+    @property
+    def service(self) -> ServiceManager:
+        return self.server.service
+
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/api/state":
@@ -134,6 +185,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "jobs": [job_to_dict(job) for job in self.model_jobs.list()]})
         elif path == "/api/setup":
             self._send_json(200, self.setup_service.status())
+        elif path == "/api/system/diagnostics":
+            self._send_json(200, self.diagnostics.collect())
+        elif path == "/api/system/backups":
+            self._send_json(200, {"ok": True, "backups": self.backups.list()["backups"]})
+        elif path == "/api/system/service":
+            self._send_json(200, {"ok": True, "service": self.service.status()})
         else:
             match = _JOB_DETAIL_PATH.match(path)
             if match:
@@ -254,6 +311,34 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/setup" or path.startswith("/api/setup/"):
             self._handle_setup_post(path)
             return
+        if path == "/api/system/diagnostics/probe":
+            result = self.diagnostics.probe_provider()
+            self._send_json(200 if result.get("ok") else 400, result)
+            return
+        if path in ("/api/system/service/install", "/api/system/service/uninstall"):
+            action = self.service.install if path.endswith("/install") else self.service.uninstall
+            result = action()
+            self._send_json(200 if result.get("ok") else 400, result)
+            return
+        if path == "/api/system/backup":
+            self._send_json(200, {"ok": True, "backup": self.backups.create()})
+            return
+        if path in ("/api/system/backup/restore", "/api/system/backup/delete"):
+            body = self._read_json()
+            if body is None:
+                return
+            backup_id = body.get("id")
+            if not isinstance(backup_id, str) or not backup_id.strip():
+                self._send_json(400, {"ok": False, "error": "a non-empty 'id' is required"})
+                return
+            action = self.backups.restore if path.endswith("/restore") else self.backups.delete
+            try:
+                result = action(backup_id.strip())
+            except ValueError as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
+                return
+            self._send_json(200, {"ok": True, "result": result})
+            return
         self._send_json(404, {"error": "not found"})
 
     def _handle_setup_post(self, path: str) -> None:
@@ -300,6 +385,18 @@ class _Handler(BaseHTTPRequestHandler):
             )
         elif path == "/api/setup/preferences":
             result = setup.set_preferences(voice=body.get("voice"), intelligence=body.get("intelligence"))
+        elif path == "/api/setup/household/people":
+            result = setup.declare_person(
+                name=body.get("name"),
+                entity_id=body.get("entity_id"),
+                room_id=body.get("room_id"),
+            )
+        elif path == "/api/setup/household/people/remove":
+            result = setup.remove_person(person_id=body.get("person_id"))
+        elif path == "/api/setup/household/contexts":
+            result = setup.declare_context(label=body.get("label"), entity_id=body.get("entity_id"))
+        elif path == "/api/setup/household/contexts/remove":
+            result = setup.remove_context(context_id=body.get("context_id"))
         else:
             self._send_json(404, {"error": "not found"})
             return
@@ -440,9 +537,18 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "not found"})
             return
         body = target.read_bytes()
-        content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        # mimetypes is platform-dependent (Windows reads the registry), so
+        # pin the types the PWA shell relies on instead of guessing.
+        content_type = _STATIC_CONTENT_TYPES.get(
+            target.suffix.lower(),
+            mimetypes.guess_type(str(target))[0] or "application/octet-stream",
+        )
         self.send_response(200)
         self.send_header("Content-Type", content_type)
+        # Service-worker update checks require a fresh script: the browser
+        # must revalidate /sw.js on every navigation, never serve it heuristically.
+        if relative == "sw.js":
+            self.send_header("Cache-Control", "no-cache")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -458,12 +564,23 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _send_action_chain(self, action_id: str) -> None:
         director = self.director
+        # Command recording is a simulated-adapter affordance; live adapters
+        # (Home Assistant REST) have no local command log to read.
+        executed_commands = director.adapter.commands if director.adapter is not None else ()
+
+        def _service_for_kind(action_kind):
+            # The runtime's static routing table; "haven.unmapped" means the
+            # kind has no service and should read as unavailable here.
+            service = director.runtime._service_for(action_kind)
+            return None if service == "haven.unmapped" else service
+
         chain = action_chain(
             action_id,
             store=director.store,
             receipts=director.receipts,
             device_registry=director.engine.device_registry,
-            executed_commands=director.adapter.commands,
+            executed_commands=executed_commands,
+            service_for_kind=_service_for_kind,
         )
         if chain is None:
             self._send_json(200, {"ok": False, "error": f"unknown action: {action_id}"})
@@ -584,10 +701,13 @@ def make_server(
     static_root: str | Path | None = None,
     models_root: str | Path | None = None,
     data_dir: str | Path | None = None,
+    demo: bool = False,
+    ha_client=None,
 ) -> tuple[HavenWebServer, DemoDirector]:
     root = Path(static_root) if static_root is not None else Path(__file__).parent / "static"
     server = HavenWebServer(
-        ("127.0.0.1", port), root, clock=clock, models_root=models_root, data_dir=data_dir
+        ("127.0.0.1", port), root, clock=clock, models_root=models_root, data_dir=data_dir,
+        demo=demo, ha_client=ha_client,
     )
     return server, server.director
 
@@ -595,8 +715,14 @@ def make_server(
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Serve the HAVEN local web surface.")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="force the demo household; normal boot reads the saved setup and builds "
+        "the user's house when a provider is configured",
+    )
     args = parser.parse_args(argv)
-    server, _ = make_server(args.port)
+    server, _ = make_server(args.port, demo=args.demo)
     host, port = server.server_address
     print(f"HAVEN web surface listening on http://{host}:{port}", file=sys.stderr)
     try:

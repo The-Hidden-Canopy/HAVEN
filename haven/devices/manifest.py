@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Mapping
 
 
 def _require_text(value: str, *, name: str) -> str:
@@ -66,6 +67,44 @@ class CapabilityDescriptor:
             self,
             "values",
             tuple(_require_text(v, name="capability value") for v in self.values),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "control_class": self.control_class.value,
+            "readable": self.readable,
+            "writable": self.writable,
+            "values": list(self.values),
+            "service": self.service,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping) -> CapabilityDescriptor:
+        if not isinstance(payload, Mapping):
+            raise ValueError("capability payload must be a mapping")
+        for key in ("name", "control_class"):
+            if key not in payload:
+                raise ValueError(f"capability payload is missing key: {key!r}")
+        control_class = payload["control_class"]
+        if not isinstance(control_class, str) or control_class not in ControlClass._value2member_map_:
+            raise ValueError(f"unknown capability control_class: {control_class!r}")
+        for key in ("readable", "writable"):
+            if not isinstance(payload.get(key, False), bool):
+                raise ValueError(f"capability {key!r} must be a boolean")
+        values = payload.get("values", ())
+        if not isinstance(values, (list, tuple)):
+            raise ValueError("capability values must be a list")
+        service = payload.get("service")
+        if service is not None and not isinstance(service, str):
+            raise ValueError("capability service must be a string or null")
+        return cls(
+            name=payload["name"],
+            control_class=ControlClass(control_class),
+            readable=payload.get("readable", False),
+            writable=payload.get("writable", False),
+            values=tuple(values),
+            service=service,
         )
 
 
@@ -135,6 +174,50 @@ class DeviceManifest:
             if capability.name == name:
                 return capability
         raise UnknownCapability(f"{self.device_id} has no capability named {name!r}")
+
+    def to_dict(self) -> dict:
+        return {
+            "device_id": self.device_id,
+            "device_type": self.device_type,
+            "provider_id": self.provider_id,
+            "capabilities": [capability.to_dict() for capability in self.capabilities],
+            "telemetry": list(self.telemetry),
+            "semantic_role": self.semantic_role,
+            "room": self.room,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping) -> DeviceManifest:
+        if not isinstance(payload, Mapping):
+            raise ValueError("device manifest payload must be a mapping")
+        for key in ("device_id", "device_type", "provider_id", "capabilities"):
+            if key not in payload:
+                raise ValueError(f"device manifest payload is missing key: {key!r}")
+        raw_capabilities = payload["capabilities"]
+        if not isinstance(raw_capabilities, (list, tuple)):
+            raise ValueError("device manifest capabilities must be a list")
+        capabilities = tuple(
+            capability if isinstance(capability, CapabilityDescriptor) else CapabilityDescriptor.from_dict(capability)
+            for capability in raw_capabilities
+        )
+        telemetry = payload.get("telemetry", ())
+        if not isinstance(telemetry, (list, tuple)):
+            raise ValueError("device manifest telemetry must be a list")
+        for key in ("semantic_role", "room"):
+            if payload.get(key) is not None and not isinstance(payload.get(key), str):
+                raise ValueError(f"device manifest {key!r} must be a string or null")
+        try:
+            return cls(
+                device_id=payload["device_id"],
+                device_type=payload["device_type"],
+                provider_id=payload["provider_id"],
+                capabilities=capabilities,
+                telemetry=tuple(telemetry),
+                semantic_role=payload.get("semantic_role"),
+                room=payload.get("room"),
+            )
+        except ValueError as exc:
+            raise ValueError(f"invalid device manifest payload: {exc}") from exc
 
 
 __all__ = [

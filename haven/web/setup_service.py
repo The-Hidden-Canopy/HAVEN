@@ -2,9 +2,22 @@
 
 The demo world stays untouched: these steps persist HAVEN's own installation
 config (data dir, provider, preferences) and enroll demo discovery candidates
-into the director's device registry. A real BLE/mDNS scan is a future native
-seam; the scan here returns honestly labeled demo candidates in the shape a
-real transport would produce.
+into the director's device registry. When a Home Assistant state source is
+attached (the live adapter, at boot), the discovery scan also lists the
+provider's real entities as candidates. A real BLE/mDNS scan is a future
+native seam; the demo rows of the scan are honestly labeled demo candidates
+in the shape a real transport would produce.
+
+HAVEN has one root: choosing a data directory moves the installation (config,
+token sidecar, enrolled-devices sidecar), it does not split it. The enrolled
+sidecar persists full device manifests (version 2), because a summary that
+cannot rebuild a manifest is not persistence; the legacy v1 summary shape is
+migrated eagerly on load.
+
+The household sidecar persists who lives here and what context entities mean:
+people with the occupancy entities that report them, contexts with the labels
+a deployment gave them. Presence and context meaning are declared, never
+inferred, so the observer is wired from this file at boot.
 """
 
 from __future__ import annotations
@@ -16,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from ..devices import CapabilityDescriptor, ControlClass
+from ..devices import CapabilityDescriptor, ControlClass, DeviceManifest
 from ..discovery.enrollment import enroll_device
 from ..discovery.models import DiscoveredDevice
 from ..integrations.home_assistant.client import LiveHomeAssistantAdapter
@@ -31,6 +44,183 @@ from .setup_config import (
 _ENROLL_JUSTIFICATION = "enrolled from the setup wizard discovery scan"
 _TOKEN_FILENAME = "ha_token.txt"
 _ENROLLED_FILENAME = "enrolled_devices.json"
+_ENROLLED_VERSION = 2
+_HOUSEHOLD_FILENAME = "household.json"
+_HOUSEHOLD_VERSION = 1
+_RULES_FILENAME = "rules.json"
+
+
+def _require_text(value: str, *, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string")
+    return value.strip()
+
+
+@dataclass(frozen=True)
+class DeclaredPresenceSource:
+    """One occupancy entity declaring "this entity reports a person in a room"."""
+
+    entity_id: str
+    room_id: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "entity_id", _require_text(self.entity_id, name="entity_id"))
+        object.__setattr__(self, "room_id", _require_text(self.room_id, name="room_id"))
+
+
+_DECLARED_ROLES = ("owner", "member")
+
+
+@dataclass(frozen=True)
+class DeclaredPerson:
+    """A household member and the occupancy entities that report their presence.
+
+    `role` is the person's standing in the household: exactly "owner" or
+    "member". Sidecar rows written before roles existed load as "member".
+    """
+
+    person_id: str
+    name: str
+    sources: tuple[DeclaredPresenceSource, ...] = ()
+    role: str = "member"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "person_id", _require_text(self.person_id, name="person_id"))
+        object.__setattr__(self, "name", _require_text(self.name, name="name"))
+        object.__setattr__(self, "sources", tuple(self.sources))
+        if self.role not in _DECLARED_ROLES:
+            raise ValueError(f"role must be one of {_DECLARED_ROLES}, got {self.role!r}")
+        object.__setattr__(self, "role", self.role)
+
+
+@dataclass(frozen=True)
+class DeclaredContext:
+    """A household context and the entity whose "on" means the context is active.
+
+    Contexts are declared meaning, not wiring: several contexts may share one
+    entity (one switch, several meanings), so nothing here is keyed on entity.
+    """
+
+    context_id: str
+    label: str
+    entity_id: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "context_id", _require_text(self.context_id, name="context_id"))
+        object.__setattr__(self, "label", _require_text(self.label, name="label"))
+        object.__setattr__(self, "entity_id", _require_text(self.entity_id, name="entity_id"))
+
+
+@dataclass(frozen=True)
+class HouseholdDeclarations:
+    """Who lives here and what context entities mean, as the household declared."""
+
+    people: tuple[DeclaredPerson, ...] = ()
+    contexts: tuple[DeclaredContext, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "people", tuple(self.people))
+        object.__setattr__(self, "contexts", tuple(self.contexts))
+
+
+def _derived_declared_id(text: str) -> str:
+    """`text` lowercased, non-alphanumerics as `_`, runs collapsed: "Gerron Smith" -> "gerron_smith"."""
+
+    collapsed: list[str] = []
+    for char in text.lower():
+        char = char if char.isalnum() else "_"
+        if char == "_" and collapsed and collapsed[-1] == "_":
+            continue
+        collapsed.append(char)
+    return "".join(collapsed).strip("_")
+
+
+def _household_payload(declarations: HouseholdDeclarations) -> dict:
+    return {
+        "people": [
+            {
+                "person_id": person.person_id,
+                "name": person.name,
+                "role": person.role,
+                "sources": [
+                    {"entity_id": source.entity_id, "room_id": source.room_id}
+                    for source in person.sources
+                ],
+            }
+            for person in declarations.people
+        ],
+        "contexts": [
+            {"context_id": context.context_id, "label": context.label, "entity_id": context.entity_id}
+            for context in declarations.contexts
+        ],
+    }
+
+
+def load_household_declarations(path: Path) -> HouseholdDeclarations:
+    """Read the household sidecar: who lives here, what context entities mean.
+
+    A missing file means "nobody declared yet". A structurally unreadable file
+    (bad JSON, not an object, wrong version, lists that are not lists) raises
+    `SetupConfigError`; callers load it lazily and degrade to empty, the same
+    contract `load_enrolled_sidecar` keeps for boot. Individual rows that
+    cannot be parsed are skipped rather than taking the whole file down.
+    """
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return HouseholdDeclarations()
+    except UnicodeDecodeError as exc:
+        raise SetupConfigError(f"household declarations are not valid UTF-8: {path}") from exc
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise SetupConfigError(f"household declarations are not valid JSON: {path}") from exc
+    if not isinstance(payload, dict):
+        raise SetupConfigError("household declarations must be a JSON object")
+    version = payload.get("version")
+    if version != _HOUSEHOLD_VERSION:
+        raise SetupConfigError(f"unsupported household declarations version: {version!r}")
+    raw_people = payload.get("people", [])
+    raw_contexts = payload.get("contexts", [])
+    if not isinstance(raw_people, list) or not isinstance(raw_contexts, list):
+        raise SetupConfigError("household declarations 'people' and 'contexts' must be lists")
+    people: list[DeclaredPerson] = []
+    for entry in raw_people:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            raw_sources = entry.get("sources", [])
+            sources = tuple(
+                DeclaredPresenceSource(entity_id=row["entity_id"], room_id=row["room_id"])
+                for row in raw_sources
+                if isinstance(row, dict)
+            )
+            people.append(
+                DeclaredPerson(
+                    person_id=entry["person_id"],
+                    name=entry["name"],
+                    sources=sources,
+                    role=entry.get("role", "member"),
+                )
+            )
+        except (KeyError, ValueError):
+            continue
+    contexts: list[DeclaredContext] = []
+    for entry in raw_contexts:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            contexts.append(
+                DeclaredContext(
+                    context_id=entry["context_id"],
+                    label=entry["label"],
+                    entity_id=entry["entity_id"],
+                )
+            )
+        except (KeyError, ValueError):
+            continue
+    return HouseholdDeclarations(people=tuple(people), contexts=tuple(contexts))
 
 # Household members supply capabilities at enrollment time, the same way an
 # owner supplies a justification to approve a rule: a scan suggestion is not
@@ -46,7 +236,104 @@ _CAPABILITY_PRESETS: dict[str, tuple[CapabilityDescriptor, ...]] = {
     "switch": (
         CapabilityDescriptor("power", ControlClass.LOW_RISK, writable=True, service="switch.turn_off"),
     ),
+    "fan": (
+        CapabilityDescriptor("power", ControlClass.LOW_RISK, writable=True, service="fan.turn_off"),
+    ),
+    "cover": (
+        CapabilityDescriptor("close", ControlClass.GUARDED, writable=True, service="cover.close"),
+        CapabilityDescriptor("open", ControlClass.GUARDED, writable=True, service="cover.open"),
+    ),
 }
+
+
+@dataclass(frozen=True)
+class _EnrolledLoad:
+    """The result of reading the enrolled-devices sidecar."""
+
+    manifests: tuple[DeviceManifest, ...]
+    rows: dict[str, dict]  # candidate_id -> status row (the frontend contract)
+    migrated: bool  # legacy v1 rows were upgraded and the sidecar should be rewritten
+
+
+def _enrolled_v2_payload(manifests: tuple[DeviceManifest, ...]) -> dict:
+    return {
+        "version": _ENROLLED_VERSION,
+        "manifests": [manifest.to_dict() for manifest in manifests],
+    }
+
+
+def load_enrolled_sidecar(path: Path) -> _EnrolledLoad:
+    """Read the enrolled-devices sidecar, migrating the legacy v1 shape.
+
+    Version 2 stores full `DeviceManifest` dicts; version 1 stored only a
+    summary (candidate_id, device_id, device_type, room). A summary that
+    cannot rebuild a manifest is not persistence, so v1 is migrated eagerly:
+    each row becomes a manifest with capabilities from the enrollment presets
+    and provider_id "demo.legacy", and `migrated` tells the caller to rewrite
+    the sidecar in v2 immediately. Unknown device types are skipped -- a row
+    that cannot become a manifest is dropped rather than guessed at.
+    """
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return _EnrolledLoad(manifests=(), rows={}, migrated=False)
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return _EnrolledLoad(manifests=(), rows={}, migrated=False)
+    if not isinstance(payload, dict):
+        return _EnrolledLoad(manifests=(), rows={}, migrated=False)
+    if payload.get("version") == _ENROLLED_VERSION:
+        manifests: list[DeviceManifest] = []
+        rows: dict[str, dict] = {}
+        raw_manifests = payload.get("manifests")
+        if not isinstance(raw_manifests, list):
+            return _EnrolledLoad(manifests=(), rows={}, migrated=False)
+        for entry in raw_manifests:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                manifest = DeviceManifest.from_dict(entry)
+            except ValueError:
+                continue
+            manifests.append(manifest)
+            rows[manifest.device_id] = _enrolled_row(manifest.device_id, manifest)
+        return _EnrolledLoad(manifests=tuple(manifests), rows=rows, migrated=False)
+    # Legacy v1: {"enrolled": [{candidate_id, device_id, device_type, room}]}.
+    entries = payload.get("enrolled")
+    if not isinstance(entries, list):
+        return _EnrolledLoad(manifests=(), rows={}, migrated=False)
+    manifests = []
+    rows = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("candidate_id"), str):
+            continue
+        device_type = entry.get("device_type")
+        capabilities = _CAPABILITY_PRESETS.get(device_type) if isinstance(device_type, str) else None
+        if capabilities is None:
+            continue
+        device_id = entry.get("device_id")
+        room = entry.get("room")
+        manifest = DeviceManifest(
+            device_id=device_id if isinstance(device_id, str) and device_id.strip() else entry["candidate_id"],
+            device_type=device_type,
+            provider_id="demo.legacy",
+            capabilities=capabilities,
+            room=room if isinstance(room, str) and room.strip() else None,
+        )
+        manifests.append(manifest)
+        rows[manifest.device_id] = _enrolled_row(manifest.device_id, manifest)
+    return _EnrolledLoad(manifests=tuple(manifests), rows=rows, migrated=bool(manifests))
+
+
+def _enrolled_row(candidate_id: str, manifest: DeviceManifest) -> dict:
+    return {
+        "candidate_id": candidate_id,
+        "device_id": manifest.device_id,
+        "device_type": manifest.device_type,
+        "room": manifest.room,
+    }
 
 
 @dataclass(frozen=True)
@@ -68,6 +355,56 @@ _DEMO_SCAN_CANDIDATES: tuple[_DemoScanCandidate, ...] = (
     _DemoScanCandidate("mdns:therm-living", "demo.scan.mdns", "thermostat", "living_room", None),
     _DemoScanCandidate("wifi:plug-heater", "demo.scan.wifi", "switch", "bedroom", -61),
 )
+
+# Domains the setup scan enrolls from Home Assistant state. Presence sensors,
+# automations, and plain sensors are perception, not actuation, so they are
+# not enrollment candidates.
+_HA_DISCOVERY_DEVICE_TYPES: dict[str, str] = {
+    "light": "light",
+    "switch": "switch",
+    "climate": "thermostat",
+    "cover": "cover",
+    "camera": "camera",
+    "fan": "fan",
+}
+_HA_DEAD_STATES = frozenset({"unavailable", "unknown"})
+_HA_PROVIDER_ID = "home_assistant"
+_HA_SOURCE = "home_assistant.states"
+
+
+def ha_candidates_from_states(states: tuple[dict, ...], *, now: datetime) -> tuple[DiscoveredDevice, ...]:
+    """Map Home Assistant state dicts to enrollment candidates, one per entity.
+
+    Only controllable domains are listed; `unavailable`/`unknown` entities are
+    skipped -- a dead entity is not a candidate. HA discovery is registry
+    listing, not proximity: it enumerates what the provider already knows, so
+    there is no signal strength.
+    """
+
+    candidates: list[DiscoveredDevice] = []
+    for state in states:
+        if not isinstance(state, dict):
+            continue
+        entity_id = state.get("entity_id")
+        if not isinstance(entity_id, str):
+            continue
+        domain, sep, name = entity_id.partition(".")
+        device_type = _HA_DISCOVERY_DEVICE_TYPES.get(domain) if sep else None
+        if device_type is None or state.get("state") in _HA_DEAD_STATES:
+            continue
+        tokens = name.split("_")
+        candidates.append(
+            DiscoveredDevice(
+                candidate_id=entity_id,
+                provider_id=_HA_PROVIDER_ID,
+                discovered_at=now,
+                source=_HA_SOURCE,
+                suggested_device_type=device_type,
+                suggested_room=tokens[0] if len(tokens) >= 2 else None,
+                signal_strength=None,
+            )
+        )
+    return tuple(candidates)
 
 
 @dataclass(frozen=True)
@@ -98,14 +435,28 @@ class SetupService:
         store: SetupConfigStore,
         director,
         clock: Callable[[], datetime] | None = None,
+        ha_states_source=None,
     ) -> None:
         self._store = store
         self._director = director
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        # Structural: anything with `fetch_states() -> tuple[dict, ...]`, the
+        # same contract `LiveHomeAssistantAdapter` implements.
+        self._ha_states_source = ha_states_source
         self._config_error: str | None = None
         self._config = self._load_config()
         self._enrolled: dict[str, dict] = self._load_enrolled()
+        self.household: HouseholdDeclarations = self._load_household()
         self._last_scan: tuple[SetupCandidate, ...] | None = None
+
+    def attach_ha_states_source(self, source) -> None:
+        """Wire the Home Assistant state source used by discovery scans.
+
+        The composition root calls this after it builds the live adapter, so a
+        scan can list real HA entities alongside the demo candidates.
+        """
+
+        self._ha_states_source = source
 
     def status(self) -> dict:
         config = self._config
@@ -133,6 +484,7 @@ class SetupService:
                     "voice": config.voice_enabled,
                     "intelligence": config.intelligence_enabled,
                 },
+                "household": _household_payload(self.household),
             },
         }
         if self._config_error is not None:
@@ -156,6 +508,30 @@ class SetupService:
             probe.unlink()
         except OSError as exc:
             return {"ok": False, "error": f"data dir is not writable {resolved}: {exc}"}
+        # HAVEN has one root: choosing a directory moves the installation, it
+        # does not split it. The config, provider token, enrolled-devices and
+        # household sidecars, the automations sidecar, and the backups
+        # directory all move to the new root, and the store rebinds to the
+        # moved haven.json so every path derived from store.path.parent is
+        # in the new root immediately.
+        current_dir = self._config_dir()
+        if resolved != current_dir.resolve():
+            for name in (
+                "haven.json",
+                _TOKEN_FILENAME,
+                _ENROLLED_FILENAME,
+                _HOUSEHOLD_FILENAME,
+                _RULES_FILENAME,
+                "backups",
+            ):
+                source = current_dir / name
+                if not source.exists():
+                    continue
+                try:
+                    os.replace(source, resolved / name)
+                except OSError as exc:
+                    return {"ok": False, "error": f"could not move {name} to {resolved}: {exc}"}
+            self._store.path = resolved / "haven.json"
         self._config = replace(self._config, data_dir=str(resolved))
         error = self._save()
         if error is not None:
@@ -219,29 +595,43 @@ class SetupService:
         return self.status()
 
     def run_discovery(self) -> dict:
+        """Scan for enrollment candidates: the demo set, plus real HA entities.
+
+        When a Home Assistant state source is attached, its entities join the
+        candidate list. A fetch failure never breaks the scan: an unreachable
+        provider at scan time yields the local demo candidates only, never a
+        crash.
+        """
+
         now = self._clock()
         enrolled_ids = set(self._enrolled)
+        discovered = [self._discover(demo, now) for demo in _DEMO_SCAN_CANDIDATES]
+        if self._ha_states_source is not None:
+            try:
+                states = self._ha_states_source.fetch_states()
+            except Exception:
+                states = ()
+            discovered.extend(ha_candidates_from_states(states, now=now))
         candidates = []
-        for demo in _DEMO_SCAN_CANDIDATES:
-            discovered = self._discover(demo, now)
+        for item in discovered:
             candidates.append(
                 SetupCandidate(
-                    candidate_id=discovered.candidate_id,
-                    provider_id=discovered.provider_id,
-                    source=discovered.source,
-                    suggested_device_type=discovered.suggested_device_type,
-                    suggested_room=discovered.suggested_room,
-                    signal_strength=discovered.signal_strength,
-                    discovered_at=discovered.discovered_at.isoformat(),
-                    enrolled=discovered.candidate_id in enrolled_ids,
+                    candidate_id=item.candidate_id,
+                    provider_id=item.provider_id,
+                    source=item.source,
+                    suggested_device_type=item.suggested_device_type,
+                    suggested_room=item.suggested_room,
+                    signal_strength=item.signal_strength,
+                    discovered_at=item.discovered_at.isoformat(),
+                    enrolled=item.candidate_id in enrolled_ids,
                 )
             )
         self._last_scan = tuple(candidates)
         return {"ok": True, "candidates": [asdict(candidate) for candidate in self._last_scan]}
 
     def enroll(self, candidate_id: str, *, device_type: str, room: str | None = None) -> dict:
-        demo = next((item for item in _DEMO_SCAN_CANDIDATES if item.candidate_id == candidate_id), None)
-        if demo is None:
+        candidate = self._lookup_candidate(candidate_id)
+        if candidate is None:
             return {"ok": False, "error": f"unknown candidate: {candidate_id!r}"}
         if candidate_id in self._enrolled:
             return {"ok": False, "error": f"candidate is already enrolled: {candidate_id}"}
@@ -249,12 +639,12 @@ class SetupService:
         if capabilities is None:
             return {"ok": False, "error": f"unsupported device_type: {device_type!r}"}
         manifest = enroll_device(
-            self._discover(demo, self._clock()),
+            candidate,
             device_type=device_type,
             capabilities=capabilities,
             approved_by=self._director.owner.actor_id,
             justification=_ENROLL_JUSTIFICATION,
-            room=room if room else demo.suggested_room,
+            room=room if room else candidate.suggested_room,
             semantic_role=device_type,
         )
         self._director.registry.register(manifest)
@@ -292,6 +682,130 @@ class SetupService:
             return {"ok": False, "error": error}
         return self.status()
 
+    def declare_person(self, *, name: str, entity_id: str, room_id: str, role: str = "member") -> dict:
+        """Declare one person and the occupancy entity that reports them in a room.
+
+        The person_id is derived from the name ("Gerron Smith" -> "gerron_smith").
+        Re-declaring the same (person_id, entity_id) pair is idempotent; the
+        same person_id under a different name is a conflict, because the
+        declaration says who the person is, not just how to spell the id.
+        Re-declaring the same person under a different role updates the role.
+        """
+
+        try:
+            name = _require_text(name, name="name")
+            entity_id = _require_text(entity_id, name="entity_id")
+            room_id = _require_text(room_id, name="room_id")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if role not in _DECLARED_ROLES:
+            return {"ok": False, "error": f"role must be one of {_DECLARED_ROLES}, got {role!r}"}
+        person_id = _derived_declared_id(name)
+        if not person_id:
+            return {"ok": False, "error": "name must contain at least one letter or digit"}
+        people = list(self.household.people)
+        for index, person in enumerate(people):
+            if person.person_id != person_id:
+                continue
+            if person.name != name:
+                return {"ok": False, "error": f"person already declared with a different name: {person_id}"}
+            if person.role != role:
+                people[index] = replace(person, role=role)
+                self.household = replace(self.household, people=tuple(people))
+                error = self._persist_household()
+                if error is not None:
+                    return {"ok": False, "error": error}
+                return self.status()
+            if any(source.entity_id == entity_id for source in person.sources):
+                return self.status()
+            people[index] = replace(
+                person,
+                sources=person.sources + (DeclaredPresenceSource(entity_id=entity_id, room_id=room_id),),
+            )
+            self.household = replace(self.household, people=tuple(people))
+            error = self._persist_household()
+            if error is not None:
+                return {"ok": False, "error": error}
+            return self.status()
+        people.append(
+            DeclaredPerson(
+                person_id=person_id,
+                name=name,
+                sources=(DeclaredPresenceSource(entity_id=entity_id, room_id=room_id),),
+                role=role,
+            )
+        )
+        self.household = replace(self.household, people=tuple(people))
+        error = self._persist_household()
+        if error is not None:
+            return {"ok": False, "error": error}
+        return self.status()
+
+    def remove_person(self, *, person_id: str) -> dict:
+        try:
+            person_id = _require_text(person_id, name="person_id")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        remaining = tuple(person for person in self.household.people if person.person_id != person_id)
+        if len(remaining) == len(self.household.people):
+            return {"ok": False, "error": f"unknown person: {person_id}"}
+        self.household = replace(self.household, people=remaining)
+        error = self._persist_household()
+        if error is not None:
+            return {"ok": False, "error": error}
+        return self.status()
+
+    def declare_context(self, *, label: str, entity_id: str) -> dict:
+        """Declare what one entity means: its "on" activates the context.
+
+        The context_id is derived from the label like a person_id from a name.
+        Contexts are meaning, not wiring, so several contexts may share one
+        entity; the idempotency/conflict rules are the people's.
+        """
+
+        try:
+            label = _require_text(label, name="label")
+            entity_id = _require_text(entity_id, name="entity_id")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        context_id = _derived_declared_id(label)
+        if not context_id:
+            return {"ok": False, "error": "label must contain at least one letter or digit"}
+        contexts = list(self.household.contexts)
+        for index, context in enumerate(contexts):
+            if context.context_id != context_id:
+                continue
+            if context.label != label:
+                return {"ok": False, "error": f"context already declared with a different label: {context_id}"}
+            if context.entity_id == entity_id:
+                return self.status()
+            contexts[index] = replace(context, entity_id=entity_id)
+            self.household = replace(self.household, contexts=tuple(contexts))
+            error = self._persist_household()
+            if error is not None:
+                return {"ok": False, "error": error}
+            return self.status()
+        contexts.append(DeclaredContext(context_id=context_id, label=label, entity_id=entity_id))
+        self.household = replace(self.household, contexts=tuple(contexts))
+        error = self._persist_household()
+        if error is not None:
+            return {"ok": False, "error": error}
+        return self.status()
+
+    def remove_context(self, *, context_id: str) -> dict:
+        try:
+            context_id = _require_text(context_id, name="context_id")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        remaining = tuple(context for context in self.household.contexts if context.context_id != context_id)
+        if len(remaining) == len(self.household.contexts):
+            return {"ok": False, "error": f"unknown context: {context_id}"}
+        self.household = replace(self.household, contexts=remaining)
+        error = self._persist_household()
+        if error is not None:
+            return {"ok": False, "error": error}
+        return self.status()
+
     def _config_dir(self) -> Path:
         return self._store.path.parent
 
@@ -313,38 +827,81 @@ class SetupService:
         return None
 
     def _enrolled_path(self) -> Path:
+        # Derived from store.path.parent at call time: choosing a new data
+        # dir rebinds the store, and the sidecar must move with it.
         return self._config_dir() / _ENROLLED_FILENAME
 
     def _load_enrolled(self) -> dict[str, dict]:
-        try:
-            raw = self._enrolled_path().read_text(encoding="utf-8")
-        except OSError:
-            return {}
-        try:
-            payload = json.loads(raw)
-        except ValueError:
-            return {}
-        entries = payload.get("enrolled") if isinstance(payload, dict) else None
-        if not isinstance(entries, list):
-            return {}
-        enrolled: dict[str, dict] = {}
-        for entry in entries:
-            if not isinstance(entry, dict) or not isinstance(entry.get("candidate_id"), str):
-                continue
-            enrolled[entry["candidate_id"]] = {
-                "candidate_id": entry["candidate_id"],
-                "device_id": entry.get("device_id"),
-                "device_type": entry.get("device_type"),
-                "room": entry.get("room"),
-            }
-        return enrolled
+        load = load_enrolled_sidecar(self._enrolled_path())
+        for manifest in load.manifests:
+            # Re-register every persisted manifest: a restart must not forget
+            # the runtime the enrollment decided on.
+            self._director.registry.register(manifest)
+        if load.migrated:
+            try:
+                _write_json_atomic(self._enrolled_path(), _enrolled_v2_payload(load.manifests))
+            except SetupConfigError:
+                # The eager rewrite is best-effort at boot; the migration
+                # simply runs again on the next load.
+                pass
+        return load.rows
 
     def _persist_enrolled(self) -> str | None:
+        manifests = []
+        for row in self._enrolled.values():
+            device_id = row["device_id"]
+            if self._director.registry.is_registered(device_id):
+                manifests.append(self._director.registry.get(device_id).to_dict())
         try:
-            _write_json_atomic(self._enrolled_path(), {"enrolled": list(self._enrolled.values())})
+            _write_json_atomic(
+                self._enrolled_path(),
+                {"version": _ENROLLED_VERSION, "manifests": manifests},
+            )
         except SetupConfigError as exc:
             return str(exc)
         return None
+
+    def _household_path(self) -> Path:
+        # Derived from store.path.parent at call time, like the enrolled
+        # sidecar: choosing a new data dir moves the whole installation.
+        return self._config_dir() / _HOUSEHOLD_FILENAME
+
+    def _load_household(self) -> HouseholdDeclarations:
+        try:
+            return load_household_declarations(self._household_path())
+        except SetupConfigError:
+            # Mirror the enrolled sidecar's laziness: a bad household file
+            # degrades to "nobody declared", it does not prevent boot.
+            return HouseholdDeclarations()
+
+    def _persist_household(self) -> str | None:
+        payload = {"version": _HOUSEHOLD_VERSION, **_household_payload(self.household)}
+        try:
+            _write_json_atomic(self._household_path(), payload)
+        except SetupConfigError as exc:
+            return str(exc)
+        return None
+
+    def _lookup_candidate(self, candidate_id: str) -> DiscoveredDevice | None:
+        demo = next((item for item in _DEMO_SCAN_CANDIDATES if item.candidate_id == candidate_id), None)
+        if demo is not None:
+            return self._discover(demo, self._clock())
+        if self._ha_states_source is None:
+            return None
+        try:
+            states = self._ha_states_source.fetch_states()
+        except Exception:
+            # An entity that cannot be confirmed live right now is not
+            # enrollable: refuse as unknown rather than enroll blind.
+            return None
+        return next(
+            (
+                item
+                for item in ha_candidates_from_states(states, now=self._clock())
+                if item.candidate_id == candidate_id
+            ),
+            None,
+        )
 
     @staticmethod
     def _discover(demo: _DemoScanCandidate, now: datetime) -> DiscoveredDevice:
@@ -359,4 +916,14 @@ class SetupService:
         )
 
 
-__all__ = ["SetupCandidate", "SetupService"]
+__all__ = [
+    "DeclaredContext",
+    "DeclaredPerson",
+    "DeclaredPresenceSource",
+    "HouseholdDeclarations",
+    "SetupCandidate",
+    "SetupService",
+    "ha_candidates_from_states",
+    "load_enrolled_sidecar",
+    "load_household_declarations",
+]

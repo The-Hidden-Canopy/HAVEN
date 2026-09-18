@@ -129,11 +129,14 @@ def _authority_section(action, device_registry) -> dict[str, Any]:
     }
 
 
-def _service_for(action, device_registry, executed_commands: Iterable) -> tuple[str | None, str, str | None]:
+def _service_for(action, device_registry, executed_commands, service_for_kind=None) -> tuple[str | None, str, str | None]:
     """Resolve (service, basis, provider_id) from recorded execution data.
 
     Order of honesty: the device command the adapter actually executed, then
-    the device manifest's declared service for the named capability.
+    the device manifest's declared service for the named capability, then the
+    deployment's ActionKind-to-service routing (live adapters record no local
+    command log, so a successfully executed action would otherwise report
+    "unavailable" for a routing decision the runtime already made).
     """
 
     request = action.request
@@ -143,22 +146,30 @@ def _service_for(action, device_registry, executed_commands: Iterable) -> tuple[
             if device_registry is not None and device_registry.is_registered(command.target_device_id):
                 provider_id = device_registry.get(command.target_device_id).provider_id
             return command.service, "executed_command", provider_id
-    if device_registry is not None and request.capability is not None:
+    provider_id = None
+    manifest = None
+    if device_registry is not None:
         try:
             manifest = device_registry.get(request.target_device_id)
         except Exception:
             manifest = None
         if manifest is not None:
-            try:
-                return manifest.capability(request.capability).service, "device_capability", manifest.provider_id
-            except Exception:
-                pass
-    return None, "unavailable", None
+            provider_id = manifest.provider_id
+    if manifest is not None and request.capability is not None:
+        try:
+            return manifest.capability(request.capability).service, "device_capability", provider_id
+        except Exception:
+            pass
+    if service_for_kind is not None:
+        service = service_for_kind(request.action_kind)
+        if service:
+            return service, "action_kind", provider_id
+    return None, "unavailable", provider_id
 
 
-def _execution_section(action, device_registry, executed_commands, now: datetime | None) -> dict[str, Any]:
+def _execution_section(action, device_registry, executed_commands, service_for_kind, now: datetime | None) -> dict[str, Any]:
     result = action.result
-    service, service_basis, provider_id = _service_for(action, device_registry, executed_commands)
+    service, service_basis, provider_id = _service_for(action, device_registry, executed_commands, service_for_kind)
     executed = _with_relative(action.executed_at, now)
     observed = _with_relative(result.observed_at, now) if result is not None else {"at": None, "seconds_ago": None}
     return {
@@ -261,14 +272,17 @@ def action_chain(
     receipts: Iterable | None = None,
     device_registry=None,
     executed_commands: Iterable | None = None,
+    service_for_kind=None,
 ) -> dict[str, Any] | None:
     """Build the six-section trust chain for one action, or None if unknown.
 
     ``store`` is required and sufficient; ``receipts`` (the runtime's
     receipt ledger), ``device_registry``, and ``executed_commands`` (device
     commands recorded by the execution adapter) enrich sections the bare
-    ActionRecord cannot cover. ``now`` enables relative timestamps; without
-    it only ISO stamps are emitted.
+    ActionRecord cannot cover. ``service_for_kind`` (ActionKind -> service
+    str) is the fallback routing map for live adapters that record no local
+    command log. ``now`` enables relative timestamps; without it only ISO
+    stamps are emitted.
     """
 
     try:
@@ -300,7 +314,7 @@ def action_chain(
         "interpretation": _interpretation_section(action, receipt, store),
         "evidence": _evidence_section(receipt, now),
         "authority": _authority_section(action, device_registry),
-        "execution": _execution_section(action, device_registry, executed_commands, now),
+        "execution": _execution_section(action, device_registry, executed_commands, service_for_kind, now),
         "consequence": _consequence_section(action, store, now),
         "timeline": _timeline_section(action, store, now),
     }
