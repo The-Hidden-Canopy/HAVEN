@@ -23,3 +23,6 @@ traces/
 
 # Recorded audio from scripts/smoke_mic_loopback.py: real mic input, never a repo artifact.
 scripts/*.wav
+
+# Per-run output of scripts/verify.py -- a local verification record, not a repo artifact.
+verification.json

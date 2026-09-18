@@ -37,6 +37,7 @@ import ctypes
 import platform
 import queue
 import threading
+import time
 from ctypes import wintypes
 from typing import Iterable
 
@@ -58,6 +59,7 @@ WHDR_DONE = 0x00000001
 MMSYSERR_NOERROR = 0
 WAIT_TIMEOUT = 0x00000102
 _ERROR_TEXT_LEN = 256
+_TAIL_DRAIN_SECONDS = 0.08
 
 
 class WAVEFORMATEX(ctypes.Structure):
@@ -309,14 +311,16 @@ class WinMMSpeakerSink:
     """Plays PCM chunks through a real speaker via WinMM's `waveOut*` API.
 
     Implements `PlaybackSink`. Each `play()` call opens its own device and
-    writes chunks synchronously (wait for one buffer's completion before
-    writing the next) -- simpler and safer than a buffer pool for what is,
-    in practice, one scripted utterance at a time; the tiny inter-chunk
-    gap this can introduce is not the barge-in latency this contract cares
-    about. `stop()` sets a flag `play()` checks between chunks and, for the
-    chunk currently in flight, calls `waveOutReset()` -- documented to mark
-    all pending buffers done immediately -- which is what makes truncation
-    from another thread possible without any model or LLM call.
+    double-buffers: the next chunk is prepared and queued with WinMM while
+    the current one is still playing, so the device is never left idle
+    waiting on Python between chunks (a synthesizer's chunk boundaries --
+    e.g. Piper's fixed transport-size slices -- do not line up with any
+    real audio boundary, and starving the device at each one is audible as
+    a click/gap, not just "low quality"). `stop()` sets a flag `play()`
+    checks and, for the buffer currently in flight, calls `waveOutReset()`
+    -- documented to mark all pending buffers done immediately -- which is
+    what makes truncation from another thread possible without any model
+    or LLM call.
     """
 
     def __init__(self, *, device_id: int = WAVE_MAPPER) -> None:
@@ -340,34 +344,64 @@ class WinMMSpeakerSink:
                 ),
             )
             try:
-                for chunk in chunks:
-                    if self._stop_requested.is_set():
-                        break
-                    data = bytes(chunk)
-                    if not data:
-                        continue
-                    self._write_chunk(hwaveout, event, data)
+                self._stream(hwaveout, event, iter(chunks))
+                if not self._stop_requested.is_set():
+                    # `WHDR_DONE` on the last buffer means the driver has
+                    # consumed it, not that the DAC has finished rendering
+                    # it -- some drivers keep a shallow hardware FIFO past
+                    # that point. Closing immediately clips that residual
+                    # tail (heard as the end of a word losing volume).
+                    # Barge-in (the branch below) still closes immediately:
+                    # that latency is the whole point of `stop()`.
+                    time.sleep(_TAIL_DRAIN_SECONDS)
             finally:
                 winmm.waveOutReset(hwaveout)
                 winmm.waveOutClose(hwaveout)
         finally:
             kernel32.CloseHandle(event)
 
-    def _write_chunk(self, hwaveout, event: int, data: bytes) -> None:
+    def _stream(self, hwaveout, event: int, chunk_iter) -> None:
+        pending: list[tuple[ctypes.Array, WAVEHDR]] = []
+
+        def queue_next() -> None:
+            if self._stop_requested.is_set():
+                return
+            for chunk in chunk_iter:
+                data = bytes(chunk)
+                if not data:
+                    continue
+                pending.append(self._prepare_and_write(hwaveout, data))
+                return
+
+        # Two buffers in flight at all times: while the head of `pending`
+        # plays, the next one is already queued with WinMM, so there is no
+        # gap for the device to wait through between them.
+        queue_next()
+        queue_next()
+        reset_done = False
+        while pending:
+            _buf, hdr = pending.pop(0)
+            while not (hdr.dwFlags & WHDR_DONE) and not self._stop_requested.is_set():
+                kernel32.WaitForSingleObject(event, 200)
+            if not (hdr.dwFlags & WHDR_DONE) and not reset_done:
+                # Stopped mid-playback: waveOutReset marks every pending
+                # buffer (including the rest of `pending`) done immediately,
+                # which is required before unpreparing (otherwise
+                # WAVERR_STILLPLAYING) and lets the drain loop below finish
+                # without waiting on hardware that was just silenced.
+                winmm.waveOutReset(hwaveout)
+                reset_done = True
+            winmm.waveOutUnprepareHeader(hwaveout, ctypes.byref(hdr), ctypes.sizeof(hdr))
+            queue_next()
+
+    def _prepare_and_write(self, hwaveout, data: bytes) -> tuple[ctypes.Array, "WAVEHDR"]:
         buf = ctypes.create_string_buffer(data, len(data))
         hdr = WAVEHDR()
         hdr.lpData = ctypes.cast(buf, ctypes.c_void_p)
         hdr.dwBufferLength = len(data)
         _check("waveOutPrepareHeader", winmm.waveOutPrepareHeader(hwaveout, ctypes.byref(hdr), ctypes.sizeof(hdr)))
         _check("waveOutWrite", winmm.waveOutWrite(hwaveout, ctypes.byref(hdr), ctypes.sizeof(hdr)))
-        while not (hdr.dwFlags & WHDR_DONE) and not self._stop_requested.is_set():
-            kernel32.WaitForSingleObject(event, 200)
-        if not (hdr.dwFlags & WHDR_DONE):
-            # Stopped mid-playback: waveOutReset guarantees WHDR_DONE gets
-            # set, which is required before unpreparing (otherwise
-            # WAVERR_STILLPLAYING).
-            winmm.waveOutReset(hwaveout)
-        winmm.waveOutUnprepareHeader(hwaveout, ctypes.byref(hdr), ctypes.sizeof(hdr))
+        return buf, hdr
 
     def stop(self) -> None:
         self._stop_requested.set()

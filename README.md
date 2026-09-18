@@ -10,13 +10,26 @@ observe -> understand household state -> predict or interpret ->
 check authority -> act -> observe consequence -> remember
 ```
 
-The first implementation is deliberately small and fixture-driven. It proves
-the control boundary without connecting to a real home, sending a network
-request, or treating a model response as permission to mutate a device.
+The governing core started deliberately small and fixture-driven, to prove
+the control boundary before connecting to anything real. That boundary is
+still exactly as strict, but it is no longer fixture-only: HAVEN today
+connects to a real Home Assistant installation over real network I/O, runs
+real native hardware (Bluetooth, microphone/speaker audio), loads and runs
+real local models, and persists a real household's history across restarts.
+A model response is still never permission to mutate a device -- that
+invariant hasn't moved an inch -- but "prove the boundary" has become
+"run a real household through the boundary."
 
-## What exists in 0.1
+## What exists today
 
-The initial vertical slice contains:
+HAVEN runs two compositions behind the same web surface and the same
+`HavenApplication` controller: a demo household (`DemoDirector`, a scripted
+fixture scenario -- no network, no credentials, no real hardware, useful for
+trying HAVEN or developing against it) and a real household
+(`build_application`, wired to whatever provider and hardware the
+installation actually has). Nothing about the authority/evidence/receipt
+core differs between them; only the world and execution wiring underneath
+does. What exists spans both, including:
 
 - an immutable, household-scoped world snapshot for presence, context, and
   device state;
@@ -121,10 +134,68 @@ The initial vertical slice contains:
   normalizes to `ChatResult`/`InferenceResult` before HAVEN sees output,
   and the enriched `WorldView` projection (readable names, capabilities,
   attributes, recent transitions, explicit uncertainty) is what agents
-  receive — never the store.
+  receive — never the store;
+- a scheduler (`haven/scheduler/engine.py`) that is another requester, never
+  a privileged bypass: a due schedule asks `HavenRuntime.run_rule()` to run
+  an already-approved rule through the exact same authority path as any
+  other requester -- household scope, role tier, evidence freshness and
+  confidence, human override, risk tier, and confirmation all still apply,
+  and a policy-blocked schedule records the ordinary blocked receipt rather
+  than silently not firing. The scheduler's own principal is an
+  unremarkable household member; what grants authority is the owner's prior
+  approval of the rule, not the scheduler's role;
+- a production composition root (`haven/web/application.py`) separate from
+  the demo one: `build_application()` reads a household's persisted setup
+  and builds either the demo fixture (nothing configured yet, or an
+  explicit demo run) or the real installation -- a real, persisted
+  `household_id` (a minted UUID, never a shared literal), enrolled devices,
+  declared people, and persisted rules. A household that has connected any
+  provider never falls back to the demo fixture again, even if that
+  provider is one this composition root has no live adapter for yet (a
+  community provider) or its connection details are temporarily unreadable
+  -- it gets its own real installation with a world that honestly reports
+  no live evidence, never a fictional house that looks real. The production
+  controller (`HavenApplication`, `haven/web/haven_application.py`) and the
+  demo one (`DemoDirector`) are the same class hierarchy: `HavenApplication`
+  carries every real behavior once (chat, permissions, voice, scheduling,
+  state projection, persistence) and never constructs a `SimulatedHouse` or
+  a fixture identity; `DemoDirector` is the thin subclass that adds exactly
+  those for the local scenario;
+- durable persistence across restarts: rules survive in `rules.json`
+  (`haven/web/rules_persist.py`), and a household's events, actions,
+  receipts, and memory survive in a per-installation SQLite file
+  (`haven/web/history_persist.py`, `HistoryStore`) -- one table per kind, a
+  fresh connection per operation, confirmation tokens never persisted;
+- a real native hardware loop for voice, not only the browser stand-in: a
+  ctypes binding straight to Windows' WinMM API
+  (`haven/speech/native_audio.py`, no third-party audio package, matching
+  the same zero-dependency native-ABI approach as Bluetooth below) provides
+  a real microphone `AudioSource` and speaker `PlaybackSink`, double-buffered
+  so a synthesizer's chunk boundaries never starve the device into an
+  audible gap, with a barge-in path that truncates playback within one
+  chunk. `haven/web/voice_runtime.py` composes a real, always-on
+  `SpeechService` from whatever wake/ASR/TTS models a household has
+  assigned, and `HavenApplication.start_voice()`/`stop_voice()` wire it into
+  the running application; a household with real spoken *output* but input
+  handled by another always-on pipeline entirely is a first-class
+  configuration, not a special case. A reference native TTS backend
+  (`haven/models/backends/piper_native.py`) shells out to the MIT-licensed
+  Piper executable and resamples its own voice's sample rate to HAVEN's
+  pinned 16 kHz wire contract with a small stdlib-only linear resampler, so
+  a household is not confined to the one Piper voice already at that rate;
+- `python scripts/verify.py`, the local substitute for paid CI: it runs the
+  full test suite and reports Haven's commit, the Python version and OS
+  that ran it, and total/passed/failed/skipped counts, splitting skips into
+  "this host lacks a real device/toolchain/optional package" (expected on
+  most machines) versus anything else (worth a second look). The
+  development rule it exists to enforce: a commit is not a release
+  candidate unless this passes.
 
-There is no local model runtime, camera pipeline, mobile surface, scheduler,
-cloud fallback, or physical-device capability yet.
+Camera streaming/recording and a mobile app surface are still not part of
+this repo (camera *actuation* -- pan/tilt/zoom/privacy-shutter through the
+same authority path as any other device -- already is, see below). HAVEN
+does not have, and does not plan, a cloud fallback: local-first is a design
+constraint here, not a temporary gap waiting to be filled in.
 
 ## The first household example
 
@@ -172,9 +243,12 @@ haven/
 │   ├── shims.py        # loaded model handles -> SpeechRecognizer/Synthesizer/WakeDetector
 │   ├── sources.py      # AudioSource protocol; WavFileSource (real audio, no mic needed)
 │   ├── sinks.py        # PlaybackSink protocol; WavFileSink; NullSink
+│   ├── native_audio.py # real WinMM mic/speaker: ctypes ABI, double-buffered, no third-party audio package
 │   ├── service.py      # SpeechService: the always-on runtime (capture -> KWS -> VAD -> ASR -> session)
 │   ├── fixtures.py     # scripted providers registered in the capability registry
 │   └── providers/      # thin inference adapters (HTTP seam to a household inference stack)
+├── scheduler/
+│   └── engine.py       # due schedules ask HavenRuntime.run_rule(); never a privileged bypass
 ├── models/
 │   ├── contracts.py    # ModelKind / ModelSource / ModelDescriptor (normalized form)
 │   ├── manifest.py     # universal haven-model.json (schema haven-model-1)
@@ -183,7 +257,7 @@ haven/
 │   ├── detect.py       # recognize ordinary HF/GGUF/ONNX folders; synthesize manifests
 │   ├── downloader.py   # inspect-before-install URL flow + HF repo resolution
 │   ├── jobs.py         # background downloads: progress, cancel, .part resume
-│   ├── backends/       # ModelBackend protocol + reference set (http real; ML lazy)
+│   ├── backends/       # ModelBackend protocol + reference set (http real; ML lazy; piper_native.py real native TTS)
 │   ├── bridge.py       # loaded models become providers; WorldView feeds agents
 │   └── manager.py      # ModelManager: 3 entry paths, resolve, load/unload topology
 ├── providers/
@@ -226,10 +300,17 @@ haven/
 ├── audit/
 │   └── receipts.py     # machine-readable action receipts
 ├── web/
-│   ├── serialize.py    # domain -> JSON wire format (receipt conventions)
-│   ├── demo.py         # SimulatedHouse + DemoDirector: fixture world, real engine
-│   ├── server.py       # stdlib HTTP + SSE, static UI, 127.0.0.1 only
-│   └── static/         # zero-build desktop/tablet UI (Navigation | World | HAVEN)
+│   ├── serialize.py         # domain -> JSON wire format (receipt conventions)
+│   ├── application.py       # composition root: build_application() reads setup, builds demo or real
+│   ├── haven_application.py # HavenApplication: the production controller (chat, voice, scheduling, persistence)
+│   ├── demo.py              # SimulatedHouse + DemoDirector(HavenApplication): fixture world, real engine
+│   ├── voice_runtime.py     # composes a real SpeechService / standalone TTS from assigned models + native audio
+│   ├── rules_persist.py     # rules.json: automations survive a restart
+│   ├── history_persist.py   # HistoryStore: events/actions/receipts/memory survive a restart (SQLite)
+│   ├── setup_config.py      # persisted installation config (provider, household_id, feature flags)
+│   ├── setup_service.py     # the setup wizard: connect a provider, declare people/contexts, enroll devices
+│   ├── server.py            # stdlib HTTP + SSE, static UI, 127.0.0.1 only
+│   └── static/              # zero-build desktop/tablet UI (Navigation | World | HAVEN)
 └── runtime.py          # narrow orchestration of the vertical slice
 ```
 
@@ -490,9 +571,18 @@ and does not exist there, including Linux/macOS.
   capability-gated with typed errors), and `SpeechService` is the always-on
   runtime — capture source → wake → VAD → ASR → the invariant-enforcing
   session — with barge-in that stops playback without a model call. The
-  browser displays speech state; this service owns the microphone runtime.
-  Real audio flows the whole pipeline today from WAV files; live capture
-  with echo cancellation is the remaining native device seam.
+  browser displays speech state; this service owns the microphone runtime,
+  and on Windows that runtime is real: `haven/speech/native_audio.py` binds
+  WinMM directly for real microphone capture and speaker playback (no
+  third-party audio package), verified against real hardware, with a
+  double-buffered playback path so a synthesizer's chunk boundaries never
+  starve the device into an audible gap. `haven/web/voice_runtime.py` wires
+  a household's assigned wake/ASR/TTS models into a real, running
+  `SpeechService`, degrading structurally (never a crash) to the browser's
+  simulated voice session wherever a model, the audio device, or the
+  platform binding isn't available. Echo cancellation (it needs the exact
+  speaker PCM reference) and Linux/macOS native audio backends are the
+  remaining native device gaps.
 - Receipts distinguish the requested action, derived interpretation, observed
   evidence, authority decision, execution attempt, and device result.
 
@@ -531,6 +621,26 @@ python -m pytest -v
 
 The test suite is the current executable contract. It uses no network, model
 weights, credentials, or household data.
+
+## Verify before you call something a release candidate
+
+There is no paid CI for this repository. `scripts/verify.py` is the local
+substitute -- the same command a contributor and a maintainer both run,
+producing the same report:
+
+```powershell
+python scripts/verify.py --json
+```
+
+It runs the full suite and reports Haven's commit, the Python version and OS
+that ran it, and total/passed/failed/skipped counts, splitting skips into
+"this host lacks a real device, toolchain, or optional runtime package"
+(expected on most machines -- native audio hardware, a C compiler for the
+Bluetooth native-library tests, `transformers`/`llama_cpp`/`onnxruntime`)
+from anything else, which is worth a second look. `--json` also writes
+`verification.json` (gitignored -- a local run record, not a repo artifact).
+The development rule this exists to support: **a commit is not a release
+candidate unless `verify.py` passes.**
 
 The confirmation object in this fixture is a local protocol value, not a
 cryptographic credential issuer. A live interface must add secure issuance and
