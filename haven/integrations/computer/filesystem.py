@@ -192,7 +192,13 @@ class FilesystemProvider:
 
         if resource.locator is None:
             return None
-        resolved = self._require_within_roots(resource.locator)
+        try:
+            resolved = self._require_within_roots(resource.locator)
+        except PathOutsideAllowedRoots:
+            # The locator may have become unsafe after observation (for
+            # example, a symlink target changed).  Extraction should treat
+            # that as unavailable content, not fail the whole scan.
+            return None
         if not resolved.is_file():
             return None
         try:

@@ -1,4 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="left" x1="128" y1="276" x2="258" y2="142" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1588ff"/>
+      <stop offset="1" stop-color="#4b73ff"/>
+    </linearGradient>
+    <linearGradient id="right" x1="252" y1="142" x2="386" y2="276" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#665bff"/>
+      <stop offset="1" stop-color="#9a43d7"/>
+    </linearGradient>
+    <linearGradient id="dot" x1="220" y1="294" x2="292" y2="390" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffc16d"/>
+      <stop offset="1" stop-color="#ff7028"/>
+    </linearGradient>
+  </defs>
   <rect width="512" height="512" rx="96" fill="#0b0f17"/>
-  <path d="M256 96 96 240v176h104V280h112v136h104V240z" fill="none" stroke="#4fd1c5" stroke-width="36" stroke-linejoin="round"/>
+  <path d="M130 270 252 148" fill="none" stroke="url(#left)" stroke-width="64" stroke-linecap="round"/>
+  <path d="m260 148 122 122" fill="none" stroke="url(#right)" stroke-width="64" stroke-linecap="round"/>
+  <circle cx="256" cy="354" r="54" fill="url(#dot)"/>
 </svg>

@@ -6,13 +6,15 @@
      never be swallowed by a cache.
    - Non-GET requests are never touched. */
 
-const SHELL_CACHE = 'haven-shell-v1';
+const SHELL_CACHE = 'haven-shell-v2';
 const SHELL = [
   '/',
   '/index.html',
   '/styles.css',
   '/app.js',
   '/icon.svg',
+  '/haven-logo-light.png',
+  '/haven-logo-dark.png',
   '/manifest.webmanifest',
 ];
 

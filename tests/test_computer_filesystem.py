@@ -219,6 +219,27 @@ def test_a_symlinked_file_pointing_inside_allowed_roots_is_still_observed():
     assert records[str(real_file)].content_hash is not None
 
 
+def test_read_text_degrades_when_revalidation_rejects_a_previously_observed_path(monkeypatch):
+    """A symlink/TOCTOU boundary failure must not abort knowledge scanning."""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "allowed"
+        root.mkdir()
+        path = root / "notes.txt"
+        path.write_text("safe content")
+        provider = FilesystemProvider(
+            allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW
+        )
+        record = provider.observe_one(path)
+        assert record is not None
+
+        def reject(_path):
+            raise PathOutsideAllowedRoots("path moved outside the allowed root")
+
+        monkeypatch.setattr(provider, "_require_within_roots", reject)
+        assert provider.read_text(record) is None
+
+
 # -- execution: safety ----------------------------------------------------
 
 

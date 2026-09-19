@@ -7,19 +7,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from haven.knowledge import ClaimState, ClaimStore, KnowledgeService
+from haven.knowledge.extraction import extract_text_content
 from haven.resources import ResourceRecord, ResourceStore
 
 NOW = datetime(2026, 9, 19, 12, 0, tzinfo=timezone.utc)
 
 
-def _resource(resource_id="file:C:/Docs/proposal.md", content_hash="hash-1") -> ResourceRecord:
+def _resource(resource_id="file:C:/Docs/proposal.md", content_hash="hash-1", locator=None) -> ResourceRecord:
+    locator = locator or "C:/Docs/proposal.md"
     return ResourceRecord(
         resource_id=resource_id,
         resource_type="file",
         scope_id="personal:gerron",
         provider_id="local_filesystem",
         title="proposal.md",
-        locator="C:/Docs/proposal.md",
+        locator=locator,
         capabilities=("filesystem.read",),
         observed_at=NOW,
         content_hash=content_hash,
@@ -92,3 +94,25 @@ def test_revoking_a_root_stales_both_resources_and_dependent_claims():
         assert marked_claims == 1
         assert resources.get(record.resource_id).stale is True
         assert claims.list_all()[0].state is ClaimState.STALE
+
+
+def test_generic_text_extraction_is_limited_to_prose_formats():
+    accepted = (".txt", ".md", ".markdown", ".rst")
+    rejected = (
+        ".py", ".json", ".csv", ".log", ".ini", ".cfg", ".yaml", ".yml",
+        ".toml", ".xml", ".html", ".css",
+    )
+
+    for suffix in accepted:
+        resource = _resource(
+            resource_id=f"file:C:/Docs/notes{suffix}",
+            locator=f"C:/Docs/notes{suffix}",
+        )
+        assert extract_text_content(resource, reader=lambda _: "prose", now=NOW) is not None
+
+    for suffix in rejected:
+        resource = _resource(
+            resource_id=f"file:C:/Docs/notes{suffix}",
+            locator=f"C:/Docs/notes{suffix}",
+        )
+        assert extract_text_content(resource, reader=lambda _: "not admitted", now=NOW) is None

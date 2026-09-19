@@ -10,8 +10,7 @@ from .contracts import ContentReader, ExtractedContent
 
 TEXT_SUFFIXES = frozenset(
     {
-        ".txt", ".md", ".markdown", ".py", ".json", ".csv", ".log", ".ini",
-        ".cfg", ".yaml", ".yml", ".toml", ".rst", ".xml", ".html", ".css",
+        ".txt", ".md", ".markdown", ".rst",
     }
 )
 

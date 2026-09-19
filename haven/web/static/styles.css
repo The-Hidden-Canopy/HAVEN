@@ -7,6 +7,7 @@
 
 /* ---------- custom properties ---------- */
 :root {
+  color-scheme: dark;
   --bg:            #0b0f17;
   --bg-raise:      #10161f;
   --bg-raise-2:    #141b26;
@@ -97,22 +98,29 @@ a {
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
-.brand-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--teal);
-  box-shadow: 0 0 4px rgba(79, 209, 197, 0.35);
+.haven-logo-frame {
+  display: block;
+  width: 190px;
+  height: 56px;
+  overflow: hidden;
   flex: none;
 }
 
-.wordmark {
-  font-weight: 700;
-  letter-spacing: 0.22em;
-  font-size: 13px;
+.haven-logo-frame picture {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.haven-logo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
 }
 
 .brand-sub {
@@ -123,6 +131,29 @@ a {
 }
 
 .topbar-right { display: flex; align-items: center; }
+
+/* The page follows the operating system's light preference.  The supplied
+   dark wordmark is selected by the <picture> above in the same mode. */
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg:            #f4f7fb;
+    --bg-raise:      #ffffff;
+    --bg-raise-2:    #edf2f7;
+    --border:        #d8e0ea;
+    --border-strong: #b7c3d1;
+    --text:          #1b2735;
+    --muted:         #657487;
+    --teal:          #087f78;
+    --amber:         #a85b17;
+    --red:           #b63d3a;
+    --cyan:          #0b7187;
+    --teal-dim:      rgba(8, 127, 120, 0.24);
+    --amber-dim:     rgba(168, 91, 23, 0.28);
+    --red-dim:       rgba(182, 61, 58, 0.30);
+    --cyan-dim:      rgba(11, 113, 135, 0.24);
+  }
+}
 
 /* left nav rail */
 .rail-nav {
@@ -1312,26 +1343,17 @@ body[data-glow="acting"] .room-card[data-glow-target] {
 }
 
 /* permission: strong slow pulse on the HAVEN mark + halo on pending card */
-body[data-glow="permission"] .brand-dot {
-  animation: mark-pulse 2.5s ease-in-out infinite;
-}
-
-body[data-glow="permission"] .wordmark {
-  animation: word-pulse 2.5s ease-in-out infinite;
+body[data-glow="permission"] .haven-logo {
+  animation: logo-pulse 2.5s ease-in-out infinite;
 }
 
 body[data-glow="permission"] .pending-card {
   animation: halo-pulse 2.5s ease-in-out infinite;
 }
 
-@keyframes mark-pulse {
-  0%, 100% { box-shadow: 0 0 4px rgba(79, 209, 197, 0.35); }
-  50%      { box-shadow: 0 0 14px 2px rgba(79, 209, 197, 0.65); }
-}
-
-@keyframes word-pulse {
-  0%, 100% { text-shadow: 0 0 0 rgba(79, 209, 197, 0); }
-  50%      { text-shadow: 0 0 14px rgba(79, 209, 197, 0.55); }
+@keyframes logo-pulse {
+  0%, 100% { filter: drop-shadow(0 0 0 rgba(79, 209, 197, 0)); }
+  50%      { filter: drop-shadow(0 0 10px rgba(79, 209, 197, 0.65)); }
 }
 
 @keyframes halo-pulse {
@@ -1346,14 +1368,8 @@ body[data-glow="permission"] .pending-card {
 }
 
 /* critical: amber/red family — never confusable with permission teal */
-body[data-glow="critical"] .brand-dot {
-  background: var(--amber);
-  box-shadow: 0 0 12px 2px rgba(240, 160, 90, 0.6);
-}
-
-body[data-glow="critical"] .wordmark {
-  color: var(--amber);
-  text-shadow: 0 0 14px rgba(240, 160, 90, 0.45);
+body[data-glow="critical"] .haven-logo {
+  filter: drop-shadow(0 0 10px rgba(240, 160, 90, 0.6));
 }
 
 body[data-glow="critical"] .pending-card {
@@ -1363,9 +1379,12 @@ body[data-glow="critical"] .pending-card {
 }
 
 /* completed: brief teal fade-out, then JS returns to idle */
-body[data-glow="completed"] .room-card[data-glow-target],
-body[data-glow="completed"] .brand-dot {
+body[data-glow="completed"] .room-card[data-glow-target] {
   animation: completed-fade 2s ease-out forwards;
+}
+
+body[data-glow="completed"] .haven-logo {
+  animation: logo-completed-fade 2s ease-out forwards;
 }
 
 @keyframes completed-fade {
@@ -1383,15 +1402,14 @@ body[data-glow="completed"] .brand-dot {
 /* listening / interpreting: soft cyan bloom, ambient 4s cadence.
    data-glow is single-valued, so these selectors can never fire while
    permission/critical is active — amber always wins by construction. */
-body[data-glow="listening"] .brand-dot,
-body[data-glow="interpreting"] .brand-dot {
-  background: var(--cyan);
-  animation: cyan-mark-pulse 4s ease-in-out infinite;
+body[data-glow="listening"] .haven-logo,
+body[data-glow="interpreting"] .haven-logo {
+  animation: cyan-logo-pulse 4s ease-in-out infinite;
 }
 
-body[data-glow="listening"] .wordmark,
-body[data-glow="interpreting"] .wordmark {
-  animation: cyan-word-pulse 4s ease-in-out infinite;
+@keyframes logo-completed-fade {
+  0% { filter: drop-shadow(0 0 10px rgba(79, 209, 197, 0.6)); }
+  100% { filter: drop-shadow(0 0 0 rgba(79, 209, 197, 0)); }
 }
 
 body[data-glow="listening"] .haven-rail,
@@ -1399,14 +1417,9 @@ body[data-glow="interpreting"] .haven-rail {
   animation: cyan-rail-halo 4s ease-in-out infinite;
 }
 
-@keyframes cyan-mark-pulse {
-  0%, 100% { box-shadow: 0 0 4px rgba(103, 232, 249, 0.35); }
-  50%      { box-shadow: 0 0 14px 2px rgba(103, 232, 249, 0.55); }
-}
-
-@keyframes cyan-word-pulse {
-  0%, 100% { text-shadow: 0 0 0 rgba(103, 232, 249, 0); }
-  50%      { text-shadow: 0 0 14px rgba(103, 232, 249, 0.45); }
+@keyframes cyan-logo-pulse {
+  0%, 100% { filter: drop-shadow(0 0 0 rgba(103, 232, 249, 0)); }
+  50%      { filter: drop-shadow(0 0 10px rgba(103, 232, 249, 0.55)); }
 }
 
 @keyframes cyan-rail-halo {
@@ -1483,6 +1496,12 @@ body[data-glow="interpreting"] .haven-rail {
   .card-grid {
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   }
+}
+
+@media (max-width: 520px) {
+  .topbar { padding: 0 12px; }
+  .haven-logo-frame { width: 150px; }
+  .brand-sub { display: none; }
 }
 
 /* ---------- trust chain slide-over ---------- */
