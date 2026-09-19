@@ -227,6 +227,14 @@
         <div id="conversation" class="conversation" aria-live="polite"></div>
       </section>
 
+      <section id="search-results-panel" class="search-results-panel" hidden aria-live="polite" aria-label="Search results">
+        <div class="search-results-head">
+          <h3 class="micro">RESULTS</h3>
+          <button id="search-clear" type="button" class="search-clear">Clear</button>
+        </div>
+        <div id="search-results"></div>
+      </section>
+
       <section id="pending-slot"></section>
 
       <div id="mic-wave" class="mic-wave" hidden aria-hidden="true">
@@ -243,8 +251,9 @@
       </div>
 
       <form id="chat-form" class="composer">
-        <input id="chat-input" type="text" placeholder="Ask HAVEN&hellip;" autocomplete="off" spellcheck="false">
-        <button type="submit" aria-label="Send">Send</button>
+        <input id="chat-input" type="text" placeholder="Ask HAVEN or find anything&hellip;" autocomplete="off" spellcheck="false">
+        <button id="chat-submit" type="submit" aria-label="Ask HAVEN">Ask</button>
+        <button id="search-mode" type="button" class="composer-mode" aria-pressed="false">Find</button>
       </form>
     </aside>
 

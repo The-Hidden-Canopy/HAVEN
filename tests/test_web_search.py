@@ -105,6 +105,8 @@ def test_search_finds_a_saved_resource_and_its_related_resource():
     assert ids == {"doc:proposal-v7", "repo:haven"}
     direct = next(h for h in body["hits"] if h["resource_id"] == "doc:proposal-v7")
     assert direct["score"] == 1.0
+    assert direct["resource"]["title"] == "NASA LIVEI proposal v7"
+    assert direct["resource"]["resource_type"] == "document"
     related = next(h for h in body["hits"] if h["resource_id"] == "repo:haven")
     assert related["score"] < 1.0
 

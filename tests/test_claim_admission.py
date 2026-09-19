@@ -117,5 +117,9 @@ def test_correction_supersedes_without_rewriting_the_old_claim():
 
         assert correction.status is AdmissionStatus.ADMITTED
         assert correction.claim.supersedes == (first.claim.claim_id,)
+        assert correction.claim.source_refs == first.claim.source_refs
+        assert correction.claim.source_refs == ("file:proposal.md",)
+        assert all(not ref.startswith("claim:") for ref in correction.claim.source_refs)
+        assert correction.claim.evidence_refs == (first.claim.claim_id, "user:gerron")
         assert store.get(first.claim.claim_id).state is ClaimState.STALE
         assert correction.claim.state is ClaimState.REPORTED

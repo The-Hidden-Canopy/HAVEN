@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import mimetypes
 import os
@@ -11,6 +12,7 @@ import queue
 import re
 import sys
 import time
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -83,8 +85,12 @@ class HavenWebServer(ThreadingHTTPServer):
         data_dir: str | Path | None = None,
         demo: bool = False,
         ha_client=None,
+        session_token: str | None = None,
+        folder_picker=None,
     ) -> None:
         self.static_root = static_root
+        self._session_token = session_token
+        self.folder_picker = folder_picker
         env_root = os.environ.get(_MODELS_ROOT_ENV)
         if env_root:
             resolved_models_root: str | Path = env_root
@@ -308,8 +314,59 @@ class _Handler(BaseHTTPRequestHandler):
     def computer_actions(self) -> ComputerActionService:
         return self.server.computer_actions
 
+    def _authorize_session(self) -> bool:
+        expected = self.server._session_token
+        if expected is None:
+            return True
+        cookies = SimpleCookie()
+        try:
+            cookies.load(self.headers.get("Cookie", ""))
+        except (TypeError, ValueError):
+            cookies = SimpleCookie()
+        actual = cookies.get("haven_session")
+        if actual is not None and hmac.compare_digest(actual.value, expected):
+            return True
+        self._send_json(401, {"ok": False, "error": "HAVEN desktop session required"})
+        return False
+
+    def _handle_desktop_bootstrap(self) -> None:
+        expected = self.server._session_token
+        supplied = parse_qs(urlsplit(self.path).query).get("session", [""])[0]
+        if expected is None or not hmac.compare_digest(supplied, expected):
+            self._send_json(404, {"error": "not found"})
+            return
+        self.send_response(303)
+        self.send_header(
+            "Set-Cookie",
+            f"haven_session={expected}; HttpOnly; SameSite=Strict; Path=/",
+        )
+        self.send_header("Location", "/")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _pick_folder(self) -> None:
+        picker = self.server.folder_picker
+        if picker is None:
+            self._send_json(200, {"ok": False, "error": "native folder picker is available in HAVEN Desktop"})
+            return
+        try:
+            selected = picker()
+        except Exception:
+            self._send_json(200, {"ok": False, "error": "native folder picker is unavailable"})
+            return
+        if not isinstance(selected, str) or not selected.strip():
+            self._send_json(200, {"ok": False, "cancelled": True})
+            return
+        self._send_json(200, {"ok": True, "path": selected.strip()})
+
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
+        if path == "/__desktop_bootstrap":
+            self._handle_desktop_bootstrap()
+            return
+        if not self._authorize_session():
+            return
         if path == "/api/state":
             self._send_json(200, self.director.state())
         elif path == "/api/scheduler":
@@ -357,6 +414,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
+        if not self._authorize_session():
+            return
         if path == "/api/chat":
             body = self._read_json()
             if body is None:
@@ -442,6 +501,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/voice/cancel":
             self._send_json(200, self.director.voice_cancel())
+            return
+        if path == "/api/desktop/pick-folder":
+            self._pick_folder()
             return
         if path == "/api/models/assign":
             body = self._read_json()
@@ -831,6 +893,16 @@ class _Handler(BaseHTTPRequestHandler):
                         "score": hit.score,
                         "reason": hit.reason,
                         "matched_refs": list(hit.matched_refs),
+                        "resource": (
+                            resource_record_to_dict(resource)
+                            if (resource := self.server.resources.get(hit.resource_id)) is not None
+                            else None
+                        ),
+                        "matched_claims": [
+                            self._claim_payload(claim)
+                            for ref in hit.matched_refs
+                            if (claim := self.server.claims.get(ref)) is not None
+                        ],
                     }
                     for hit in hits
                 ],
@@ -1044,11 +1116,13 @@ def make_server(
     data_dir: str | Path | None = None,
     demo: bool = False,
     ha_client=None,
+    session_token: str | None = None,
+    folder_picker=None,
 ) -> tuple[HavenWebServer, HavenApplication]:
     root = Path(static_root) if static_root is not None else Path(__file__).parent / "static"
     server = HavenWebServer(
         ("127.0.0.1", port), root, clock=clock, models_root=models_root, data_dir=data_dir,
-        demo=demo, ha_client=ha_client,
+        demo=demo, ha_client=ha_client, session_token=session_token, folder_picker=folder_picker,
     )
     return server, server.director
 
