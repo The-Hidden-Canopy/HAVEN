@@ -173,7 +173,13 @@ def test_configured_provider_with_missing_token_stays_real_but_unreachable():
     assert director.runtime.execution_providers.is_registered(HA_PROVIDER_ID) is False
 
 
-def test_configured_provider_with_no_base_url_stays_real_but_unreachable():
+def test_bare_provider_kind_with_no_base_url_or_installed_provider_is_unconfigured():
+    """`provider_kind` alone, with no `provider_base_url` and nothing in
+    `installed_providers.json`, is indistinguishable from a fresh install --
+    `connect_provider`/`install_provider_package` never produce this state
+    through real use, and `provider_kind` is no longer trusted on its own
+    (see `any_provider_configured`)."""
+
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         store = SetupConfigStore(data_dir / "haven.json")
@@ -182,9 +188,8 @@ def test_configured_provider_with_no_base_url_stays_real_but_unreachable():
             store=store, model_manager=None, clock=lambda: NOW, ha_client=_FakeHAClient()
         )
 
-    assert director.house is None
-    assert isinstance(director.world, HomeAssistantWorldProvider)
-    assert director.ha_states_source is None
+    assert director.house is not None
+    assert not isinstance(director.world, HomeAssistantWorldProvider)
 
 
 class _FakePhilipsHueProvider:
@@ -304,20 +309,25 @@ def test_a_disabled_installed_provider_is_treated_as_unavailable(monkeypatch):
     assert director.runtime.execution_providers.is_registered("philips_hue") is False
 
 
-def test_unknown_provider_kind_stays_real_but_unreachable():
+def test_an_installed_providers_package_going_missing_stays_real_but_unreachable():
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         store = SetupConfigStore(data_dir / "haven.json")
-        # A provider this composition root has no adapter for at all -- a
-        # community provider (Philips Hue, Google Home, Matter, ...) whose
-        # own package would register an adapter this repo never imports.
-        # This must never quietly become the demo fixture: a household that
-        # has named ANY provider gets its own real, if currently
-        # evidence-less, installation.
-        store.save(SetupConfig(completed=True, data_dir=str(data_dir), provider_kind="philips_hue"))
         (data_dir / _ENROLLED_FILENAME).write_text(
             json.dumps({"version": 2, "manifests": [_enrolled_manifest().to_dict()]}), encoding="utf-8"
         )
+        # A community provider was activated at some point (a real
+        # `installed_providers.json` entry, the way `install_provider_package`
+        # actually writes one), but its package is no longer discoverable in
+        # this Python environment -- uninstalled, or simply not present here.
+        # This must never quietly become the demo fixture: a household that
+        # has ever configured a provider gets its own real, if currently
+        # evidence-less, installation. `provider_kind` is deliberately left
+        # unset -- `install_provider_package` never writes it (see
+        # `any_provider_configured`); `installed_providers.json` alone is
+        # what makes this a real household.
+        store.save(SetupConfig(completed=True, data_dir=str(data_dir)))
+        save_installed_provider(store, provider_id="philips_hue", entry_point_name="philips_hue", config={})
         director = build_application(store=store, model_manager=None, clock=lambda: NOW)
 
     assert director.house is None
@@ -327,6 +337,7 @@ def test_unknown_provider_kind_stays_real_but_unreachable():
     snapshot = director.world.observe(NOW)
     assert snapshot.devices == ()
     assert director.runtime.execution_providers.is_registered(HA_PROVIDER_ID) is False
+    assert director.runtime.execution_providers.is_registered("philips_hue") is False
     # A real household id was minted, not the shared demo fixture id.
     assert director.household_id != HOUSEHOLD_ID
 

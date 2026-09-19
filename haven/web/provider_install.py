@@ -103,6 +103,25 @@ def find_installed_provider(store: SetupConfigStore, provider_id: str) -> Instal
     return None
 
 
+def any_provider_configured(store: SetupConfigStore, *, home_assistant_base_url: str | None) -> bool:
+    """Whether this installation has ever configured ANY provider.
+
+    Deliberately not `SetupConfig.provider_kind is not None`: that field
+    gets overwritten to whatever provider was activated *most recently*
+    (`SetupService.install_provider_package`), so using it as "the"
+    configured-provider signal made connecting Home Assistant and then
+    installing a second provider silently stop wiring Home Assistant back
+    in on the next rebuild -- a household ends up with fewer live providers
+    than it configured, not more. Home Assistant's own dedicated
+    `provider_base_url` field and the installed-providers index are checked
+    independently here, and a household stays "real" (never falls back to
+    the demo fixture) once EITHER has ever been set, regardless of which
+    one a later action touches.
+    """
+
+    return home_assistant_base_url is not None or bool(load_installed_providers(store))
+
+
 def _save_index(store: SetupConfigStore, providers: tuple[InstalledProvider, ...]) -> None:
     _write_json_atomic(
         _index_path(store),

@@ -50,7 +50,7 @@ from haven.providers.world import CompositeObserver
 from .demo import DemoDirector
 from .haven_application import Clock, HavenApplication
 from .history_persist import HistoryStore
-from .provider_install import load_installed_providers, load_installed_provider_config
+from .provider_install import any_provider_configured, load_installed_provider_config, load_installed_providers
 from .rules_persist import RulesPersistence
 from .setup_config import SetupConfig, SetupConfigError, SetupConfigStore, _write_json_atomic
 from .setup_service import (
@@ -109,7 +109,13 @@ def build_provider_composition(
     execution = ExecutionProviderRegistry()
     ha_states_source = None
 
-    if config.provider_kind == HA_PROVIDER_ID and config.provider_base_url:
+    if config.provider_base_url:
+        # Home Assistant's own dedicated field is the signal for whether it
+        # is configured -- never `config.provider_kind`, which a later
+        # `install_provider_package()` call for an unrelated community
+        # provider can overwrite (see `any_provider_configured`'s
+        # docstring). A household that connected Home Assistant keeps it
+        # wired in regardless of what else it later installs.
         token = _read_provider_token(store, config)
         if token is not None:
             adapter = LiveHomeAssistantAdapter(base_url=config.provider_base_url, access_token=token)
@@ -196,10 +202,11 @@ def build_application(
 ) -> HavenApplication:
     """Build the director for this installation.
 
-    Decision table: ``demo=True``, or no provider named yet, builds the demo
-    household (scenario, `SimulatedHouse`, the `gerron` fixture identity).
-    Once a household has named ANY provider, every other case builds the
-    *real* composition -- enrolled devices, declared people, persisted
+    Decision table: ``demo=True``, or no provider ever configured, builds
+    the demo household (scenario, `SimulatedHouse`, the `gerron` fixture
+    identity). Once a household has configured ANY provider -- Home
+    Assistant, or an installed community package -- every other case builds
+    the *real* composition -- enrolled devices, declared people, persisted
     rules, preferences -- with a world and execution registry that are a
     *composite* of every provider this installation has enabled
     (`build_provider_composition`): Home Assistant if configured and
@@ -214,7 +221,7 @@ def build_application(
         config = store.load()
     except SetupConfigError:
         config = SetupConfig()
-    if demo or config.provider_kind is None:
+    if demo or not any_provider_configured(store, home_assistant_base_url=config.provider_base_url):
         return DemoDirector(clock=clock, model_manager=model_manager)
 
     resolved_clock: Clock = clock or (lambda: datetime.now(timezone.utc))

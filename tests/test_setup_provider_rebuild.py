@@ -154,6 +154,41 @@ def test_installing_a_community_provider_package_rebuilds_the_live_director() ->
         assert isinstance(server.director.world, HomeAssistantWorldProvider)
 
 
+def test_connecting_ha_then_installing_a_second_provider_keeps_both_active() -> None:
+    """Regression, through the real user-facing activation path (not a
+    direct `save_installed_provider` call): connecting Home Assistant and
+    then installing a community provider must not make the second provider
+    silently replace the first. `install_provider_package` used to set
+    `provider_kind = manifest.provider_id`, which was the only thing
+    `build_provider_composition` checked to decide whether to wire Home
+    Assistant in at all -- installing Hue after HA used to unplug HA on the
+    next rebuild."""
+
+    ep = metadata.EntryPoint(name="philips_hue", value=f"{__name__}:FAKE_HUE_PLUGIN", group="haven.providers")
+    with tempfile.TemporaryDirectory() as tmp, _boot(Path(tmp)) as (server, port):
+        with patch("haven.integrations.home_assistant.client.urlopen", side_effect=_fake_urlopen):
+            status, body = _post(
+                port,
+                "/api/setup/provider",
+                {"kind": "home_assistant", "base_url": "http://ha.local:8123", "token": "secret-token"},
+            )
+        assert status == 200 and body["ok"] is True
+        assert isinstance(server.director.world, HomeAssistantWorldProvider)
+        assert server.director.runtime.execution_providers.get("home_assistant") is not None
+
+        with patch.object(metadata, "entry_points", lambda *, group: (ep,) if group == "haven.providers" else ()):
+            status, body = _post(port, "/api/setup/providers/install", {"entry_point_name": "philips_hue", "config": {}})
+        assert status == 200 and body["ok"] is True
+
+        # Home Assistant must still be wired in after installing Hue --
+        # the whole point of the fix. (This fixture only implements
+        # observation, not execution, hence no execution_providers check
+        # for it here -- see test_home_assistant_and_a_community_provider_
+        # are_both_active_at_once in test_web_application.py for a fixture
+        # that also implements execute().)
+        assert server.director.runtime.execution_providers.get("home_assistant") is not None
+
+
 def test_skipping_the_provider_after_connecting_rebuilds_back_to_demo() -> None:
     with tempfile.TemporaryDirectory() as tmp, _boot(Path(tmp)) as (server, port):
         with patch("haven.integrations.home_assistant.client.urlopen", side_effect=_fake_urlopen):
