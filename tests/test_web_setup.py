@@ -234,6 +234,32 @@ def test_preferences_validate_bools_and_reflect_in_status() -> None:
             assert body["ok"] is False
 
 
+def test_declaring_a_person_forwards_the_chosen_role() -> None:
+    """The household step's role picker (`personRole.value` in app.js)
+    always posts a `role` -- this used to be silently dropped, so choosing
+    "Owner" in the UI had no effect and a real installation could never
+    satisfy `complete()`'s owner-declared requirement."""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with _boot(str(Path(tmp) / "data")) as (_, _, port):
+            status, body = _post(
+                port, "/api/setup/household/people", {"name": "Gerron Smith", "role": "owner"}
+            )
+            assert status == 200
+            assert body["ok"] is True
+            people = body["setup"]["household"]["people"]
+            assert any(p["name"] == "Gerron Smith" and p["role"] == "owner" for p in people)
+
+
+def test_declaring_a_person_without_a_role_defaults_to_member() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with _boot(str(Path(tmp) / "data")) as (_, _, port):
+            status, body = _post(port, "/api/setup/household/people", {"name": "Riley"})
+            assert status == 200
+            people = body["setup"]["household"]["people"]
+            assert any(p["name"] == "Riley" and p["role"] == "member" for p in people)
+
+
 def test_setup_state_persists_across_server_restarts() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = str(Path(tmp) / "data")

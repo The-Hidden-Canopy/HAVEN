@@ -49,6 +49,16 @@ class ResourceRecord:
     dict for the same immutability discipline every other HAVEN record
     uses, at the cost of a caller doing `dict(record.metadata)` to work
     with it as a mapping.
+
+    `stale` is deliberately a plain bool, not a richer status vocabulary:
+    the only question a resource's persistence needs answered today is
+    "did the provider that produced this still see it as of the most
+    recent reconciled scan" (`ResourceStore.reconcile`) -- a household
+    revoking a folder, or a file simply being deleted, marks its record
+    stale rather than deleting history outright, matching the "preserve
+    history honestly, but don't let it look current" discipline
+    `HomeAssistantWorldProvider`'s own fallback-demotion already applies to
+    a single unreachable device.
     """
 
     resource_id: str
@@ -61,6 +71,7 @@ class ResourceRecord:
     observed_at: datetime
     content_hash: str | None = None
     metadata: tuple[tuple[str, Any], ...] = ()
+    stale: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "resource_id", _require_text(self.resource_id, name="resource_id"))

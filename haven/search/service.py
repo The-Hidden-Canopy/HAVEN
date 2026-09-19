@@ -14,6 +14,18 @@ Combines two signals, neither of which needs an embedding model:
   this is the "ontology-aware retrieval instead of keyword search" the
   life search bar is supposed to be, not a bigger regex.
 
+The expansion pass forwards `query.scope_ids` into `edges_from`/`edges_to`
+themselves, not only as a post-filter on the resource the traversal lands
+on -- a relation recorded in a scope a query cannot see must not be able to
+connect two resources for it, even when both of those resources happen to
+also be visible. Closing the deeper "which scopes can this caller see at
+all" question is still `SearchQuery`'s stated future work
+(`IdentityProvider.memberships()` + authority), not this pass's.
+
+A revoked/deleted resource (`ResourceRecord.stale`) is excluded from every
+result -- direct match or expansion -- unless `query.include_stale` says
+otherwise; see `ResourceStore.reconcile`/`mark_stale_by_locator_prefix`.
+
 Recency, provenance weighting, and embeddings are exactly what a later pass
 can add as more scoring inputs into the same `SearchHit` shape -- this is
 architecture proof, not the ceiling.
@@ -54,7 +66,9 @@ class HavenSearchService:
         hits: dict[str, SearchHit] = dict(direct)
         if self._ontology is not None:
             for hit in tuple(direct.values()):
-                for related_id, predicate, direction in self._related_resource_ids(hit.resource_id):
+                for related_id, predicate, direction in self._related_resource_ids(
+                    hit.resource_id, scope_ids=query.scope_ids
+                ):
                     if related_id in hits:
                         continue
                     related = self._resources.get(related_id)
@@ -85,6 +99,8 @@ class HavenSearchService:
         return self._resources.list_all()
 
     def _passes_filters(self, record, query: SearchQuery) -> bool:
+        if record.stale and not query.include_stale:
+            return False
         if query.scope_ids and record.scope_id not in query.scope_ids:
             return False
         if query.resource_types and record.resource_type not in query.resource_types:
@@ -99,11 +115,11 @@ class HavenSearchService:
                 return _METADATA_MATCH_SCORE, f"matched metadata field {key!r}"
         return None, None
 
-    def _related_resource_ids(self, resource_id: str):
+    def _related_resource_ids(self, resource_id: str, *, scope_ids: tuple[str, ...]):
         assert self._ontology is not None
-        for edge in self._ontology.edges_from(resource_id):
+        for edge in self._ontology.edges_from(resource_id, scope_ids=scope_ids or None):
             yield edge.object, edge.predicate, "from"
-        for edge in self._ontology.edges_to(resource_id):
+        for edge in self._ontology.edges_to(resource_id, scope_ids=scope_ids or None):
             yield edge.subject, edge.predicate, "to"
 
 

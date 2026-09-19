@@ -27,6 +27,11 @@ class SearchQuery:
     scope_ids: tuple[str, ...] = ()
     resource_types: tuple[str, ...] = ()
     limit: int = 20
+    include_stale: bool = False
+    """A resource a provider no longer observes (a revoked folder, a file
+    deleted from disk -- see `ResourceRecord.stale`) stays in the store for
+    history, but must not surface as if it were still current unless a
+    caller explicitly asks to see it."""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "text", _require_text(self.text, name="text"))

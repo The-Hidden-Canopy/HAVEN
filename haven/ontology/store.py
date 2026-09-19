@@ -162,15 +162,41 @@ class OntologyStore:
     def list_by_scope(self, scope_id: str) -> tuple[OntologyAssertion, ...]:
         return self._query("SELECT data FROM assertions WHERE scope_id = ? ORDER BY assertion_id", (scope_id,))
 
-    def edges_from(self, subject: str) -> tuple[OntologyAssertion, ...]:
-        """Every assertion whose `subject` matches -- outgoing edges."""
+    def edges_from(
+        self, subject: str, *, scope_ids: tuple[str, ...] | None = None
+    ) -> tuple[OntologyAssertion, ...]:
+        """Every assertion whose `subject` matches -- outgoing edges.
 
-        return self._query("SELECT data FROM assertions WHERE subject = ? ORDER BY assertion_id", (subject,))
+        `scope_ids`, when given, restricts results to assertions in one of
+        those scopes -- a relation recorded in one scope must never leak
+        into a traversal a caller is running for another. `None` (the
+        default) is unrestricted, matching `SearchQuery`'s own "no scope
+        filter means every scope the caller can see" contract; closing that
+        down to an authority-derived visible-scope set is a future caller's
+        job, not this store's.
+        """
 
-    def edges_to(self, object_: str) -> tuple[OntologyAssertion, ...]:
-        """Every assertion whose `object` matches -- incoming edges."""
+        return self._query_edges("subject", subject, scope_ids)
 
-        return self._query("SELECT data FROM assertions WHERE object = ? ORDER BY assertion_id", (object_,))
+    def edges_to(
+        self, object_: str, *, scope_ids: tuple[str, ...] | None = None
+    ) -> tuple[OntologyAssertion, ...]:
+        """Every assertion whose `object` matches -- incoming edges. See
+        `edges_from` for `scope_ids`."""
+
+        return self._query_edges("object", object_, scope_ids)
+
+    def _query_edges(
+        self, column: str, value: str, scope_ids: tuple[str, ...] | None
+    ) -> tuple[OntologyAssertion, ...]:
+        if not scope_ids:
+            return self._query(f"SELECT data FROM assertions WHERE {column} = ? ORDER BY assertion_id", (value,))
+        placeholders = ", ".join("?" for _ in scope_ids)
+        return self._query(
+            f"SELECT data FROM assertions WHERE {column} = ? AND scope_id IN ({placeholders}) "
+            "ORDER BY assertion_id",
+            (value, *scope_ids),
+        )
 
     def _query(self, sql: str, params: tuple) -> tuple[OntologyAssertion, ...]:
         with self._lock:

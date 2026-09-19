@@ -15,7 +15,9 @@ UTC = timezone.utc
 NOW = datetime(2026, 9, 18, 12, 0, tzinfo=UTC)
 
 
-def _resource(resource_id, title, *, scope_id="project:haven", resource_type="document", metadata=()) -> ResourceRecord:
+def _resource(
+    resource_id, title, *, scope_id="project:haven", resource_type="document", metadata=(), stale=False
+) -> ResourceRecord:
     return ResourceRecord(
         resource_id=resource_id,
         resource_type=resource_type,
@@ -26,6 +28,7 @@ def _resource(resource_id, title, *, scope_id="project:haven", resource_type="do
         capabilities=(),
         observed_at=NOW,
         metadata=metadata,
+        stale=stale,
     )
 
 
@@ -168,3 +171,49 @@ def test_case_insensitive_match():
 
         hits = service.search(SearchQuery(text="nasa report"))
     assert [h.resource_id for h in hits] == ["doc:a"]
+
+
+def test_stale_resources_are_excluded_from_default_search():
+    with tempfile.TemporaryDirectory() as tmp:
+        service, resources, _ = _service(tmp)
+        resources.save(_resource("doc:current", "nasa report"))
+        resources.save(_resource("doc:revoked", "nasa memo", stale=True))
+
+        hits = service.search(SearchQuery(text="nasa"))
+    assert [h.resource_id for h in hits] == ["doc:current"]
+
+
+def test_stale_resources_surface_when_explicitly_requested():
+    with tempfile.TemporaryDirectory() as tmp:
+        service, resources, _ = _service(tmp)
+        resources.save(_resource("doc:revoked", "nasa memo", stale=True))
+
+        hits = service.search(SearchQuery(text="nasa", include_stale=True))
+    assert [h.resource_id for h in hits] == ["doc:revoked"]
+
+
+def test_expansion_does_not_traverse_a_relation_recorded_in_another_scope():
+    """The scope-safety fix: a relation stored in one scope must not
+    influence a search a caller is running scoped to a different one, even
+    when the assertion happens to point at a resource that also lives in
+    the visible scope."""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        service, resources, ontology = _service(tmp)
+        resources.save(_resource("doc:proposal-v7", "NASA LIVEI proposal v7", scope_id="project:haven"))
+        resources.save(_resource("repo:haven", "haven", resource_type="repository", scope_id="project:haven"))
+        ontology.save(_assertion("a1", "repo:haven", predicates.BELONGS_TO, "doc:proposal-v7", scope_id="secret-project"))
+
+        hits = service.search(SearchQuery(text="nasa", scope_ids=("project:haven",)))
+    assert [h.resource_id for h in hits] == ["doc:proposal-v7"]
+
+
+def test_stale_resources_are_excluded_from_ontology_expansion_by_default():
+    with tempfile.TemporaryDirectory() as tmp:
+        service, resources, ontology = _service(tmp)
+        resources.save(_resource("doc:proposal-v7", "NASA LIVEI proposal v7"))
+        resources.save(_resource("repo:haven", "haven", resource_type="repository", stale=True))
+        ontology.save(_assertion("a1", "repo:haven", predicates.BELONGS_TO, "doc:proposal-v7"))
+
+        hits = service.search(SearchQuery(text="nasa"))
+    assert [h.resource_id for h in hits] == ["doc:proposal-v7"]

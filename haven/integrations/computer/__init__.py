@@ -6,6 +6,18 @@ integration in this package (`haven.integrations.bluetooth`,
 household-declared allowed roots, never an inferred default.
 """
 
-from .filesystem import FilesystemProvider, FilesystemProviderConfig, PathOutsideAllowedRoots, PROVIDER_ID
+from .filesystem import (
+    FILESYSTEM_ACTION_RISK,
+    FilesystemProvider,
+    FilesystemProviderConfig,
+    PathOutsideAllowedRoots,
+    PROVIDER_ID,
+)
 
-__all__ = ["FilesystemProvider", "FilesystemProviderConfig", "PROVIDER_ID", "PathOutsideAllowedRoots"]
+__all__ = [
+    "FILESYSTEM_ACTION_RISK",
+    "FilesystemProvider",
+    "FilesystemProviderConfig",
+    "PROVIDER_ID",
+    "PathOutsideAllowedRoots",
+]
