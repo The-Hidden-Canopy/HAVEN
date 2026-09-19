@@ -82,7 +82,10 @@ def test_file_scan_claim_search_and_restart_survive():
 
             status, search = _get(port, "/api/search?q=" + quote("lunar site preparation"))
             assert status == 200
-            assert any(hit["matched_refs"] == [claim_id] for hit in search["hits"])
+            hit = next(hit for hit in search["hits"] if hit["matched_refs"] == [claim_id])
+            assert hit["matched_claims"][0]["proposition"] == (
+                "The proposal concerns lunar site preparation."
+            )
 
         with _boot(data_dir) as (_, port):
             status, body = _get(port, "/api/knowledge/claims")
@@ -181,6 +184,19 @@ def test_knowledge_correction_uses_declared_owner_not_first_member():
             assert status == 200 and body["ok"] is True
             assert "user:gerron" in body["claim"]["evidence_refs"]
             assert "user:bryan" not in body["claim"]["evidence_refs"]
+            expected_source = f"file:{(root / 'notes.txt').resolve().as_posix()}"
+            assert body["claim"]["source_refs"] == [expected_source]
+
+            status, search = _get(
+                port,
+                "/api/search?q=" + quote("owner corrected this statement"),
+            )
+            assert status == 200 and search["ok"] is True
+            assert any(
+                hit["resource_id"] == expected_source
+                and hit["matched_refs"] == [body["claim"]["claim_id"]]
+                for hit in search["hits"]
+            )
 
 
 def test_claims_move_with_data_dir_and_restore_from_backup():

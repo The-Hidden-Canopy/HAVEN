@@ -111,7 +111,12 @@ class ClaimAdmissionService:
             candidate_id=f"correction:{prior.claim_id}:{now.isoformat()}",
             scope_id=prior.scope_id,
             proposition=proposition,
-            source_refs=(f"claim:{prior.claim_id}",),
+            # A correction remains about the same underlying sources.  The
+            # prior claim is already represented in `supersedes` and the
+            # actor/evidence trail below; wrapping its id as a resource-like
+            # source would produce values such as `claim:claim:abc` and make
+            # the corrected claim impossible to resolve back to its source.
+            source_refs=prior.source_refs,
             evidence_refs=(prior.claim_id, f"user:{actor.strip()}"),
             provenance=ClaimProvenance.USER_REPORTED,
             proposed_confidence=1.0,

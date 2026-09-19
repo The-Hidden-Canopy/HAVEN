@@ -1,7 +1,8 @@
 # HAVEN
 
-HAVEN is a local-first household intelligence layer. It is designed to sit
-above Home Assistant and other device protocols, not replace them.
+HAVEN is a local-first assistant for your computer, your information, and the
+connected world around you. Home Assistant and other device protocols are
+providers inside that world, not a separate HAVEN product or mode.
 
 The governing loop is:
 
@@ -70,6 +71,11 @@ does. What exists spans both, including:
   glow state language directly from real `AuthorityDecision` outcomes —
   confirmation-required decisions pulse, evidence problems read as critical,
   and nothing glows on its own;
+- a zero-dependency desktop host (`haven/desktop`) that keeps that same
+  HTML/CSS/JS renderer, starts the loopback server, opens it in a native
+  Edge app window, binds the launch to a fresh HTTP-only session cookie, and
+  exposes the first native capability seam: a Windows folder picker. The
+  browser surface remains available for development and tablet-sized hosts;
 - a voice input surface on that web layer: an honest
   `dormant -> wake -> listening -> interpreting` session with a refractory
   window and interruption, where spoken commands take exactly the same
@@ -311,6 +317,9 @@ haven/
 │   ├── setup_service.py     # the setup wizard: connect a provider, declare people/contexts, enroll devices
 │   ├── server.py            # stdlib HTTP + SSE, static UI, 127.0.0.1 only
 │   └── static/              # zero-build desktop/tablet UI (Navigation | World | HAVEN)
+├── desktop/
+│   ├── shell.py              # native host: loopback server + Edge app window + session
+│   └── folder_picker.py      # Windows native folder selection seam
 └── runtime.py          # narrow orchestration of the vertical slice
 ```
 
@@ -587,6 +596,23 @@ and does not exist there, including Linux/macOS.
   evidence, authority decision, execution attempt, and device result.
 
 ## Run the surface
+
+For the primary Windows desktop host, install the package in the environment
+and run:
+
+```powershell
+python -m haven.desktop
+```
+
+This starts HAVEN on an ephemeral loopback port and opens the existing
+renderer in an Edge app window. The desktop launch gets a fresh per-launch
+session cookie; the local API is not usable without that cookie. The shell
+also enables `Choose folder…` in computer setup, which calls the Windows
+folder picker and sends the selected root through the existing setup and
+`FilesystemProvider` boundary.
+
+The renderer is still available directly when developing or hosting the same
+surface elsewhere:
 
 The local web surface renders a simulated household against the real
 authority engine — no network, credentials, or model required:
