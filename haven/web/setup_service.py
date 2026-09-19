@@ -35,8 +35,8 @@ from ..discovery.models import DiscoveredDevice
 from ..integrations.home_assistant.client import LiveHomeAssistantAdapter
 from ..providers.plugin import ProviderManifest
 from .provider_install import (
-    any_provider_configured,
     find_installed_provider,
+    is_real_installation,
     load_installed_providers,
     remove_installed_provider,
     save_installed_provider,
@@ -533,7 +533,7 @@ class SetupService:
                 "provider": {
                     # Home Assistant's own dedicated field, never
                     # `provider_kind` -- that field no longer means "the"
-                    # active provider (see `any_provider_configured`), and
+                    # active provider (see `is_real_installation`), and
                     # this object is specifically the Home Assistant
                     # connect step's own status, not a household-wide
                     # summary (`list_provider_packages()` covers installed
@@ -615,6 +615,16 @@ class SetupService:
         skip: bool = False,
     ) -> dict:
         if skip:
+            # Disconnecting must not leave the credential behind: a stale
+            # `ha_token.txt` on disk after the household said "forget this
+            # connection" is a real privacy leftover, not a harmless orphan
+            # file, even though nothing in HAVEN would read it once
+            # `provider_token_file` is cleared.
+            if self._config.provider_token_file:
+                try:
+                    (self._config_dir() / self._config.provider_token_file).unlink()
+                except OSError:
+                    pass
             self._config = replace(
                 self._config,
                 provider_kind=None,
@@ -742,7 +752,7 @@ class SetupService:
         )
         # Deliberately never touches `self._config`/`provider_kind`: that
         # field is Home Assistant's own connect step, not "the" active
-        # provider (see `any_provider_configured`'s docstring) -- installing
+        # provider (see `is_real_installation`'s docstring) -- installing
         # a second provider must never look like it silently replaced the
         # first. `installed_providers.json` (just written above) is this
         # provider's own durable "configured" record.
@@ -860,15 +870,18 @@ class SetupService:
         return self.status()
 
     def complete(self) -> dict:
-        # A real provider means real actions are possible once the wizard
-        # closes; a household that has configured one (Home Assistant, or
-        # any installed community provider) must declare a real owner
+        # A real installation means real actions are possible once the
+        # wizard closes; a real household (`is_real_installation`: a
+        # persisted household_id, Home Assistant connected, or any
+        # community provider ever installed) must declare a real owner
         # before that happens, or every governed action would run as
         # whatever fixture identity `DemoDirector` falls back to. A pure
         # demo run (nothing ever configured) has no such requirement -- its
         # fixture identity is the point, not a gap.
-        if any_provider_configured(
-            self._store, home_assistant_base_url=self._config.provider_base_url
+        if is_real_installation(
+            self._store,
+            household_id=self._config.household_id,
+            home_assistant_base_url=self._config.provider_base_url,
         ) and not any(person.role == "owner" for person in self.household.people):
             return {"ok": False, "error": "declare a household owner before finishing setup"}
         self._config = replace(self._config, completed=True)

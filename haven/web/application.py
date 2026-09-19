@@ -50,7 +50,7 @@ from haven.providers.world import CompositeObserver
 from .demo import DemoDirector
 from .haven_application import Clock, HavenApplication
 from .history_persist import HistoryStore
-from .provider_install import any_provider_configured, load_installed_provider_config, load_installed_providers
+from .provider_install import is_real_installation, load_installed_provider_config, load_installed_providers
 from .rules_persist import RulesPersistence
 from .setup_config import SetupConfig, SetupConfigError, SetupConfigStore, _write_json_atomic
 from .setup_service import (
@@ -113,9 +113,9 @@ def build_provider_composition(
         # Home Assistant's own dedicated field is the signal for whether it
         # is configured -- never `config.provider_kind`, which a later
         # `install_provider_package()` call for an unrelated community
-        # provider can overwrite (see `any_provider_configured`'s
-        # docstring). A household that connected Home Assistant keeps it
-        # wired in regardless of what else it later installs.
+        # provider can overwrite (see `is_real_installation`'s docstring).
+        # A household that connected Home Assistant keeps it wired in
+        # regardless of what else it later installs.
         token = _read_provider_token(store, config)
         if token is not None:
             adapter = LiveHomeAssistantAdapter(base_url=config.provider_base_url, access_token=token)
@@ -202,26 +202,30 @@ def build_application(
 ) -> HavenApplication:
     """Build the director for this installation.
 
-    Decision table: ``demo=True``, or no provider ever configured, builds
-    the demo household (scenario, `SimulatedHouse`, the `gerron` fixture
-    identity). Once a household has configured ANY provider -- Home
-    Assistant, or an installed community package -- every other case builds
-    the *real* composition -- enrolled devices, declared people, persisted
-    rules, preferences -- with a world and execution registry that are a
-    *composite* of every provider this installation has enabled
+    Decision table: ``demo=True``, or this installation was never real to
+    begin with (`is_real_installation`: no persisted `household_id`, no
+    Home Assistant connection, nothing ever installed), builds the demo
+    household (scenario, `SimulatedHouse`, the `gerron` fixture identity).
+    Once a household IS real, every other case builds the *real*
+    composition -- enrolled devices, declared people, persisted rules,
+    preferences -- with a world and execution registry that are a
+    *composite* of every provider this installation currently has enabled
     (`build_provider_composition`): Home Assistant if configured and
     reachable, plus every installed community provider that is enabled and
-    can be built right now. A provider that cannot be built degrades only
-    its own contribution -- a household with nothing reachable at all still
-    gets its real registry/declarations/rules, just with no live evidence,
-    never the demo fixture.
+    can be built right now. A provider that cannot be built, or that a
+    household has since disconnected or uninstalled entirely, degrades only
+    its own contribution -- a real household with nothing reachable at all
+    still gets its real registry/declarations/rules, just with no live
+    evidence, never the demo fixture reappearing.
     """
 
     try:
         config = store.load()
     except SetupConfigError:
         config = SetupConfig()
-    if demo or not any_provider_configured(store, home_assistant_base_url=config.provider_base_url):
+    if demo or not is_real_installation(
+        store, household_id=config.household_id, home_assistant_base_url=config.provider_base_url
+    ):
         return DemoDirector(clock=clock, model_manager=model_manager)
 
     resolved_clock: Clock = clock or (lambda: datetime.now(timezone.utc))

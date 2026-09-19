@@ -178,7 +178,7 @@ def test_bare_provider_kind_with_no_base_url_or_installed_provider_is_unconfigur
     `installed_providers.json`, is indistinguishable from a fresh install --
     `connect_provider`/`install_provider_package` never produce this state
     through real use, and `provider_kind` is no longer trusted on its own
-    (see `any_provider_configured`)."""
+    (see `is_real_installation`)."""
 
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
@@ -257,6 +257,47 @@ def test_activated_community_provider_supplies_real_world_and_execution(monkeypa
     assert director.runtime.execution_providers.get("philips_hue") is not None
 
 
+def test_uninstalling_last_provider_never_returns_real_installation_to_demo(monkeypatch):
+    """Regression: `is_real_installation` must not be satisfied by provider
+    signals alone. A household that installed its only provider, was
+    minted a real `household_id`, declared people, and enrolled devices --
+    then uninstalled that provider -- stays real: no live evidence, never
+    the demo fixture reappearing with its fictional `gerron`/garage/camera
+    scenario."""
+
+    fake_entry_point = metadata.EntryPoint(
+        name="philips_hue", value=f"{__name__}:FAKE_HUE_PLUGIN", group="haven.providers"
+    )
+    monkeypatch.setattr(
+        metadata, "entry_points", lambda *, group: (fake_entry_point,) if group == "haven.providers" else ()
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        store = SetupConfigStore(data_dir / "haven.json")
+        store.save(SetupConfig(completed=True, data_dir=str(data_dir), provider_kind="philips_hue"))
+        save_installed_provider(
+            store, provider_id="philips_hue", entry_point_name="philips_hue", config={"bridge_ip": "10.0.0.5"}
+        )
+
+        first = build_application(store=store, model_manager=None, clock=lambda: NOW)
+        assert first.house is None
+        original_household_id = first.household_id
+        assert original_household_id is not None
+
+        from haven.web.provider_install import remove_installed_provider
+
+        remove_installed_provider(store, "philips_hue")
+
+        second = build_application(store=store, model_manager=None, clock=lambda: NOW)
+
+    assert second.house is None
+    assert second.household_id == original_household_id
+    snapshot = second.world.observe(NOW)
+    assert snapshot.devices == ()
+    assert second.runtime.execution_providers.is_registered("philips_hue") is False
+
+
 def test_home_assistant_and_a_community_provider_are_both_active_at_once(monkeypatch):
     """The whole point of the multi-provider composition: connecting Home
     Assistant does not exclude an installed community provider (or vice
@@ -324,7 +365,7 @@ def test_an_installed_providers_package_going_missing_stays_real_but_unreachable
         # has ever configured a provider gets its own real, if currently
         # evidence-less, installation. `provider_kind` is deliberately left
         # unset -- `install_provider_package` never writes it (see
-        # `any_provider_configured`); `installed_providers.json` alone is
+        # `is_real_installation`); `installed_providers.json` alone is
         # what makes this a real household.
         store.save(SetupConfig(completed=True, data_dir=str(data_dir)))
         save_installed_provider(store, provider_id="philips_hue", entry_point_name="philips_hue", config={})
