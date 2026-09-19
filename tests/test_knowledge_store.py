@@ -4,10 +4,13 @@ stale state, restart survival."""
 from __future__ import annotations
 
 import tempfile
+import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from haven.knowledge import Claim, ClaimState, ClaimStore, is_stale
+from haven.knowledge.store import claim_to_dict
 
 UTC = timezone.utc
 NOW = datetime(2026, 9, 18, 12, 0, tzinfo=UTC)
@@ -135,3 +138,25 @@ def test_persists_across_a_restart():
 
         second = ClaimStore(db_path)
         assert second.get("claim-1") == _claim()
+
+
+def test_old_claim_schema_migrates_and_rebuilds_source_indexes():
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "claims.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE claims (claim_id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, data TEXT NOT NULL);
+            CREATE INDEX claims_scope ON claims(scope_id);
+            """
+        )
+        conn.execute(
+            "INSERT INTO claims(claim_id, scope_id, data) VALUES (?, ?, ?)",
+            ("claim-1", "project:haven", json.dumps(claim_to_dict(_claim()))),
+        )
+        conn.commit()
+        conn.close()
+
+        migrated = ClaimStore(db_path)
+        assert migrated.get("claim-1") is not None
+        assert [claim.claim_id for claim in migrated.list_by_source("doc:solicitation")] == ["claim-1"]

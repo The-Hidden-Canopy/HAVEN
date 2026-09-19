@@ -13,7 +13,7 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..models import ModelManager, inspect_folder
 from ..models.jobs import DownloadJobManager, job_to_dict
@@ -34,8 +34,12 @@ from .setup_config import SetupConfigStore, default_data_dir
 from .setup_service import SetupService
 from .computer_actions import ComputerActionService
 from ..actions import ActionLedgerStore
+from ..knowledge import ClaimStore, KnowledgeService
+from ..knowledge.claims import ClaimState
+from ..knowledge.store import claim_fingerprint, claim_to_dict
 from ..ontology import OntologyStore
 from ..resources import ResourceStore
+from ..resources.store import resource_record_to_dict
 from ..search import HavenSearchService, SearchQuery
 
 HEARTBEAT_SECONDS = 15
@@ -53,6 +57,8 @@ _SCHEDULER_ENABLED_PATH = re.compile(r"^/api/scheduler/rules/([^/]+)/enabled$")
 _JOB_DETAIL_PATH = re.compile(r"^/api/models/jobs/([^/]+)$")
 _JOB_CANCEL_PATH = re.compile(r"^/api/models/jobs/([^/]+)/cancel$")
 _CHAIN_PATH = re.compile(r"^/api/actions/([^/]+)/chain$")
+_KNOWLEDGE_CLAIM_PATH = re.compile(r"^/api/knowledge/claims/([^/]+)$")
+_KNOWLEDGE_CLAIM_ACTION_PATH = re.compile(r"^/api/knowledge/claims/([^/]+)/(correct|stale|forget)$")
 
 # Pinned static content types (mimetypes is platform-dependent).
 _STATIC_CONTENT_TYPES = {
@@ -124,7 +130,9 @@ class HavenWebServer(ThreadingHTTPServer):
         # computer-provider scan into it.
         self.resources = ResourceStore(Path(resolved_data_dir) / "resources.db")
         self.ontology = OntologyStore(Path(resolved_data_dir) / "ontology.db")
-        self.search = HavenSearchService(resources=self.resources, ontology=self.ontology)
+        self.claims = ClaimStore(Path(resolved_data_dir) / "claims.db")
+        self.knowledge = KnowledgeService(resources=self.resources, claims=self.claims, clock=clock)
+        self.search = HavenSearchService(resources=self.resources, ontology=self.ontology, claims=self.claims)
         self.action_ledger = ActionLedgerStore(Path(resolved_data_dir) / "action_ledger.db")
         self.setup = SetupService(
             store=self.setup_store,
@@ -133,6 +141,7 @@ class HavenWebServer(ThreadingHTTPServer):
             on_rebuild=self.rebuild_director,
             include_demo_candidates=self._director_demo,
             resource_store=self.resources,
+            knowledge_service=self.knowledge,
         )
         # Authorization + consequence verification in front of
         # `FilesystemProvider.execute()` -- independent of `self.setup`
@@ -225,9 +234,20 @@ class HavenWebServer(ThreadingHTTPServer):
         data_dir = self.setup_store.path.parent
         self.resources = ResourceStore(data_dir / "resources.db")
         self.ontology = OntologyStore(data_dir / "ontology.db")
-        self.search = HavenSearchService(resources=self.resources, ontology=self.ontology)
+        self.claims = ClaimStore(data_dir / "claims.db")
+        self.knowledge = KnowledgeService(resources=self.resources, claims=self.claims, clock=self._director_clock)
+        self.search = HavenSearchService(resources=self.resources, ontology=self.ontology, claims=self.claims)
         self.action_ledger = ActionLedgerStore(data_dir / "action_ledger.db")
+        # These objects hold the installation root themselves; reconstruct
+        # them too, otherwise a data-dir move would rebind the stores while
+        # backup/service actions continued operating on the old directory.
+        self.backups = BackupManager(data_dir=data_dir)
+        self.service = ServiceManager(
+            data_dir=data_dir,
+            port_getter=lambda: self.server_address[1],
+        )
         self.setup.set_resource_store(self.resources)
+        self.setup.set_knowledge_service(self.knowledge)
         self.computer_actions.set_director(new)
         self.computer_actions.set_resource_store(self.resources)
         self.computer_actions.set_ledger(self.action_ledger)
@@ -309,24 +329,30 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "service": self.service.status()})
         elif path == "/api/search":
             self._send_search(parse_qs(urlsplit(self.path).query))
+        elif path == "/api/knowledge/claims":
+            self._send_knowledge_claims(parse_qs(urlsplit(self.path).query))
         elif path == "/api/computer/actions/history":
             self._send_json(200, self.computer_actions.history())
         else:
-            match = _JOB_DETAIL_PATH.match(path)
+            match = _KNOWLEDGE_CLAIM_PATH.match(path)
             if match:
-                self._send_job_detail(match.group(1))
-            elif path == "/api/models/events":
-                self._stream_model_events()
-            elif path == "/events":
-                self._stream_events()
-            elif path == "/api/actions/chain":
-                self._send_event_chain(parse_qs(urlsplit(self.path).query).get("event_id", [""])[0])
+                self._send_knowledge_claim(unquote(match.group(1)))
             else:
-                match = _CHAIN_PATH.match(path)
+                match = _JOB_DETAIL_PATH.match(path)
                 if match:
-                    self._send_action_chain(match.group(1))
+                    self._send_job_detail(match.group(1))
+                elif path == "/api/models/events":
+                    self._stream_model_events()
+                elif path == "/events":
+                    self._stream_events()
+                elif path == "/api/actions/chain":
+                    self._send_event_chain(parse_qs(urlsplit(self.path).query).get("event_id", [""])[0])
                 else:
-                    self._serve_static(path)
+                    match = _CHAIN_PATH.match(path)
+                    if match:
+                        self._send_action_chain(match.group(1))
+                    else:
+                        self._serve_static(path)
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
@@ -433,6 +459,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/computer/actions" or path.startswith("/api/computer/actions/"):
             self._handle_computer_action_post(path)
+            return
+        if path.startswith("/api/knowledge/claims/"):
+            self._handle_knowledge_post(path)
             return
         if path == "/api/system/diagnostics/probe":
             result = self.diagnostics.probe_provider()
@@ -806,6 +835,98 @@ class _Handler(BaseHTTPRequestHandler):
                 ],
             },
         )
+
+    def _claim_payload(self, claim, *, detail: bool = False) -> dict:
+        payload = claim_to_dict(claim)
+        payload["fingerprint"] = claim_fingerprint(claim)
+        if detail:
+            payload["sources"] = [
+                {
+                    "ref": ref,
+                    "resource": (
+                        resource_record_to_dict(resource)
+                        if (resource := self.server.resources.get(ref)) is not None
+                        else None
+                    ),
+                }
+                for ref in claim.source_refs
+            ]
+            payload["contradictions"] = [
+                claim_to_dict(found) for found in self.server.claims.contradictions_of(claim.claim_id)
+            ]
+            payload["superseded_claims"] = [
+                claim_to_dict(found) for found in self.server.claims.supersedes_of(claim.claim_id)
+            ]
+        return payload
+
+    def _send_knowledge_claims(self, params: dict) -> None:
+        scope_id = params.get("scope", [None])[0] or None
+        state_value = params.get("state", [None])[0] or None
+        include_stale = params.get("include_stale", ["false"])[0].strip().lower() in ("1", "true", "yes")
+        try:
+            state = ClaimState(state_value) if state_value else None
+        except ValueError:
+            self._send_json(400, {"ok": False, "error": f"unknown claim state: {state_value}"})
+            return
+        claims = self.server.knowledge.list_claims(scope_id=scope_id, include_stale=include_stale)
+        if state is not None:
+            claims = tuple(claim for claim in claims if claim.state is state)
+        try:
+            limit = max(1, min(200, int(params.get("limit", ["50"])[0])))
+        except ValueError:
+            limit = 50
+        self._send_json(200, {"ok": True, "claims": [self._claim_payload(claim) for claim in claims[:limit]]})
+
+    def _send_knowledge_claim(self, claim_id: str) -> None:
+        claim = self.server.claims.get(claim_id)
+        if claim is None:
+            self._send_json(404, {"ok": False, "error": "unknown claim"})
+            return
+        self._send_json(200, {"ok": True, "claim": self._claim_payload(claim, detail=True)})
+
+    def _handle_knowledge_post(self, path: str) -> None:
+        match = _KNOWLEDGE_CLAIM_ACTION_PATH.match(path)
+        if match is None:
+            self._send_json(404, {"ok": False, "error": "not found"})
+            return
+        body = self._read_json(optional=True)
+        if body is None:
+            return
+        claim_id, action = (unquote(value) for value in match.groups())
+        claim = self.server.claims.get(claim_id)
+        if claim is None:
+            self._send_json(404, {"ok": False, "error": "unknown claim"})
+            return
+        # Never trust an actor id supplied in the request body. Knowledge
+        # changes are owner-bound just like governed actions; the running
+        # household's declared principal is the only actor source.
+        if not getattr(self.director, "has_declared_owner", False):
+            self._send_json(400, {"ok": False, "error": "a declared owner is required for knowledge changes"})
+            return
+        principal = getattr(self.director, "resident", None)
+        actor = getattr(principal, "actor_id", None)
+        if not isinstance(actor, str) or not actor.strip() or actor == "no_owner_declared":
+            self._send_json(400, {"ok": False, "error": "a declared owner is required for knowledge changes"})
+            return
+        if action == "correct":
+            proposition = body.get("proposition")
+            if not isinstance(proposition, str) or not proposition.strip():
+                self._send_json(400, {"ok": False, "error": "a non-empty 'proposition' is required"})
+                return
+            result = self.server.knowledge.correct_claim(
+                claim_id, proposition=proposition, actor=actor.strip()
+            )
+            if result.claim is None:
+                self._send_json(400, {"ok": False, "error": result.reason or "correction rejected"})
+                return
+            self._send_json(200, {"ok": True, "claim": self._claim_payload(result.claim)})
+            return
+        if action == "stale":
+            changed = self.server.knowledge.mark_claim_stale(claim_id)
+            self._send_json(200, {"ok": True, "changed": changed, "claim": self._claim_payload(self.server.claims.get(claim_id))})
+            return
+        self.server.knowledge.forget_claim(claim, forgotten_by=actor.strip())
+        self._send_json(200, {"ok": True, "claim": self._claim_payload(self.server.claims.get(claim_id))})
 
     def _start_download(self, url: str) -> None:
         job_id = self.model_jobs.start(url)

@@ -4,7 +4,7 @@
 `BackupManager` (copying it into a timestamped snapshot) both need the same
 answer to "what files belong to this installation" -- and until this
 module existed, each kept its own hardcoded tuple, so a new sidecar
-(`resources.db`, `ontology.db`, `computer_provider.json`,
+(`resources.db`, `ontology.db`, `claims.db`, `computer_provider.json`,
 `installed_providers.json`, and per-provider `provider_<id>_config.json`/
 `provider_<id>_secrets.json` files) could ship in one and silently never
 reach the other. One list, both consumers -- adding a new sidecar
@@ -29,6 +29,7 @@ _FIXED_NAMES = (
     "history.db",
     "resources.db",
     "ontology.db",
+    "claims.db",
     "action_ledger.db",
     "computer_provider.json",
     "installed_providers.json",

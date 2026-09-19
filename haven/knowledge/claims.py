@@ -1,7 +1,8 @@
 """`Claim`: a proposition HAVEN believes, with provenance and a belief state.
 
-Contract only -- no admission policy, no store, no persistence yet. This is
-deliberately not the same thing as `haven.core.domain`'s evidence types
+Contract only -- admission policy and persistence live in the neighboring
+knowledge modules. This is deliberately not the same thing as
+`haven.core.domain`'s evidence types
 (`PresenceState`/`ContextState`/`DeviceState`): those are the governed
 home loop's own fail-closed evidence, read by `AuthorityEngine` to decide
 whether an action may run right now. A `Claim` is knowledge for the "life"
@@ -46,6 +47,22 @@ class ClaimState(str, Enum):
     UNAVAILABLE = "unavailable"
 
 
+class ClaimProvenance(str, Enum):
+    """What kind of source proposed a claim.
+
+    Provenance is intentionally separate from :class:`ClaimState`: a
+    document can report a proposition without HAVEN having observed the
+    proposition's real-world truth, and a model can infer one only from
+    evidence supplied to it. The admission boundary owns the mapping from
+    this vocabulary to a belief state.
+    """
+
+    DIRECT_OBSERVATION = "direct_observation"
+    USER_REPORTED = "user_reported"
+    DOCUMENT_STATED = "document_stated"
+    MODEL_INFERRED = "model_inferred"
+
+
 @dataclass(frozen=True)
 class Claim:
     """One believed proposition, scoped, sourced, and possibly superseded.
@@ -68,6 +85,7 @@ class Claim:
     created_at: datetime
     valid_until: datetime | None = None
     confidence: float = 1.0
+    provenance: ClaimProvenance = ClaimProvenance.USER_REPORTED
     supersedes: tuple[str, ...] = ()
     contradicts: tuple[str, ...] = ()
 
@@ -84,6 +102,8 @@ class Claim:
             object.__setattr__(self, "valid_until", require_aware_utc(self.valid_until, name="valid_until"))
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError("confidence must be between 0.0 and 1.0")
+        if not isinstance(self.provenance, ClaimProvenance):
+            raise ValueError("provenance must be a ClaimProvenance")
         object.__setattr__(self, "supersedes", tuple(self.supersedes))
         object.__setattr__(self, "contradicts", tuple(self.contradicts))
 
@@ -104,4 +124,4 @@ def is_stale(claim: Claim, *, now: datetime) -> bool:
     return claim.valid_until is not None and now > claim.valid_until
 
 
-__all__ = ["Claim", "ClaimState", "is_stale"]
+__all__ = ["Claim", "ClaimProvenance", "ClaimState", "is_stale"]

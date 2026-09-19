@@ -1,7 +1,7 @@
 """`SearchQuery`/`SearchHit`: the "life search bar"'s contract, not its engine.
 
-Contract only -- no index, no ranking, no service yet. Deliberately shaped
-so a real implementation is not required to be keyword search: `text` is
+Contract for the search service. Deliberately shaped so the implementation is
+not required to be keyword search: `text` is
 one input among several a ranking pass could combine with recency,
 `haven.ontology` relationships, `haven.knowledge` claims, resource type
 filters, and scope membership -- optional embeddings are ranking machinery
