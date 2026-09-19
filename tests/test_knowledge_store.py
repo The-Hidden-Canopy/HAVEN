@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from haven.knowledge import Claim, ClaimState, ClaimStore, is_stale
-from haven.knowledge.store import claim_to_dict
+from haven.knowledge.store import claim_fingerprint, claim_to_dict
 
 UTC = timezone.utc
 NOW = datetime(2026, 9, 18, 12, 0, tzinfo=UTC)
@@ -72,6 +72,17 @@ def test_provenance_round_trips_source_and_evidence_refs():
         loaded = store.get("claim-1")
     assert loaded.source_refs == ("doc:solicitation", "conversation:call-1")
     assert loaded.evidence_refs == ("evidence:1",)
+
+
+def test_indexed_fingerprint_and_source_lookups_do_not_scan_all_claims():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ClaimStore(Path(tmp) / "claims.db")
+        claim = _claim()
+        store.save(claim)
+        store.list_all = lambda: (_ for _ in ()).throw(AssertionError("indexed lookup must not scan all claims"))
+
+        assert store.find_by_fingerprint(claim_fingerprint(claim)) == claim
+        assert store.list_by_source("doc:solicitation") == (claim,)
 
 
 def test_contradictions_of_resolves_the_actual_conflicting_claims():

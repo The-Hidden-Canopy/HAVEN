@@ -260,14 +260,42 @@ class ClaimStore:
         )
 
     def list_by_source(self, source_ref: str) -> tuple[Claim, ...]:
-        return tuple(claim for claim in self.list_all() if source_ref in claim.source_refs)
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT c.data FROM claims AS c "
+                    "JOIN claim_sources AS s ON s.claim_id = c.claim_id "
+                    "WHERE s.source_ref = ? ORDER BY c.claim_id",
+                    (source_ref,),
+                ).fetchall()
+            finally:
+                conn.close()
+        claims: list[Claim] = []
+        for (raw,) in rows:
+            try:
+                claims.append(claim_from_dict(json.loads(raw)))
+            except (ValueError, TypeError, json.JSONDecodeError):
+                continue
+        return tuple(claims)
 
     def list_current_by_scope(self, scope_id: str, *, now: datetime) -> tuple[Claim, ...]:
         return tuple(claim for claim in self.list_by_scope(scope_id) if not is_stale(claim, now=now))
 
     def find_by_fingerprint(self, fingerprint: str, *, include_stale: bool = False) -> Claim | None:
-        for claim in self.list_all():
-            if claim_fingerprint(claim) != fingerprint:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT data FROM claims WHERE fingerprint = ? ORDER BY claim_id",
+                    (fingerprint,),
+                ).fetchall()
+            finally:
+                conn.close()
+        for (raw,) in rows:
+            try:
+                claim = claim_from_dict(json.loads(raw))
+            except (ValueError, TypeError, json.JSONDecodeError):
                 continue
             if not include_stale and claim.state is ClaimState.STALE:
                 continue

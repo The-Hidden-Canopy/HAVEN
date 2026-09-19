@@ -148,6 +148,41 @@ def test_knowledge_changes_require_a_declared_owner():
             assert "owner" in body["error"]
 
 
+def test_knowledge_correction_uses_declared_owner_not_first_member():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "Documents"
+        root.mkdir()
+        (root / "notes.txt").write_text("A source statement.\n", encoding="utf-8")
+        data_dir = Path(tmp) / "data"
+
+        with _boot(data_dir) as (_, port):
+            assert _post(port, "/api/setup/computer/roots", {"path": str(root)})[1]["ok"]
+            assert _post(port, "/api/setup/computer", {"enabled": True})[1]["ok"]
+            # The first declared person is only a member. The owner arrives
+            # later, so this catches accidental use of `director.resident`.
+            assert _post(
+                port,
+                "/api/setup/household/people",
+                {"name": "Bryan", "role": "member"},
+            )[1]["ok"]
+            assert _post(
+                port,
+                "/api/setup/household/people",
+                {"name": "Gerron", "role": "owner"},
+            )[1]["ok"]
+            assert _post(port, "/api/setup/computer/scan", {})[1]["ok"]
+            claim_id = _get(port, "/api/knowledge/claims")[1]["claims"][0]["claim_id"]
+
+            status, body = _post(
+                port,
+                f"/api/knowledge/claims/{quote(claim_id, safe='')}/correct",
+                {"proposition": "The owner corrected this statement."},
+            )
+            assert status == 200 and body["ok"] is True
+            assert "user:gerron" in body["claim"]["evidence_refs"]
+            assert "user:bryan" not in body["claim"]["evidence_refs"]
+
+
 def test_claims_move_with_data_dir_and_restore_from_backup():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "Documents"
