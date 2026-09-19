@@ -47,6 +47,7 @@ from haven.models import ModelManager
 from haven.perception.observation import ObservationProvider
 from haven.providers.world import CompositeObserver
 
+from .computer_provider import load_computer_provider_config
 from .demo import DemoDirector
 from .haven_application import Clock, HavenApplication
 from .history_persist import HistoryStore
@@ -224,7 +225,10 @@ def build_application(
     except SetupConfigError:
         config = SetupConfig()
     if demo or not is_real_installation(
-        store, household_id=config.household_id, home_assistant_base_url=config.provider_base_url
+        store,
+        household_id=config.household_id,
+        home_assistant_base_url=config.provider_base_url,
+        computer_provider_enabled=load_computer_provider_config(store).enabled,
     ):
         return DemoDirector(clock=clock, model_manager=model_manager)
 

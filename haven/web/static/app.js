@@ -1657,6 +1657,79 @@ function makeSetupPref(container, key, label, detail, checked) {
   return row;
 }
 
+function renderSetupComputerAccess(container) {
+  const computer = setupObj().computer || {};
+  const roots = Array.isArray(computer.allowed_roots) ? computer.allowed_roots : [];
+
+  container.appendChild(setupMicroHeading('Computer access'));
+  container.appendChild(setupText(
+    'HAVEN can index files and folders you choose — for search, recall, ' +
+    'and (later) organizing them — the same way it indexes home devices.'));
+  container.appendChild(setupText('Nothing is read until you add a folder and turn this on.'));
+
+  if (!roots.length) {
+    container.appendChild(setupText('No folders added yet.'));
+  }
+  for (const root of roots) {
+    container.appendChild(makeSetupHouseholdRow(
+      root, '', '/api/setup/computer/roots/remove', 'path', root));
+  }
+
+  const form = document.createElement('form');
+  form.className = 'setup-provider-form';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'folder path, e.g. C:\\Users\\you\\Documents';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  const addBtn = document.createElement('button');
+  addBtn.type = 'submit';
+  addBtn.textContent = 'Add folder';
+  form.appendChild(input);
+  form.appendChild(addBtn);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await setupPost('/api/setup/computer/roots', { path: input.value.trim() });
+    input.value = '';
+  });
+  container.appendChild(form);
+
+  const enableRow = document.createElement('label');
+  enableRow.className = 'pending-auto setup-pref';
+  const enableBox = document.createElement('input');
+  enableBox.type = 'checkbox';
+  enableBox.checked = computer.enabled === true;
+  enableBox.disabled = !roots.length;
+  enableBox.addEventListener('change', async () => {
+    await setupPost('/api/setup/computer', { enabled: enableBox.checked });
+  });
+  enableRow.appendChild(enableBox);
+  const enableText = document.createElement('span');
+  enableText.className = 'setup-pref-text';
+  const enableName = document.createElement('span');
+  enableName.textContent = 'Enable computer access';
+  const enableSub = document.createElement('span');
+  enableSub.className = 'muted';
+  enableSub.textContent = roots.length
+    ? 'Scans the folders above so HAVEN can search and recall them.'
+    : 'Add a folder above first.';
+  enableText.appendChild(enableName);
+  enableText.appendChild(enableSub);
+  enableRow.appendChild(enableText);
+  container.appendChild(enableRow);
+
+  if (computer.enabled === true) {
+    const scanBtn = document.createElement('button');
+    scanBtn.type = 'button';
+    scanBtn.className = 'btn';
+    scanBtn.textContent = 'Scan now';
+    scanBtn.addEventListener('click', async () => {
+      await setupPost('/api/setup/computer/scan', {});
+    });
+    container.appendChild(scanBtn);
+  }
+}
+
 function renderSetupPreferences(container) {
   const prefs = setupObj().preferences || {};
   container.appendChild(makeSetupPref(
@@ -1671,6 +1744,7 @@ function renderSetupPreferences(container) {
     'separate from whichever model you use.',
     prefs.intelligence === true));
   container.appendChild(setupText('Models can be installed or connected later.'));
+  renderSetupComputerAccess(container);
 }
 
 /* --- step 7: finish --- */

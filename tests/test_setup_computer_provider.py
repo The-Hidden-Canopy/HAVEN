@@ -1,0 +1,140 @@
+"""SetupService's computer/filesystem provider endpoints: enable, name
+allowed folders, scan -- the setup-wizard-facing half of
+`haven.integrations.computer.FilesystemProvider`.
+"""
+
+from __future__ import annotations
+
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+from haven.resources import ResourceStore
+from haven.web.computer_provider import load_computer_provider_config
+from haven.web.demo import DemoDirector
+from haven.web.setup_config import SetupConfigStore
+from haven.web.setup_service import SetupService
+
+UTC = timezone.utc
+NOW = datetime(2026, 9, 19, 12, 0, tzinfo=UTC)
+
+
+def _service(data_dir: Path, *, resource_store=None) -> SetupService:
+    store = SetupConfigStore(data_dir / "haven.json")
+    return SetupService(
+        store=store, director=DemoDirector(clock=lambda: NOW), clock=lambda: NOW, resource_store=resource_store
+    )
+
+
+def test_computer_status_defaults_to_disabled():
+    with tempfile.TemporaryDirectory() as tmp:
+        service = _service(Path(tmp))
+        status = service.status()
+    assert status["setup"]["computer"] == {"enabled": False, "allowed_roots": [], "read_only": False}
+
+
+def test_enabling_without_any_allowed_root_is_refused():
+    with tempfile.TemporaryDirectory() as tmp:
+        service = _service(Path(tmp))
+        result = service.set_computer_provider_enabled(enabled=True)
+    assert result["ok"] is False
+    assert "allowed folder" in result["error"]
+
+
+def test_add_root_requires_a_real_existing_folder():
+    with tempfile.TemporaryDirectory() as tmp:
+        service = _service(Path(tmp))
+        result = service.add_computer_provider_root(path=str(Path(tmp) / "does-not-exist"))
+    assert result["ok"] is False
+    assert "not a folder" in result["error"]
+
+
+def test_add_root_then_enable_round_trips_through_status():
+    with tempfile.TemporaryDirectory() as tmp:
+        allowed = Path(tmp) / "Documents"
+        allowed.mkdir()
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+        service = _service(data_dir)
+
+        add_result = service.add_computer_provider_root(path=str(allowed))
+        assert add_result["ok"] is True
+        assert str(allowed.resolve()) in add_result["setup"]["computer"]["allowed_roots"]
+
+        enable_result = service.set_computer_provider_enabled(enabled=True)
+        assert enable_result["ok"] is True
+        assert enable_result["setup"]["computer"]["enabled"] is True
+
+
+def test_adding_the_same_root_twice_is_a_no_op():
+    with tempfile.TemporaryDirectory() as tmp:
+        allowed = Path(tmp) / "Documents"
+        allowed.mkdir()
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+        service = _service(data_dir)
+
+        service.add_computer_provider_root(path=str(allowed))
+        result = service.add_computer_provider_root(path=str(allowed))
+    assert result["setup"]["computer"]["allowed_roots"] == [str(allowed.resolve())]
+
+
+def test_removing_the_last_root_automatically_disables():
+    with tempfile.TemporaryDirectory() as tmp:
+        allowed = Path(tmp) / "Documents"
+        allowed.mkdir()
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+        service = _service(data_dir)
+        service.add_computer_provider_root(path=str(allowed))
+        service.set_computer_provider_enabled(enabled=True)
+
+        result = service.remove_computer_provider_root(path=str(allowed.resolve()))
+    assert result["setup"]["computer"]["enabled"] is False
+    assert result["setup"]["computer"]["allowed_roots"] == []
+
+
+def test_scan_without_being_enabled_fails_cleanly():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+        store = ResourceStore(data_dir / "resources.db")
+        service = _service(data_dir, resource_store=store)
+
+        result = service.scan_computer_provider()
+    assert result["ok"] is False
+
+
+def test_scan_persists_real_resources_into_the_store():
+    with tempfile.TemporaryDirectory() as tmp:
+        allowed = Path(tmp) / "Documents"
+        allowed.mkdir()
+        (allowed / "notes.txt").write_text("hello")
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+        store = ResourceStore(data_dir / "resources.db")
+        service = _service(data_dir, resource_store=store)
+        service.add_computer_provider_root(path=str(allowed))
+        service.set_computer_provider_enabled(enabled=True)
+
+        result = service.scan_computer_provider()
+
+        assert result["ok"] is True
+        assert result["scanned"] >= 2  # the folder itself plus notes.txt
+        saved = store.list_all()
+        assert any(r.title == "notes.txt" for r in saved)
+
+
+def test_config_survives_a_fresh_setup_service_over_the_same_directory():
+    with tempfile.TemporaryDirectory() as tmp:
+        allowed = Path(tmp) / "Documents"
+        allowed.mkdir()
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+        service = _service(data_dir)
+        service.add_computer_provider_root(path=str(allowed))
+        service.set_computer_provider_enabled(enabled=True)
+
+        reloaded = load_computer_provider_config(SetupConfigStore(data_dir / "haven.json"))
+    assert reloaded.enabled is True
+    assert reloaded.allowed_roots == (str(allowed.resolve()),)

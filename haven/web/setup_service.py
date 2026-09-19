@@ -34,6 +34,12 @@ from ..discovery.enrollment import enroll_device
 from ..discovery.models import DiscoveredDevice
 from ..integrations.home_assistant.client import LiveHomeAssistantAdapter
 from ..providers.plugin import ProviderManifest
+from .computer_provider import (
+    ComputerProviderConfig,
+    build_filesystem_provider,
+    load_computer_provider_config,
+    save_computer_provider_config,
+)
 from .provider_install import (
     find_installed_provider,
     is_real_installation,
@@ -471,6 +477,7 @@ class SetupService:
         ha_states_source=None,
         on_rebuild: Callable[[], None] | None = None,
         include_demo_candidates: bool = False,
+        resource_store=None,
     ) -> None:
         self._store = store
         self._director = director
@@ -478,6 +485,10 @@ class SetupService:
         # Structural: anything with `fetch_states() -> tuple[dict, ...]`, the
         # same contract `LiveHomeAssistantAdapter` implements.
         self._ha_states_source = ha_states_source
+        # The "life search bar" substrate's own resource store -- optional
+        # so a bare `SetupService` (most tests) never needs one just to
+        # exercise the parts of setup that have nothing to do with it.
+        self._resource_store = resource_store
         # Called after a step changes provider connection, so the composition
         # root can rebuild the live household from the config this step just
         # saved instead of leaving the running app on whatever it built at
@@ -548,6 +559,7 @@ class SetupService:
                     else [],
                     "enrolled": list(self._enrolled.values()),
                 },
+                "computer": self._computer_provider_payload(),
                 "preferences": {
                     "voice": config.voice_enabled,
                     "intelligence": config.intelligence_enabled,
@@ -882,6 +894,7 @@ class SetupService:
             self._store,
             household_id=self._config.household_id,
             home_assistant_base_url=self._config.provider_base_url,
+            computer_provider_enabled=load_computer_provider_config(self._store).enabled,
         ) and not any(person.role == "owner" for person in self.household.people):
             return {"ok": False, "error": "declare a household owner before finishing setup"}
         self._config = replace(self._config, completed=True)
@@ -896,6 +909,72 @@ class SetupService:
         if error is not None:
             return {"ok": False, "error": error}
         return self.status()
+
+    # -- computer/filesystem provider --------------------------------------
+
+    def _computer_provider_payload(self) -> dict:
+        config = load_computer_provider_config(self._store)
+        return {"enabled": config.enabled, "allowed_roots": list(config.allowed_roots), "read_only": config.read_only}
+
+    def set_computer_provider_enabled(self, *, enabled: bool, read_only: bool | None = None) -> dict:
+        if not isinstance(enabled, bool):
+            return {"ok": False, "error": "'enabled' must be a boolean"}
+        current = load_computer_provider_config(self._store)
+        if enabled and not current.allowed_roots:
+            return {"ok": False, "error": "add at least one allowed folder before enabling computer access"}
+        updated = replace(current, enabled=enabled, read_only=current.read_only if read_only is None else read_only)
+        save_computer_provider_config(self._store, updated)
+        self._trigger_rebuild()
+        return self.status()
+
+    def add_computer_provider_root(self, *, path: str | None) -> dict:
+        if not isinstance(path, str) or not path.strip():
+            return {"ok": False, "error": "a non-empty 'path' is required"}
+        candidate = Path(path.strip())
+        if not candidate.is_dir():
+            return {"ok": False, "error": f"not a folder this machine can see: {candidate}"}
+        resolved = str(candidate.resolve())
+        current = load_computer_provider_config(self._store)
+        if resolved in current.allowed_roots:
+            return self.status()
+        updated = replace(current, allowed_roots=current.allowed_roots + (resolved,))
+        save_computer_provider_config(self._store, updated)
+        self._trigger_rebuild()
+        return self.status()
+
+    def remove_computer_provider_root(self, *, path: str | None) -> dict:
+        if not isinstance(path, str) or not path.strip():
+            return {"ok": False, "error": "a non-empty 'path' is required"}
+        current = load_computer_provider_config(self._store)
+        remaining = tuple(root for root in current.allowed_roots if root != path)
+        # Disabling automatically once nothing is left to read is the honest
+        # move here, not an error: a household removing its last folder
+        # clearly means "stop", not "keep scanning nothing".
+        updated = replace(current, allowed_roots=remaining, enabled=current.enabled and bool(remaining))
+        save_computer_provider_config(self._store, updated)
+        self._trigger_rebuild()
+        return self.status()
+
+    def scan_computer_provider(self) -> dict:
+        """Observe every allowed folder right now and persist what it finds
+        into the resource store this installation's search bar reads from.
+
+        Deliberately synchronous and on-demand -- the same one-shot,
+        caller-controls-the-cadence shape `HomeAssistantObserver.observe()`
+        already uses -- rather than a background poller this module would
+        have to manage the lifecycle of.
+        """
+
+        config = load_computer_provider_config(self._store)
+        provider = build_filesystem_provider(config, scope_id=self._director.household_id)
+        if provider is None:
+            return {"ok": False, "error": "computer access is not enabled, or no allowed folder is reachable"}
+        if self._resource_store is None:
+            return {"ok": False, "error": "no resource store is attached to this installation"}
+        records = provider.observe()
+        for record in records:
+            self._resource_store.save(record)
+        return {"ok": True, "scanned": len(records)}
 
     def declare_person(
         self, *, name: str, entity_id: str | None = None, room_id: str | None = None, role: str = "member"

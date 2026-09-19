@@ -32,6 +32,9 @@ from .receipts_api import action_chain, event_action_id
 from .service_manager import ServiceManager
 from .setup_config import SetupConfigStore, default_data_dir
 from .setup_service import SetupService
+from ..ontology import OntologyStore
+from ..resources import ResourceStore
+from ..search import HavenSearchService, SearchQuery
 
 HEARTBEAT_SECONDS = 15
 
@@ -112,12 +115,21 @@ class HavenWebServer(ThreadingHTTPServer):
         # manager, so a model loaded in the UI is a model the demo can speak
         # with.
         self.director = self._build_director()
+        # The "life search bar" substrate: independent of the household loop
+        # above, the same way `self.models`/`self.backups` are their own
+        # subsystems rather than something the governed home loop owns.
+        # Built before `self.setup` so the setup service can persist a real
+        # computer-provider scan into it.
+        self.resources = ResourceStore(Path(resolved_data_dir) / "resources.db")
+        self.ontology = OntologyStore(Path(resolved_data_dir) / "ontology.db")
+        self.search = HavenSearchService(resources=self.resources, ontology=self.ontology)
         self.setup = SetupService(
             store=self.setup_store,
             director=self.director,
             clock=clock,
             on_rebuild=self.rebuild_director,
             include_demo_candidates=self._director_demo,
+            resource_store=self.resources,
         )
         # Diagnostics reads through the server itself; backups own the
         # `backups/` subtree of the same single-root data dir.
@@ -237,6 +249,10 @@ class _Handler(BaseHTTPRequestHandler):
     def service(self) -> ServiceManager:
         return self.server.service
 
+    @property
+    def search(self) -> HavenSearchService:
+        return self.server.search
+
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/api/state":
@@ -257,6 +273,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "backups": self.backups.list()["backups"]})
         elif path == "/api/system/service":
             self._send_json(200, {"ok": True, "service": self.service.status()})
+        elif path == "/api/search":
+            self._send_search(parse_qs(urlsplit(self.path).query))
         else:
             match = _JOB_DETAIL_PATH.match(path)
             if match:
@@ -418,6 +436,9 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/setup/reopen":
             self._send_json(200, setup.reopen())
             return
+        if path == "/api/setup/computer/scan":
+            self._send_setup_result(setup.scan_computer_provider())
+            return
         body = self._read_json(optional=True)
         if body is None:
             return
@@ -434,6 +455,16 @@ class _Handler(BaseHTTPRequestHandler):
             )
         elif path == "/api/setup/providers/uninstall":
             result = setup.uninstall_provider_package(provider_id=body.get("provider_id"))
+        elif path == "/api/setup/computer":
+            read_only = body.get("read_only")
+            result = setup.set_computer_provider_enabled(
+                enabled=bool(body.get("enabled", False)),
+                read_only=bool(read_only) if isinstance(read_only, bool) else None,
+            )
+        elif path == "/api/setup/computer/roots":
+            result = setup.add_computer_provider_root(path=body.get("path"))
+        elif path == "/api/setup/computer/roots/remove":
+            result = setup.remove_computer_provider_root(path=body.get("path"))
         elif path == "/api/setup/provider":
             kind = body.get("kind")
             base_url = body.get("base_url")
@@ -674,6 +705,37 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": False, "error": f"unknown or non-action event: {event_id}"})
             return
         self._send_action_chain(action_id)
+
+    def _send_search(self, params: dict) -> None:
+        text = params.get("q", [""])[0].strip()
+        if not text:
+            self._send_json(200, {"ok": False, "error": "a non-empty 'q' query parameter is required"})
+            return
+        scope_ids = tuple(v for v in params.get("scope", []) if v)
+        resource_types = tuple(v for v in params.get("type", []) if v)
+        try:
+            limit = int(params.get("limit", ["20"])[0])
+        except ValueError:
+            limit = 20
+        if limit <= 0:
+            limit = 20
+        query = SearchQuery(text=text, scope_ids=scope_ids, resource_types=resource_types, limit=limit)
+        hits = self.search.search(query)
+        self._send_json(
+            200,
+            {
+                "ok": True,
+                "hits": [
+                    {
+                        "resource_id": hit.resource_id,
+                        "score": hit.score,
+                        "reason": hit.reason,
+                        "matched_refs": list(hit.matched_refs),
+                    }
+                    for hit in hits
+                ],
+            },
+        )
 
     def _start_download(self, url: str) -> None:
         job_id = self.model_jobs.start(url)
