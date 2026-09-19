@@ -252,6 +252,33 @@ def test_activated_community_provider_supplies_real_world_and_execution(monkeypa
     assert director.runtime.execution_providers.get("philips_hue") is not None
 
 
+def test_home_assistant_and_a_community_provider_are_both_active_at_once(monkeypatch):
+    """The whole point of the multi-provider composition: connecting Home
+    Assistant does not exclude an installed community provider (or vice
+    versa) -- both contribute observation and execution simultaneously."""
+
+    fake_entry_point = metadata.EntryPoint(
+        name="philips_hue", value=f"{__name__}:FAKE_HUE_PLUGIN", group="haven.providers"
+    )
+    monkeypatch.setattr(
+        metadata, "entry_points", lambda *, group: (fake_entry_point,) if group == "haven.providers" else ()
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        store = _seed_real_setup(data_dir)
+        save_installed_provider(
+            store, provider_id="philips_hue", entry_point_name="philips_hue", config={"bridge_ip": "10.0.0.5"}
+        )
+        director = build_application(store=store, model_manager=None, clock=lambda: NOW, ha_client=_FakeHAClient())
+
+    snapshot = director.world.observe(NOW)
+    device_ids = {d.device_id for d in snapshot.devices}
+    assert device_ids == {"light.living_room", "hue.living_room"}
+    assert director.runtime.execution_providers.get(HA_PROVIDER_ID) is not None
+    assert director.runtime.execution_providers.get("philips_hue") is not None
+
+
 def test_a_disabled_installed_provider_is_treated_as_unavailable(monkeypatch):
     fake_entry_point = metadata.EntryPoint(
         name="philips_hue", value=f"{__name__}:FAKE_HUE_PLUGIN", group="haven.providers"

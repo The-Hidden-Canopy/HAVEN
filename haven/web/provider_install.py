@@ -11,11 +11,21 @@ each gets its own sidecar file next to it, and this module never inspects
 what's inside that config beyond treating it as an opaque string mapping --
 Haven Core does not know or care what a Philips Hue bridge IP looks like.
 
+A field a manifest declared `secret=True` (`ProviderConfigField.secret`, an
+API key or bridge password, not a bridge IP or a display name) never lands
+in the same file as the rest: `save_installed_provider`'s `secret_fields`
+splits the config into `provider_<id>_config.json` (everything else) and
+`provider_<id>_secrets.json` (secret values only, chmod 0o600 the same
+best-effort tightening the home_assistant token file already gets). Neither
+of those two files' existence is meaningful on its own -- a provider with no
+secret fields simply never gets one -- and `load_installed_provider_config`
+merges both back into the one mapping `build()` actually needs, so no
+caller has to know the split happened.
+
 `installed_providers.json` is the index (which providers are installed,
-under which entry point, enabled or not); `provider_<id>_config.json` is
-each one's own config sidecar. Losing or corrupting either degrades to
-"nothing installed"/"no config" rather than failing boot, the same
-resilience `setup_service.py`'s other sidecars already have.
+under which entry point, enabled or not). Losing or corrupting any of these
+files degrades to "nothing installed"/"no config" rather than failing boot,
+the same resilience `setup_service.py`'s other sidecars already have.
 """
 
 from __future__ import annotations
@@ -49,6 +59,10 @@ def _index_path(store: SetupConfigStore) -> Path:
 
 def _config_path(store: SetupConfigStore, provider_id: str) -> Path:
     return store.path.parent / f"provider_{_safe_filename_part(provider_id)}_config.json"
+
+
+def _secrets_path(store: SetupConfigStore, provider_id: str) -> Path:
+    return store.path.parent / f"provider_{_safe_filename_part(provider_id)}_secrets.json"
 
 
 def load_installed_providers(store: SetupConfigStore) -> tuple[InstalledProvider, ...]:
@@ -101,39 +115,70 @@ def _save_index(store: SetupConfigStore, providers: tuple[InstalledProvider, ...
     )
 
 
+def _write_sidecar(path: Path, data: dict, *, secret: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not data:
+        # No fields of this kind (a provider with no secret fields, for
+        # instance) -- clear any stale file from a prior activation rather
+        # than persist an empty object.
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    path.write_text(json.dumps(data), encoding="utf-8")
+    if secret:
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            # Advisory even on POSIX and meaningless on Windows -- the same
+            # best-effort tightening the home_assistant token file already does.
+            pass
+
+
 def save_installed_provider(
-    store: SetupConfigStore, *, provider_id: str, entry_point_name: str, config: dict
+    store: SetupConfigStore,
+    *,
+    provider_id: str,
+    entry_point_name: str,
+    config: dict,
+    secret_fields: frozenset[str] = frozenset(),
 ) -> None:
-    """Record a provider as activated and persist its own config sidecar.
+    """Record a provider as activated and persist its own config sidecars.
 
     Replaces any prior entry for the same `provider_id` (re-activating with
     new config, e.g. after a credential rotation, is the same call).
+    `secret_fields` names which keys in `config` came from a
+    `ProviderConfigField` with `secret=True` (`haven/providers/plugin.py`):
+    those, and only those, are written to the separate, tightened secrets
+    sidecar rather than the ordinary config file.
     """
 
     existing = {p.provider_id: p for p in load_installed_providers(store)}
     existing[provider_id] = InstalledProvider(provider_id=provider_id, entry_point_name=entry_point_name, enabled=True)
     _save_index(store, tuple(existing.values()))
 
-    config_path = _config_path(store, provider_id)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(config), encoding="utf-8")
-    try:
-        os.chmod(config_path, 0o600)
-    except OSError:
-        # Advisory even on POSIX and meaningless on Windows -- the same
-        # best-effort tightening the home_assistant token file already does.
-        pass
+    plain = {k: v for k, v in config.items() if k not in secret_fields}
+    secret = {k: v for k, v in config.items() if k in secret_fields}
+    _write_sidecar(_config_path(store, provider_id), plain, secret=False)
+    _write_sidecar(_secrets_path(store, provider_id), secret, secret=True)
 
 
 def load_installed_provider_config(store: SetupConfigStore, provider_id: str) -> dict:
-    """This provider's own persisted config, or `{}` if none is on disk."""
+    """This provider's own persisted config (plain + secret fields merged).
 
-    path = _config_path(store, provider_id)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    `{}` if neither sidecar is on disk or readable.
+    """
+
+    merged: dict = {}
+    for path in (_config_path(store, provider_id), _secrets_path(store, provider_id)):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            merged.update(data)
+    return merged
 
 
 def set_installed_provider_enabled(store: SetupConfigStore, provider_id: str, enabled: bool) -> None:
@@ -149,10 +194,11 @@ def set_installed_provider_enabled(store: SetupConfigStore, provider_id: str, en
 def remove_installed_provider(store: SetupConfigStore, provider_id: str) -> None:
     remaining = tuple(p for p in load_installed_providers(store) if p.provider_id != provider_id)
     _save_index(store, remaining)
-    try:
-        _config_path(store, provider_id).unlink()
-    except FileNotFoundError:
-        pass
+    for path in (_config_path(store, provider_id), _secrets_path(store, provider_id)):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 __all__ = [

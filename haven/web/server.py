@@ -117,6 +117,7 @@ class HavenWebServer(ThreadingHTTPServer):
             director=self.director,
             clock=clock,
             on_rebuild=self.rebuild_director,
+            include_demo_candidates=self._director_demo,
         )
         # Diagnostics reads through the server itself; backups own the
         # `backups/` subtree of the same single-root data dir.

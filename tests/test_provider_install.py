@@ -94,3 +94,78 @@ def test_corrupt_index_file_degrades_to_empty():
         store = SetupConfigStore(Path(tmp) / "haven.json")
         (Path(tmp) / "installed_providers.json").write_text("not json", encoding="utf-8")
         assert load_installed_providers(store) == ()
+
+
+def test_secret_fields_are_written_to_a_separate_file_from_plain_config():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        store = SetupConfigStore(data_dir / "haven.json")
+        save_installed_provider(
+            store,
+            provider_id="philips_hue",
+            entry_point_name="philips_hue",
+            config={"bridge_ip": "10.0.0.5", "api_key": "super-secret"},
+            secret_fields=frozenset({"api_key"}),
+        )
+
+        # The merged view a provider's build() actually sees is unaffected.
+        assert load_installed_provider_config(store, "philips_hue") == {
+            "bridge_ip": "10.0.0.5",
+            "api_key": "super-secret",
+        }
+
+        # But on disk, the secret never lands in the plain config file.
+        config_text = (data_dir / "provider_philips_hue_config.json").read_text(encoding="utf-8")
+        assert "super-secret" not in config_text
+        assert "10.0.0.5" in config_text
+
+        secrets_text = (data_dir / "provider_philips_hue_secrets.json").read_text(encoding="utf-8")
+        assert "super-secret" in secrets_text
+        assert "10.0.0.5" not in secrets_text
+
+
+def test_a_provider_with_no_secret_fields_gets_no_secrets_file():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        store = SetupConfigStore(data_dir / "haven.json")
+        save_installed_provider(
+            store, provider_id="philips_hue", entry_point_name="philips_hue", config={"bridge_ip": "10.0.0.5"}
+        )
+        assert not (data_dir / "provider_philips_hue_secrets.json").exists()
+
+
+def test_reactivating_without_a_previously_secret_field_clears_the_stale_secrets_file():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        store = SetupConfigStore(data_dir / "haven.json")
+        save_installed_provider(
+            store,
+            provider_id="philips_hue",
+            entry_point_name="philips_hue",
+            config={"api_key": "secret-one"},
+            secret_fields=frozenset({"api_key"}),
+        )
+        assert (data_dir / "provider_philips_hue_secrets.json").exists()
+
+        # Re-activated with a config that no longer includes the secret field.
+        save_installed_provider(
+            store, provider_id="philips_hue", entry_point_name="philips_hue", config={"bridge_ip": "10.0.0.5"}
+        )
+        assert not (data_dir / "provider_philips_hue_secrets.json").exists()
+        assert load_installed_provider_config(store, "philips_hue") == {"bridge_ip": "10.0.0.5"}
+
+
+def test_removing_a_provider_clears_its_secrets_file_too():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        store = SetupConfigStore(data_dir / "haven.json")
+        save_installed_provider(
+            store,
+            provider_id="philips_hue",
+            entry_point_name="philips_hue",
+            config={"api_key": "secret-one"},
+            secret_fields=frozenset({"api_key"}),
+        )
+        remove_installed_provider(store, "philips_hue")
+        assert not (data_dir / "provider_philips_hue_secrets.json").exists()
+        assert load_installed_provider_config(store, "philips_hue") == {}

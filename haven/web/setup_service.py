@@ -469,6 +469,7 @@ class SetupService:
         clock: Callable[[], datetime] | None = None,
         ha_states_source=None,
         on_rebuild: Callable[[], None] | None = None,
+        include_demo_candidates: bool = False,
     ) -> None:
         self._store = store
         self._director = director
@@ -481,6 +482,12 @@ class SetupService:
         # saved instead of leaving the running app on whatever it built at
         # boot until someone restarts the process.
         self._on_rebuild = on_rebuild
+        # False by default: a real household's first-run scan should never
+        # show `ble:bulb-a1f2`/`mdns:therm-living`/`wifi:plug-heater` as if
+        # they were real nearby devices -- those are the demo trial's own
+        # fixture set. Only an actual `--demo` run (`make_server(demo=True)`)
+        # sets this true.
+        self._include_demo_candidates = include_demo_candidates
         self._config_error: str | None = None
         self._config = self._load_config()
         self._enrolled: dict[str, dict] = self._load_enrolled()
@@ -713,8 +720,13 @@ class SetupService:
             return {"ok": False, "error": str(exc)}
         except Exception as exc:
             return {"ok": False, "error": f"could not activate {entry_point_name!r}: {exc}"}
+        secret_fields = frozenset(field.name for field in manifest.config_fields if field.secret)
         save_installed_provider(
-            self._store, provider_id=manifest.provider_id, entry_point_name=entry_point_name, config=config or {}
+            self._store,
+            provider_id=manifest.provider_id,
+            entry_point_name=entry_point_name,
+            config=config or {},
+            secret_fields=secret_fields,
         )
         self._config = replace(self._config, provider_kind=manifest.provider_id)
         error = self._save()
@@ -753,17 +765,18 @@ class SetupService:
         return {"ok": True}
 
     def run_discovery(self) -> dict:
-        """Scan for enrollment candidates: the demo set, plus real HA entities.
+        """Scan for enrollment candidates: real HA entities, plus the demo
+        fixture set only when this installation is an actual demo run.
 
         When a Home Assistant state source is attached, its entities join the
         candidate list. A fetch failure never breaks the scan: an unreachable
-        provider at scan time yields the local demo candidates only, never a
-        crash.
+        provider at scan time yields whatever candidates don't depend on it
+        (the demo set, in a demo run; nothing, in a real one), never a crash.
         """
 
         now = self._clock()
         enrolled_ids = set(self._enrolled)
-        discovered = [self._discover(demo, now) for demo in _DEMO_SCAN_CANDIDATES]
+        discovered = [self._discover(demo, now) for demo in _DEMO_SCAN_CANDIDATES] if self._include_demo_candidates else []
         if self._ha_states_source is not None:
             try:
                 states = self._ha_states_source.fetch_states()
@@ -856,8 +869,16 @@ class SetupService:
             return {"ok": False, "error": error}
         return self.status()
 
-    def declare_person(self, *, name: str, entity_id: str, room_id: str, role: str = "member") -> dict:
-        """Declare one person and the occupancy entity that reports them in a room.
+    def declare_person(
+        self, *, name: str, entity_id: str | None = None, room_id: str | None = None, role: str = "member"
+    ) -> dict:
+        """Declare one person, optionally with the occupancy entity that reports them in a room.
+
+        A person can be declared with just a name and role -- HAVEN needs to
+        know who owns this installation before it needs to know how presence
+        is sensed; a presence source can be added in the same call or a
+        later one. `entity_id` and `room_id` are a pair: give both or
+        neither.
 
         The person_id is derived from the name ("Gerron Smith" -> "gerron_smith").
         Re-declaring the same (person_id, entity_id) pair is idempotent; the
@@ -868,10 +889,12 @@ class SetupService:
 
         try:
             name = _require_text(name, name="name")
-            entity_id = _require_text(entity_id, name="entity_id")
-            room_id = _require_text(room_id, name="room_id")
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+        entity_id = entity_id.strip() if isinstance(entity_id, str) else ""
+        room_id = room_id.strip() if isinstance(room_id, str) else ""
+        if bool(entity_id) != bool(room_id):
+            return {"ok": False, "error": "entity_id and room_id must be given together"}
         if role not in _DECLARED_ROLES:
             return {"ok": False, "error": f"role must be one of {_DECLARED_ROLES}, got {role!r}"}
         person_id = _derived_declared_id(name)
@@ -891,7 +914,9 @@ class SetupService:
                     return {"ok": False, "error": error}
                 self._trigger_rebuild()
                 return self.status()
-            if any(source.entity_id == entity_id for source in person.sources):
+            if not entity_id or any(source.entity_id == entity_id for source in person.sources):
+                # No new source given, or this one is already declared:
+                # re-declaring an already-known person is a harmless no-op.
                 return self.status()
             people[index] = replace(
                 person,
@@ -903,14 +928,8 @@ class SetupService:
                 return {"ok": False, "error": error}
             self._trigger_rebuild()
             return self.status()
-        people.append(
-            DeclaredPerson(
-                person_id=person_id,
-                name=name,
-                sources=(DeclaredPresenceSource(entity_id=entity_id, room_id=room_id),),
-                role=role,
-            )
-        )
+        new_sources = (DeclaredPresenceSource(entity_id=entity_id, room_id=room_id),) if entity_id else ()
+        people.append(DeclaredPerson(person_id=person_id, name=name, sources=new_sources, role=role))
         self.household = replace(self.household, people=tuple(people))
         error = self._persist_household()
         if error is not None:
