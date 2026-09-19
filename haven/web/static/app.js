@@ -79,6 +79,7 @@ const els = {
   setupWizard: $('#setup-wizard'),
   setupSteps: $('#setup-steps'),
   setupStepLabel: $('#setup-step-label'),
+  setupStepTitle: $('#setup-step-title'),
   setupError: $('#setup-error'),
   setupWarning: $('#setup-warning'),
   setupBody: $('#setup-body'),
@@ -1028,6 +1029,20 @@ function closeChainPanel() {
 
 const SETUP_STEP_COUNT = 7;
 
+/* Each step's display name and whether it's skippable (shown as an
+   OPTIONAL badge) -- the numbers on the dots don't say why a step exists,
+   this does. Step 1 (welcome) and step 7 (ready) are structural, not
+   optional or required in the same sense as the others. */
+const SETUP_STEP_NAMES = {
+  1: { title: 'Welcome', optional: false },
+  2: { title: 'Storage', optional: false },
+  3: { title: 'Connect your home', optional: true },
+  4: { title: 'Find devices', optional: true },
+  5: { title: 'People & context', optional: false },
+  6: { title: 'Features', optional: true },
+  7: { title: 'Ready', optional: false },
+};
+
 const setupState = {
   setup: null,       // last `setup` object from the backend, or null
   configError: null, // optional quiet config-file warning
@@ -1109,7 +1124,18 @@ function renderSetupIndicator() {
     }
     els.setupSteps.appendChild(btn);
   }
-  els.setupStepLabel.textContent = 'STEP ' + setupState.step + ' / ' + SETUP_STEP_COUNT;
+  els.setupStepLabel.textContent = 'STEP ' + setupState.step + ' OF ' + SETUP_STEP_COUNT;
+  const info = SETUP_STEP_NAMES[setupState.step] || { title: '', optional: false };
+  els.setupStepTitle.textContent = '';
+  const titleText = document.createElement('span');
+  titleText.textContent = info.title;
+  els.setupStepTitle.appendChild(titleText);
+  if (info.optional) {
+    const badge = document.createElement('span');
+    badge.className = 'setup-optional-badge micro';
+    badge.textContent = 'OPTIONAL';
+    els.setupStepTitle.appendChild(badge);
+  }
 }
 
 function setupText(text) {
@@ -1123,18 +1149,26 @@ function setupText(text) {
 
 function renderSetupWelcome(container) {
   container.appendChild(setupText(
-    'HAVEN keeps the house\u2019s configuration on this machine \u2014 ' +
-    'local first, no cloud account.'));
-  container.appendChild(setupText('Seven short steps.'));
+    'HAVEN is a local-first assistant for your computer, your information, ' +
+    'and the connected world around you.'));
   container.appendChild(setupText(
-    'Everything except Finish is skippable; each step can be revisited later from System.'));
+    'This setup creates your local HAVEN installation. You can connect ' +
+    'models, your computer, Home Assistant, devices, voice, and other ' +
+    'providers now or add them later.'));
+  container.appendChild(setupText('Your core configuration and history stay on this machine.'));
+  container.appendChild(setupText(
+    'Nothing except the final setup step is required. This takes about two minutes.'));
 }
 
 /* --- step 2: data directory --- */
 
 function renderSetupDataDir(container) {
   const dataDir = setupObj().data_dir || {};
-  container.appendChild(makeCtxRow('Current folder', dataDir.resolved || '\u2014'));
+  container.appendChild(setupText(
+    'HAVEN needs a local folder for its configuration, history, installed ' +
+    'provider settings, automations, and other local state.'));
+  container.appendChild(setupText('The default is recommended for most people.'));
+  container.appendChild(makeCtxRow('Current location', dataDir.resolved || '\u2014'));
   container.appendChild(makeCtxRow(
     'Source', dataDir.source === 'chosen' ? 'custom' : 'default'));
 
@@ -1147,7 +1181,7 @@ function renderSetupDataDir(container) {
   input.spellcheck = false;
   const use = document.createElement('button');
   use.type = 'submit';
-  use.textContent = 'Use this folder';
+  use.textContent = 'Choose another folder';
   form.appendChild(input);
   form.appendChild(use);
   form.addEventListener('submit', async (e) => {
@@ -1159,7 +1193,7 @@ function renderSetupDataDir(container) {
   const useDefault = document.createElement('button');
   useDefault.type = 'button';
   useDefault.className = 'btn';
-  useDefault.textContent = 'Use default';
+  useDefault.textContent = 'Use recommended location';
   useDefault.addEventListener('click', async () => {
     await setupPost('/api/setup/data-dir', { path: '' });
   });
@@ -1167,6 +1201,20 @@ function renderSetupDataDir(container) {
 }
 
 /* --- step 3: provider --- */
+
+function setupFieldLabel(container, title, detail) {
+  const wrap = document.createElement('div');
+  wrap.className = 'setup-field-label';
+  const t = document.createElement('span');
+  t.className = 'setup-field-label-title';
+  t.textContent = title;
+  const d = document.createElement('span');
+  d.className = 'muted';
+  d.textContent = detail;
+  wrap.appendChild(t);
+  wrap.appendChild(d);
+  container.appendChild(wrap);
+}
 
 function renderSetupProvider(container) {
   const provider = setupObj().provider || {};
@@ -1178,23 +1226,38 @@ function renderSetupProvider(container) {
     return; // Skip became Next — the foot's Next advances
   }
 
+  container.appendChild(setupText(
+    'If you already use Home Assistant, HAVEN can connect to it to see and ' +
+    'control your existing lights, switches, thermostats, covers, cameras, ' +
+    'and other supported devices.'));
+  container.appendChild(setupText(
+    'You do not need Home Assistant to use HAVEN. You can skip this and ' +
+    'use HAVEN for your computer, models, files, voice, and other providers.'));
+
   const form = document.createElement('form');
-  form.className = 'model-form setup-provider-form';
+  form.className = 'setup-provider-form';
+  setupFieldLabel(form, 'Home Assistant address',
+    'Where HAVEN can reach your Home Assistant server. Example: http://homeassistant.local:8123');
   const url = document.createElement('input');
   url.type = 'text';
-  url.placeholder = 'home assistant base url, e.g. http://homeassistant.local:8123';
+  url.placeholder = 'http://homeassistant.local:8123';
   url.autocomplete = 'off';
   url.spellcheck = false;
+  form.appendChild(url);
+
+  setupFieldLabel(form, 'Home Assistant access token',
+    'Profile → Security → Long-Lived Access Tokens → Create Token. The token stays on this computer.');
   const token = document.createElement('input');
   token.type = 'password';
   token.placeholder = 'access token';
   token.autocomplete = 'off';
   token.spellcheck = false;
+  form.appendChild(token);
+
   const connect = document.createElement('button');
   connect.type = 'submit';
-  connect.textContent = 'Test & connect';
-  form.appendChild(url);
-  form.appendChild(token);
+  connect.className = 'btn';
+  connect.textContent = 'Connect Home Assistant';
   form.appendChild(connect);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1207,14 +1270,22 @@ function renderSetupProvider(container) {
   });
   container.appendChild(form);
 
+  const divider = document.createElement('p');
+  divider.className = 'setup-divider muted';
+  divider.textContent = '\u2500\u2500\u2500\u2500\u2500\u2500 or \u2500\u2500\u2500\u2500\u2500\u2500';
+  container.appendChild(divider);
+
   const skip = document.createElement('button');
   skip.type = 'button';
   skip.className = 'btn';
-  skip.textContent = 'Skip for now';
+  skip.textContent = 'Skip home setup';
   skip.addEventListener('click', async () => {
-    await setupPost('/api/setup/provider', { skip: true });
+    const ok = await setupPost('/api/setup/provider', { skip: true });
+    if (ok) setupGotoStep(4);
   });
   container.appendChild(skip);
+  container.appendChild(setupText(
+    'HAVEN works without Home Assistant. You can add Home Assistant or other home providers later from Settings.'));
 }
 
 /* --- step 4: discovery --- */
@@ -1300,18 +1371,34 @@ function renderSetupCandidate(container, candidate, enrolledIds) {
 }
 
 function renderSetupDiscovery(container) {
+  const provider = setupObj().provider || {};
   const discovery = setupObj().discovery || {};
   const enrolled = Array.isArray(discovery.enrolled) ? discovery.enrolled : [];
   const enrolledIds = new Set(enrolled.map((e) => e && e.candidate_id));
 
+  if (provider.configured !== true) {
+    container.appendChild(setupText('No home provider is connected yet.'));
+    container.appendChild(setupText(
+      'HAVEN can also discover devices through supported local providers, such as ' +
+      'Bluetooth and network discovery, as those providers are enabled.'));
+    container.appendChild(setupText('You can skip this and add devices later.'));
+  }
+
   const scan = document.createElement('button');
   scan.type = 'button';
   scan.className = 'btn';
-  scan.textContent = 'Scan';
+  scan.textContent = provider.configured === true ? 'Scan' : 'Scan this computer/network';
   scan.addEventListener('click', async () => {
     await setupPost('/api/setup/discovery/scan', {});
   });
   container.appendChild(scan);
+
+  const skipDevices = document.createElement('button');
+  skipDevices.type = 'button';
+  skipDevices.className = 'btn';
+  skipDevices.textContent = 'Skip devices';
+  skipDevices.addEventListener('click', () => setupGotoStep(5));
+  container.appendChild(skipDevices);
 
   const candidates = Array.isArray(discovery.candidates) ? discovery.candidates : [];
   if (!candidates.length) {
@@ -1380,13 +1467,10 @@ function renderSetupHousehold(container) {
 
   const peopleSection = document.createElement('div');
   peopleSection.className = 'setup-household-section';
-  peopleSection.appendChild(setupMicroHeading('People'));
+  peopleSection.appendChild(setupMicroHeading('Who uses this HAVEN?'));
   peopleSection.appendChild(setupText(
-    'Tell HAVEN which occupancy sensors report who. A person appears in a ' +
-    'room when their sensor says they are there.'));
-  peopleSection.appendChild(setupText(
-    'The first person marked owner can approve automations; HAVEN acts on ' +
-    "behalf of the household's people."));
+    'HAVEN needs to know who owns this installation so it knows who can ' +
+    'approve important actions.'));
   if (!people.length) {
     peopleSection.appendChild(setupText('No people declared yet.'));
   }
@@ -1417,26 +1501,22 @@ function renderSetupHousehold(container) {
   }
 
   const personForm = document.createElement('form');
-  personForm.className = 'model-form setup-provider-form';
-  const personName = makeSetupHouseholdInput('name');
+  personForm.className = 'setup-provider-form';
+  const personName = makeSetupHouseholdInput('Your name');
   personName.value = setupHouseholdName;
-  const personEntity = makeSetupHouseholdInput(
-    'occupancy sensor entity id, e.g. binary_sensor.gerron_office_occupancy');
-  const personRoom = makeSetupHouseholdInput('room');
   const personRole = document.createElement('select');
   personRole.className = 'setup-person-role';
-  for (const [value, label] of [['member', 'Member'], ['owner', 'Owner']]) {
+  for (const [value, label] of [['owner', 'Owner'], ['member', 'Member']]) {
     const option = document.createElement('option');
     option.value = value;
     option.textContent = label;
     personRole.appendChild(option);
   }
+  personRole.value = people.length ? 'member' : 'owner';
   const addPerson = document.createElement('button');
   addPerson.type = 'submit';
   addPerson.textContent = 'Add person';
   personForm.appendChild(personName);
-  personForm.appendChild(personEntity);
-  personForm.appendChild(personRoom);
   personForm.appendChild(personRole);
   personForm.appendChild(addPerson);
   personForm.addEventListener('submit', async (e) => {
@@ -1444,18 +1524,66 @@ function renderSetupHousehold(container) {
     setupHouseholdName = personName.value;
     await setupPost('/api/setup/household/people', {
       name: personName.value.trim(),
-      entity_id: personEntity.value.trim(),
-      room_id: personRoom.value.trim(),
       role: personRole.value,
     });
-    personRole.value = 'member';
   });
   peopleSection.appendChild(personForm);
   container.appendChild(peopleSection);
 
-  const contextsSection = document.createElement('div');
-  contextsSection.className = 'setup-household-section';
-  contextsSection.appendChild(setupMicroHeading('Contexts'));
+  const sensorAdvanced = document.createElement('details');
+  sensorAdvanced.className = 'setup-household-section setup-advanced';
+  const sensorSummary = document.createElement('summary');
+  sensorSummary.textContent = 'Connect presence sensors';
+  sensorAdvanced.appendChild(sensorSummary);
+  sensorAdvanced.appendChild(setupText(
+    'Tell HAVEN which occupancy sensors report who. A person appears in a ' +
+    'room when their sensor says they are there.'));
+  if (!people.length) {
+    sensorAdvanced.appendChild(setupText('Add a person above first.'));
+  } else {
+    const sensorForm = document.createElement('form');
+    sensorForm.className = 'setup-provider-form';
+    const sensorPerson = document.createElement('select');
+    sensorPerson.setAttribute('aria-label', 'Person');
+    for (const person of people) {
+      if (!person || typeof person !== 'object') continue;
+      const opt = document.createElement('option');
+      opt.value = person.person_id;
+      opt.textContent = String(person.name || person.person_id);
+      opt.dataset.name = person.name || '';
+      opt.dataset.role = person.role || 'member';
+      sensorPerson.appendChild(opt);
+    }
+    const sensorEntity = makeSetupHouseholdInput(
+      'occupancy sensor entity id, e.g. binary_sensor.gerron_office_occupancy');
+    const sensorRoom = makeSetupHouseholdInput('room');
+    const addSensor = document.createElement('button');
+    addSensor.type = 'submit';
+    addSensor.textContent = 'Add sensor';
+    sensorForm.appendChild(sensorPerson);
+    sensorForm.appendChild(sensorEntity);
+    sensorForm.appendChild(sensorRoom);
+    sensorForm.appendChild(addSensor);
+    sensorForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const opt = sensorPerson.options[sensorPerson.selectedIndex];
+      if (!opt) return;
+      await setupPost('/api/setup/household/people', {
+        name: opt.dataset.name,
+        entity_id: sensorEntity.value.trim(),
+        room_id: sensorRoom.value.trim(),
+        role: opt.dataset.role,
+      });
+    });
+    sensorAdvanced.appendChild(sensorForm);
+  }
+  container.appendChild(sensorAdvanced);
+
+  const contextsSection = document.createElement('details');
+  contextsSection.className = 'setup-household-section setup-advanced';
+  const contextsSummary = document.createElement('summary');
+  contextsSummary.textContent = 'Advanced household context';
+  contextsSection.appendChild(contextsSummary);
   contextsSection.appendChild(setupText(
     'Name the household states HAVEN should track \u2014 an input_boolean ' +
     'that means working late, vacation mode, and so on.'));
@@ -1472,7 +1600,7 @@ function renderSetupHousehold(container) {
   }
 
   const contextForm = document.createElement('form');
-  contextForm.className = 'model-form setup-provider-form';
+  contextForm.className = 'setup-provider-form';
   const contextLabel = makeSetupHouseholdInput('label, e.g. Working late');
   const contextEntity = makeSetupHouseholdInput(
     'entity id, e.g. input_boolean.working_late');
@@ -1530,45 +1658,54 @@ function makeSetupPref(container, key, label, detail, checked) {
 function renderSetupPreferences(container) {
   const prefs = setupObj().preferences || {};
   container.appendChild(makeSetupPref(
-    container, 'voice', 'Voice control',
-    'Haven listens for the wake word on this machine.',
+    container, 'voice', 'Enable voice',
+    'Use a microphone, wake-word model, speech recognition, and speech ' +
+    'output when those components are available.',
     prefs.voice === true));
   container.appendChild(makeSetupPref(
-    container, 'intelligence', 'Intelligence model',
-    'Allow HAVEN to use a local model for understanding.',
+    container, 'intelligence', 'Enable model intelligence',
+    'Allow HAVEN to use assigned local models or model endpoints for ' +
+    'conversation and understanding. HAVEN\u2019s authority system remains ' +
+    'separate from whichever model you use.',
     prefs.intelligence === true));
+  container.appendChild(setupText('Models can be installed or connected later.'));
 }
 
 /* --- step 7: finish --- */
 
 function renderSetupFinish(container) {
   const s = setupObj();
+  container.appendChild(setupMicroHeading('HAVEN is ready'));
   const dataDir = (s.data_dir && typeof s.data_dir === 'object') ? s.data_dir : {};
   container.appendChild(makeCtxRow(
     'Data folder',
     dataDir.source === 'chosen' ? 'custom' : 'default'));
   const provider = (s.provider && typeof s.provider === 'object') ? s.provider : {};
   container.appendChild(makeCtxRow(
-    'Provider',
+    'Home',
     provider.configured === true
       ? 'connected \u00b7 ' + (provider.base_url || '')
-      : 'skipped'));
+      : 'not connected'));
   const discovery = (s.discovery && typeof s.discovery === 'object') ? s.discovery : {};
   const enrolled = Array.isArray(discovery.enrolled) ? discovery.enrolled.length : 0;
   container.appendChild(makeCtxRow(
     'Devices enrolled', String(enrolled)));
   const household = (s.household && typeof s.household === 'object') ? s.household : {};
-  const peopleCount = Array.isArray(household.people) ? household.people.length : 0;
+  const people = Array.isArray(household.people) ? household.people : [];
+  const owner = people.find((p) => p && typeof p === 'object' && p.role === 'owner');
+  container.appendChild(makeCtxRow(
+    'Owner', owner ? String(owner.name || owner.person_id) : 'not declared'));
   const contextsCount = Array.isArray(household.contexts) ? household.contexts.length : 0;
   container.appendChild(makeCtxRow(
     'Household',
-    (peopleCount === 0 && contextsCount === 0)
+    (people.length === 0 && contextsCount === 0)
       ? 'not declared'
-      : peopleCount + ' people \u00b7 ' + contextsCount + ' contexts declared'));
+      : people.length + ' people \u00b7 ' + contextsCount + ' contexts declared'));
   const prefs = (s.preferences && typeof s.preferences === 'object') ? s.preferences : {};
   container.appendChild(makeCtxRow('Voice control', prefs.voice === true ? 'on' : 'off'));
   container.appendChild(makeCtxRow(
-    'Intelligence model', prefs.intelligence === true ? 'on' : 'off'));
+    'Model intelligence', prefs.intelligence === true ? 'on' : 'off'));
+  container.appendChild(setupText('You can change any of these later from Settings.'));
 }
 
 const SETUP_STEP_RENDERERS = {
@@ -1593,7 +1730,7 @@ function setupRender() {
   render(els.setupBody);
 
   els.setupBack.hidden = setupState.step === 1;
-  els.setupNext.textContent = setupState.step === SETUP_STEP_COUNT ? 'Finish' : 'Next';
+  els.setupNext.textContent = setupState.step === SETUP_STEP_COUNT ? 'Enter HAVEN' : 'Next';
 }
 
 async function onSetupNext() {

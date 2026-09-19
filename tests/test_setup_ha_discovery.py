@@ -46,6 +46,11 @@ def _service(data_dir: Path, director: DemoDirector | None = None, source=None) 
         director=director or DemoDirector(clock=lambda: NOW),
         clock=lambda: NOW,
         ha_states_source=source,
+        # This file is specifically about the demo+HA merge/degrade
+        # behavior, so it opts into the demo fixture set explicitly --
+        # SetupService defaults it off so a real household's first scan
+        # never shows these as if they were real nearby devices.
+        include_demo_candidates=True,
     )
 
 

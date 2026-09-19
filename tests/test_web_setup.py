@@ -18,8 +18,8 @@ FIXED_NOW = datetime(2026, 9, 16, 20, 0, tzinfo=UTC)
 
 
 @contextmanager
-def _boot(data_dir: str | None = None):
-    instance, director = make_server(0, data_dir=data_dir, clock=lambda: FIXED_NOW)
+def _boot(data_dir: str | None = None, *, demo: bool = False):
+    instance, director = make_server(0, data_dir=data_dir, clock=lambda: FIXED_NOW, demo=demo)
     thread = threading.Thread(target=instance.serve_forever, daemon=True)
     thread.start()
     try:
@@ -128,8 +128,14 @@ def test_provider_skip_unsupported_kind_and_unreachable_host() -> None:
 
 
 def test_discovery_scan_enroll_and_registry() -> None:
+    # Exercises the scan -> enroll -> registry mechanics (already-enrolled,
+    # unknown-candidate, unsupported-device-type checks) against the demo
+    # fixture candidate set as convenient, stable test data -- explicitly a
+    # demo run: a real (non-demo) fresh install shows no scan candidates
+    # until a real provider or discovery source exists (see
+    # `test_real_install_scan_has_no_demo_candidates` below).
     with tempfile.TemporaryDirectory() as tmp:
-        with _boot(str(Path(tmp) / "data")) as (instance, _, port):
+        with _boot(str(Path(tmp) / "data"), demo=True) as (instance, _, port):
             status, body = _post(port, "/api/setup/discovery/scan")
             assert status == 200
             assert body["ok"] is True
@@ -198,6 +204,19 @@ def test_discovery_scan_enroll_and_registry() -> None:
             assert status == 400
             assert body["ok"] is False
             assert "unsupported device_type" in body["error"]
+
+
+def test_real_install_scan_has_no_demo_candidates() -> None:
+    """A real (non-demo) fresh install must never show the demo fixture
+    devices as if they were real nearby hardware -- see
+    `test_discovery_scan_enroll_and_registry` for the demo-mode case."""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with _boot(str(Path(tmp) / "data")) as (_, _, port):
+            status, body = _post(port, "/api/setup/discovery/scan")
+            assert status == 200
+            assert body["ok"] is True
+            assert body["candidates"] == []
 
 
 def test_preferences_validate_bools_and_reflect_in_status() -> None:

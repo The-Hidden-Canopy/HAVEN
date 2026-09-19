@@ -184,6 +184,43 @@ def test_declare_person_rejects_blank_fields() -> None:
         assert result["ok"] is False
 
 
+def test_declare_person_with_no_presence_sensor_yet() -> None:
+    """A person (including the owner) can be declared with just a name and
+    role -- HAVEN needs to know who owns the installation before it needs
+    to know how presence is sensed."""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        service = _service(Path(tmp) / "data")
+        result = service.declare_person(name="Gerron Smith", role="owner")
+        assert result["ok"] is True
+        person = result["setup"]["household"]["people"][0]
+        assert person == {"person_id": "gerron_smith", "name": "Gerron Smith", "role": "owner", "sources": []}
+
+
+def test_declare_person_can_add_a_sensor_to_an_already_declared_person() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        service = _service(Path(tmp) / "data")
+        service.declare_person(name="Gerron Smith", role="owner")
+        result = service.declare_person(
+            name="Gerron Smith", entity_id="binary_sensor.gerron_office_occupancy", room_id="office", role="owner"
+        )
+        assert result["ok"] is True
+        person = result["setup"]["household"]["people"][0]
+        assert person["role"] == "owner"
+        assert person["sources"] == [{"entity_id": "binary_sensor.gerron_office_occupancy", "room_id": "office"}]
+
+
+def test_declare_person_requires_entity_id_and_room_id_together() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        service = _service(Path(tmp) / "data")
+        result = service.declare_person(name="Gerron Smith", entity_id="binary_sensor.gerron_office")
+        assert result["ok"] is False
+        assert "together" in result["error"]
+        result = service.declare_person(name="Gerron Smith", room_id="office")
+        assert result["ok"] is False
+        assert "together" in result["error"]
+
+
 def test_declare_context_rules_and_shared_entities() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         service = _service(Path(tmp) / "data")
