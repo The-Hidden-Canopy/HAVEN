@@ -103,8 +103,28 @@ def find_installed_provider(store: SetupConfigStore, provider_id: str) -> Instal
     return None
 
 
-def any_provider_configured(store: SetupConfigStore, *, home_assistant_base_url: str | None) -> bool:
-    """Whether this installation has ever configured ANY provider.
+def is_real_installation(
+    store: SetupConfigStore, *, household_id: str | None, home_assistant_base_url: str | None
+) -> bool:
+    """Whether this is a real household that must never fall back to the
+    demo fixture, regardless of whether any provider happens to be active
+    right now.
+
+    Three independent signals, checked without preferring one over another:
+
+    - `household_id`: minted exactly once, permanently, the first time this
+      installation was ever real (`ensure_household_id`), and never cleared
+      afterward. This is the strongest signal precisely because it survives
+      a household disconnecting Home Assistant *and* uninstalling every
+      community provider -- a real household with real enrolled devices,
+      declared people, and persisted rules does not stop being real just
+      because its live evidence is temporarily (or permanently) gone; it
+      degrades to "nothing observed yet", the same honest empty state a
+      single unreachable provider already produces, never the demo fixture
+      reappearing.
+    - `home_assistant_base_url`: Home Assistant's own dedicated field.
+    - the installed-providers index: any community provider ever activated,
+      enabled or not.
 
     Deliberately not `SetupConfig.provider_kind is not None`: that field
     gets overwritten to whatever provider was activated *most recently*
@@ -112,14 +132,14 @@ def any_provider_configured(store: SetupConfigStore, *, home_assistant_base_url:
     configured-provider signal made connecting Home Assistant and then
     installing a second provider silently stop wiring Home Assistant back
     in on the next rebuild -- a household ends up with fewer live providers
-    than it configured, not more. Home Assistant's own dedicated
-    `provider_base_url` field and the installed-providers index are checked
-    independently here, and a household stays "real" (never falls back to
-    the demo fixture) once EITHER has ever been set, regardless of which
-    one a later action touches.
+    than it configured, not more.
     """
 
-    return home_assistant_base_url is not None or bool(load_installed_providers(store))
+    return (
+        household_id is not None
+        or home_assistant_base_url is not None
+        or bool(load_installed_providers(store))
+    )
 
 
 def _save_index(store: SetupConfigStore, providers: tuple[InstalledProvider, ...]) -> None:
@@ -223,6 +243,7 @@ def remove_installed_provider(store: SetupConfigStore, provider_id: str) -> None
 __all__ = [
     "InstalledProvider",
     "find_installed_provider",
+    "is_real_installation",
     "load_installed_provider_config",
     "load_installed_providers",
     "remove_installed_provider",

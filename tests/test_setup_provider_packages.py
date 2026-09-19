@@ -104,7 +104,7 @@ def test_install_provider_package_activates_it_without_touching_provider_kind(mo
     """Regression: installing a community provider must never overwrite
     `provider_kind` -- that used to silently unplug Home Assistant's own
     wiring on the next rebuild once a second provider was installed (see
-    `any_provider_configured` in `haven/web/provider_install.py`)."""
+    `is_real_installation` in `haven/web/provider_install.py`)."""
 
     ep = metadata.EntryPoint(name="philips_hue", value=f"{__name__}:FAKE_HUE_PLUGIN", group="haven.providers")
     _patch_entry_points(monkeypatch, ep)
@@ -176,7 +176,7 @@ def test_uninstall_provider_package_never_touches_provider_kind_or_other_provide
     """Regression: uninstalling one provider must only remove its own
     `installed_providers.json` entry -- never `provider_kind` (which
     `install_provider_package` no longer sets at all, see
-    `any_provider_configured`) and never another provider's entry."""
+    `is_real_installation`) and never another provider's entry."""
 
     hue_ep = metadata.EntryPoint(name="philips_hue", value=f"{__name__}:FAKE_HUE_PLUGIN", group="haven.providers")
     _patch_entry_points(monkeypatch, hue_ep)

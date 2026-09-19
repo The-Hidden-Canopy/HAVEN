@@ -207,4 +207,26 @@ def test_skipping_the_provider_after_connecting_rebuilds_back_to_demo() -> None:
         assert server.director is not real_director
         assert server.director.house is not None
         assert not isinstance(server.director.world, HomeAssistantWorldProvider)
+
+
+def test_skipping_after_connecting_deletes_the_stale_token_file() -> None:
+    """A disconnected provider must not leave its credential behind on disk
+    -- a real privacy leftover, even though nothing reads it once
+    `provider_token_file` is cleared."""
+
+    with tempfile.TemporaryDirectory() as tmp, _boot(Path(tmp)) as (server, port):
+        with patch("haven.integrations.home_assistant.client.urlopen", side_effect=_fake_urlopen):
+            _post(
+                port,
+                "/api/setup/provider",
+                {"kind": "home_assistant", "base_url": "http://ha.local:8123", "token": "secret-token"},
+            )
+        token_path = Path(tmp) / "ha_token.txt"
+        assert token_path.exists()
+
+        status, body = _post(port, "/api/setup/provider", {"skip": True})
+
+        assert status == 200
+        assert body["ok"] is True
+        assert not token_path.exists()
         assert server.setup._director is server.director
