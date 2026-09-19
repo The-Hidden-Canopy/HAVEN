@@ -65,6 +65,7 @@ _STATIC_CONTENT_TYPES = {
     ".webmanifest": "application/manifest+json",
     ".js": "text/javascript",
     ".mjs": "text/javascript",
+    ".png": "image/png",
     ".svg": "image/svg+xml",
 }
 
@@ -903,7 +904,7 @@ class _Handler(BaseHTTPRequestHandler):
         if not getattr(self.director, "has_declared_owner", False):
             self._send_json(400, {"ok": False, "error": "a declared owner is required for knowledge changes"})
             return
-        principal = getattr(self.director, "resident", None)
+        principal = getattr(self.director, "owner", None)
         actor = getattr(principal, "actor_id", None)
         if not isinstance(actor, str) or not actor.strip() or actor == "no_owner_declared":
             self._send_json(400, {"ok": False, "error": "a declared owner is required for knowledge changes"})

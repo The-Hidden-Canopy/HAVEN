@@ -4,7 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HAVEN</title>
-  <meta name="theme-color" content="#0b0f17">
+  <meta name="theme-color" content="#0b0f17" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f4f7fb" media="(prefers-color-scheme: light)">
+  <meta name="color-scheme" content="dark light">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="mobile-web-app-capable" content="yes">
@@ -18,8 +20,12 @@
   <div class="app">
     <header class="topbar">
       <div class="brand">
-        <span class="brand-dot" aria-hidden="true"></span>
-        <span class="wordmark">HAVEN</span>
+        <span class="haven-logo-frame">
+          <picture>
+            <source media="(prefers-color-scheme: light)" srcset="/haven-logo-dark.png">
+            <img class="haven-logo" src="/haven-logo-light.png" alt="HAVEN" width="190" height="56">
+          </picture>
+        </span>
         <span class="brand-sub">Home&nbsp;&middot;&nbsp;<span id="local-time">&mdash;</span></span>
       </div>
       <div class="topbar-right">
