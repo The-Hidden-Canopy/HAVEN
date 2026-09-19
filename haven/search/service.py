@@ -1,6 +1,6 @@
 """`HavenSearchService`: the "life search bar", proven without vector infra.
 
-Combines two signals, neither of which needs an embedding model:
+Combines several signals, none of which needs an embedding model:
 
 - direct text match against `ResourceRecord.title`/`metadata` (a plain
   case-insensitive substring match -- this module deliberately does not
@@ -13,6 +13,10 @@ Combines two signals, neither of which needs an embedding model:
   too, at a lower score, with a `reason` naming the actual predicate --
   this is the "ontology-aware retrieval instead of keyword search" the
   life search bar is supposed to be, not a bigger regex.
+
+Admitted knowledge is a third, source-backed signal: a proposition can match
+and surface the current resource that supports it, while disputed or stale
+knowledge keeps its state visible and never silently becomes authority.
 
 The expansion pass forwards `query.scope_ids` into `edges_from`/`edges_to`
 themselves, not only as a post-filter on the resource the traversal lands
@@ -33,6 +37,10 @@ architecture proof, not the ceiling.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+from haven.knowledge.claims import ClaimState, is_stale
+from haven.knowledge.store import ClaimStore
 from haven.ontology.store import OntologyStore
 from haven.resources.store import ResourceStore
 
@@ -41,12 +49,20 @@ from .query import SearchHit, SearchQuery
 _TITLE_MATCH_SCORE = 1.0
 _METADATA_MATCH_SCORE = 0.6
 _RELATED_SCORE_FACTOR = 0.4
+_KNOWLEDGE_MATCH_SCORE = 0.8
 
 
 class HavenSearchService:
-    def __init__(self, *, resources: ResourceStore, ontology: OntologyStore | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        resources: ResourceStore,
+        ontology: OntologyStore | None = None,
+        claims: ClaimStore | None = None,
+    ) -> None:
         self._resources = resources
         self._ontology = ontology
+        self._claims = claims
 
     def search(self, query: SearchQuery) -> tuple[SearchHit, ...]:
         needle = query.text.lower()
@@ -64,6 +80,7 @@ class HavenSearchService:
             )
 
         hits: dict[str, SearchHit] = dict(direct)
+        self._add_knowledge_hits(hits, query, needle)
         if self._ontology is not None:
             for hit in tuple(direct.values()):
                 for related_id, predicate, direction in self._related_resource_ids(
@@ -88,6 +105,37 @@ class HavenSearchService:
 
         ranked = sorted(hits.values(), key=lambda hit: (-hit.score, hit.resource_id))
         return tuple(ranked[: query.limit])
+
+    def _add_knowledge_hits(self, hits: dict[str, SearchHit], query: SearchQuery, needle: str) -> None:
+        if self._claims is None:
+            return
+        claims = self._claims.list_all()
+        now = datetime.now(timezone.utc)
+        for claim in claims:
+            if query.scope_ids and claim.scope_id not in query.scope_ids:
+                continue
+            if is_stale(claim, now=now) and not query.include_stale:
+                continue
+            if needle not in claim.proposition.lower():
+                continue
+            reason = (
+                "matched disputed knowledge claim"
+                if claim.state is ClaimState.DISPUTED
+                else "matched knowledge claim"
+            )
+            for source_ref in claim.source_refs:
+                resource = self._resources.get(source_ref)
+                if resource is None or not self._passes_filters(resource, query):
+                    continue
+                candidate = SearchHit(
+                    resource_id=resource.resource_id,
+                    score=_KNOWLEDGE_MATCH_SCORE * claim.confidence,
+                    reason=reason,
+                    matched_refs=(claim.claim_id,),
+                )
+                current = hits.get(resource.resource_id)
+                if current is None or candidate.score > current.score:
+                    hits[resource.resource_id] = candidate
 
     def _candidate_resources(self, query: SearchQuery):
         if query.scope_ids:

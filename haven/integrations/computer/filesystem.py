@@ -181,6 +181,25 @@ class FilesystemProvider:
 
         return self._record_for(Path(path), now=self._clock())
 
+    def read_text(self, resource: ResourceRecord) -> str | None:
+        """Read one text resource after re-checking the provider boundary.
+
+        Knowledge extraction is deliberately downstream from observation,
+        but it must not trust an old locator: a symlink or permission can
+        change between the scan and extraction. Reusing this provider-owned
+        read seam keeps the same canonical-root rule on both operations.
+        """
+
+        if resource.locator is None:
+            return None
+        resolved = self._require_within_roots(resource.locator)
+        if not resolved.is_file():
+            return None
+        try:
+            return resolved.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+
     def _walk(self, root: Path):
         yield root
         try:

@@ -11,7 +11,8 @@ Home Assistant states source.
 Backup is honest about its boundary: a backup is a copy of every file that
 makes up one installation (`installation_file_names` -- setup config,
 provider token, household declarations, enrolled devices, automations,
-durable history, resources, ontology, and every provider's own config).
+    durable history, resources, ontology, admitted knowledge, and every
+    provider's own config).
 Restoring copies them back, but rules, household, and enrollments load at
 boot, so the running process keeps its in-memory state until a restart --
 the restore response says so.
@@ -50,6 +51,7 @@ class SystemDiagnostics:
         )
         enrolled = load_enrolled_sidecar(server.setup_store.path.parent / _ENROLLED_FILENAME)
         records = server.models.list_models()
+        claim_counts = server.claims.count_by_state()
         return {
             "ok": True,
             "diagnostics": {
@@ -75,6 +77,16 @@ class SystemDiagnostics:
                     "enabled": sum(1 for row in schedule_rows if row.enabled),
                 },
                 "events": len(director.store.events),
+                "knowledge": {
+                    "total": sum(claim_counts.values()),
+                    "current": sum(
+                        count for state, count in claim_counts.items()
+                        if state not in ("stale", "unavailable")
+                    ),
+                    "disputed": claim_counts.get("disputed", 0),
+                    "stale": claim_counts.get("stale", 0),
+                    "by_state": claim_counts,
+                },
                 "models": {
                     "registered": len(records),
                     "loaded": sum(1 for record in records if record.state is ModelState.LOADED),

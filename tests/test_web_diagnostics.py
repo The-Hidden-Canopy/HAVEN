@@ -163,8 +163,9 @@ def test_diagnostics_shape_in_real_mode() -> None:
                 "devices",
                 "rules",
                 "scheduler",
-                "events",
-                "models",
+                    "events",
+                    "knowledge",
+                    "models",
                 "voice",
                 "uptime_seconds",
             }
@@ -263,8 +264,9 @@ def test_backup_lifecycle_create_list_restore_delete() -> None:
                 "ha_token.txt",
                 "history.db",
                 "resources.db",
-                "ontology.db",
-                "action_ledger.db",
+                    "ontology.db",
+                    "claims.db",
+                    "action_ledger.db",
             }
 
             # Era two: voice off.

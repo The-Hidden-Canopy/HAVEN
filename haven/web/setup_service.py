@@ -479,6 +479,7 @@ class SetupService:
         on_rebuild: Callable[[], None] | None = None,
         include_demo_candidates: bool = False,
         resource_store=None,
+        knowledge_service=None,
     ) -> None:
         self._store = store
         self._director = director
@@ -490,6 +491,7 @@ class SetupService:
         # so a bare `SetupService` (most tests) never needs one just to
         # exercise the parts of setup that have nothing to do with it.
         self._resource_store = resource_store
+        self._knowledge_service = knowledge_service
         # Called after a step changes provider connection, so the composition
         # root can rebuild the live household from the config this step just
         # saved instead of leaving the running app on whatever it built at
@@ -539,6 +541,11 @@ class SetupService:
         """
 
         self._resource_store = resource_store
+
+    def set_knowledge_service(self, knowledge_service) -> None:
+        """Rebind knowledge to stores rebuilt after a data-dir move."""
+
+        self._knowledge_service = knowledge_service
 
     def _trigger_rebuild(self) -> None:
         if self._on_rebuild is not None:
@@ -963,19 +970,25 @@ class SetupService:
     def remove_computer_provider_root(self, *, path: str | None) -> dict:
         if not isinstance(path, str) or not path.strip():
             return {"ok": False, "error": "a non-empty 'path' is required"}
+        try:
+            normalized_path = str(Path(path.strip()).expanduser().resolve())
+        except OSError:
+            normalized_path = path.strip()
         current = load_computer_provider_config(self._store)
-        remaining = tuple(root for root in current.allowed_roots if root != path)
+        remaining = tuple(root for root in current.allowed_roots if root != normalized_path)
         # Disabling automatically once nothing is left to read is the honest
         # move here, not an error: a household removing its last folder
         # clearly means "stop", not "keep scanning nothing".
         updated = replace(current, allowed_roots=remaining, enabled=current.enabled and bool(remaining))
         save_computer_provider_config(self._store, updated)
-        if self._resource_store is not None:
+        if self._knowledge_service is not None:
+            self._knowledge_service.revoke_locator_prefix(normalized_path.rstrip("/\\"))
+        elif self._resource_store is not None:
             # Revoking a folder must hide its indexed contents -- the folder
             # resource itself and everything under it -- from search
             # immediately, not only once the next scan happens to reconcile
             # them.
-            self._resource_store.mark_stale_by_locator_prefix(path.rstrip("/\\"))
+            self._resource_store.mark_stale_by_locator_prefix(normalized_path.rstrip("/\\"))
         self._trigger_rebuild()
         return self.status()
 
@@ -1000,13 +1013,23 @@ class SetupService:
             return {"ok": False, "error": "no resource store is attached to this installation"}
         records = provider.observe()
         for record in records:
+            if self._knowledge_service is not None:
+                # The knowledge service compares against the previous
+                # resource row, so ingest happens before this scan's upsert.
+                self._knowledge_service.ingest_resource(record, reader=provider.read_text)
             self._resource_store.save(record)
         staled = self._resource_store.reconcile(
             provider_id=provider.provider_id,
             scope_id=self._director.household_id,
             observed_ids=(record.resource_id for record in records),
         )
-        return {"ok": True, "scanned": len(records), "staled": staled}
+        claims_staled = 0
+        if self._knowledge_service is not None:
+            claims_staled = self._knowledge_service.reconcile_stale_sources(
+                provider_id=provider.provider_id,
+                scope_id=self._director.household_id,
+            )
+        return {"ok": True, "scanned": len(records), "staled": staled, "claims_staled": claims_staled}
 
     def declare_person(
         self, *, name: str, entity_id: str | None = None, room_id: str | None = None, role: str = "member"

@@ -95,6 +95,7 @@ const app = {
   focus: null,      // room id or null
   selectedRoom: null, // room id selected in the rooms view, or null
   view: 'world',    // center view: world | rooms | activity | memory | people | automations | system | models | placeholder
+  knowledgeClaims: null, // null until the Memory view loads durable knowledge
   glowTarget: null, // authoritative glow target room id from the engine, or null
   preview: null,    // dev-override glow state, null when following server
   completedTimer: null,
@@ -747,6 +748,10 @@ function renderActivity(payload) {
 }
 
 function renderMemory(payload) {
+  if (app.knowledgeClaims !== null) {
+    renderKnowledgeClaims();
+    return;
+  }
   const entries = Array.isArray(payload.memory) ? payload.memory : [];
   els.memoryCount.textContent =
     entries.length + (entries.length === 1 ? ' entry' : ' entries');
@@ -765,6 +770,79 @@ function renderMemory(payload) {
       fmtClock(entry.recorded_at),
       ''
     ));
+  }
+}
+
+function renderKnowledgeClaims() {
+  const claims = Array.isArray(app.knowledgeClaims) ? app.knowledgeClaims : [];
+  els.memoryCount.textContent = claims.length + (claims.length === 1 ? ' claim' : ' claims');
+  els.memoryList.textContent = '';
+  if (!claims.length) {
+    const empty = document.createElement('div');
+    empty.className = 'feed-empty muted';
+    empty.textContent = 'HAVEN has not admitted any durable knowledge yet.';
+    els.memoryList.appendChild(empty);
+    return;
+  }
+  for (const claim of claims) {
+    const card = document.createElement('article');
+    card.className = 'knowledge-card';
+    const proposition = document.createElement('div');
+    proposition.className = 'knowledge-proposition';
+    proposition.textContent = claim.proposition || '—';
+    const meta = document.createElement('div');
+    meta.className = 'knowledge-meta micro';
+    meta.textContent = (claim.state || 'unavailable').toUpperCase() +
+      ' · ' + Math.round(Number(claim.confidence || 0) * 100) + '%' +
+      ' · ' + (claim.provenance || 'unknown');
+    const source = document.createElement('div');
+    source.className = 'knowledge-source muted';
+    source.textContent = 'Source: ' + (Array.isArray(claim.source_refs) && claim.source_refs.length
+      ? claim.source_refs.join(', ') : 'unavailable');
+    const actions = document.createElement('div');
+    actions.className = 'knowledge-actions';
+    const correct = document.createElement('button');
+    correct.type = 'button';
+    correct.className = 'btn';
+    correct.textContent = 'Correct';
+    correct.addEventListener('click', async () => {
+      const proposition = window.prompt('What should HAVEN remember instead?', claim.proposition || '');
+      if (!proposition || !proposition.trim()) return;
+      const result = await postJSON('/api/knowledge/claims/' + encodeURIComponent(claim.claim_id) + '/correct', {
+        proposition: proposition.trim(),
+      });
+      if (result && result.ok) refreshKnowledge();
+    });
+    const forget = document.createElement('button');
+    forget.type = 'button';
+    forget.className = 'btn';
+    forget.textContent = 'Forget';
+    forget.addEventListener('click', async () => {
+      if (!window.confirm('Forget this claim and suppress it if the source is scanned again?')) return;
+      const result = await postJSON('/api/knowledge/claims/' + encodeURIComponent(claim.claim_id) + '/forget', {});
+      if (result && result.ok) refreshKnowledge();
+    });
+    actions.appendChild(correct);
+    actions.appendChild(forget);
+    card.appendChild(proposition);
+    card.appendChild(meta);
+    card.appendChild(source);
+    card.appendChild(actions);
+    els.memoryList.appendChild(card);
+  }
+}
+
+async function refreshKnowledge() {
+  try {
+    const res = await fetch('/api/knowledge/claims');
+    if (!res.ok) return;
+    const payload = await res.json();
+    if (!payload || payload.ok !== true) return;
+    app.knowledgeClaims = Array.isArray(payload.claims) ? payload.claims : [];
+    renderKnowledgeClaims();
+  } catch {
+    // The ordinary activity/memory feed remains the honest fallback when the
+    // optional knowledge surface is unavailable.
   }
 }
 
@@ -3401,6 +3479,8 @@ async function startModelDownload(url, errEl) {
 function switchView(view, label) {
   app.view = view;
   els.center.dataset.view = view;
+  if (view !== 'memory') app.knowledgeClaims = null;
+  if (view === 'memory') refreshKnowledge();
   if (view === 'models') refreshModels();
   if (view === 'system') refreshSystemDetails();
   if (view === 'placeholder') {

@@ -269,6 +269,36 @@ a {
   font-size: 12.5px;
 }
 
+/* Durable knowledge cards keep provenance and belief state visible instead
+   of making a remembered proposition look like a live observation. */
+.knowledge-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.knowledge-proposition {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.knowledge-meta {
+  color: var(--cyan);
+  letter-spacing: .04em;
+}
+
+.knowledge-source {
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-actions {
+  display: flex;
+  gap: 8px;
+}
+
 /* quiet placeholder view */
 .placeholder-note {
   padding: 14px 0;
