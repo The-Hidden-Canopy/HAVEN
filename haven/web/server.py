@@ -32,6 +32,8 @@ from .receipts_api import action_chain, event_action_id
 from .service_manager import ServiceManager
 from .setup_config import SetupConfigStore, default_data_dir
 from .setup_service import SetupService
+from .computer_actions import ComputerActionService
+from ..actions import ActionLedgerStore
 from ..ontology import OntologyStore
 from ..resources import ResourceStore
 from ..search import HavenSearchService, SearchQuery
@@ -123,6 +125,7 @@ class HavenWebServer(ThreadingHTTPServer):
         self.resources = ResourceStore(Path(resolved_data_dir) / "resources.db")
         self.ontology = OntologyStore(Path(resolved_data_dir) / "ontology.db")
         self.search = HavenSearchService(resources=self.resources, ontology=self.ontology)
+        self.action_ledger = ActionLedgerStore(Path(resolved_data_dir) / "action_ledger.db")
         self.setup = SetupService(
             store=self.setup_store,
             director=self.director,
@@ -130,6 +133,17 @@ class HavenWebServer(ThreadingHTTPServer):
             on_rebuild=self.rebuild_director,
             include_demo_candidates=self._director_demo,
             resource_store=self.resources,
+        )
+        # Authorization + consequence verification in front of
+        # `FilesystemProvider.execute()` -- independent of `self.setup`
+        # (which only owns the wizard's own enable/roots/scan config), the
+        # same way `self.search` sits beside rather than inside it.
+        self.computer_actions = ComputerActionService(
+            store=self.setup_store,
+            director=self.director,
+            resource_store=self.resources,
+            ledger=self.action_ledger,
+            clock=clock,
         )
         # Diagnostics reads through the server itself; backups own the
         # `backups/` subtree of the same single-root data dir.
@@ -201,6 +215,22 @@ class HavenWebServer(ThreadingHTTPServer):
         new = self._build_director()
         self.director = new
         self.setup.set_director(new)
+        # Rebuilt from the *current* data dir root (`self.setup_store.path
+        # .parent` -- already updated if this rebuild followed a
+        # `choose_data_dir` move) every time, not just on a data-dir move:
+        # these are cheap to construct (schema-ensure only; every real
+        # operation opens its own connection per call, same as
+        # `HistoryStore`) and are not part of `_build_director()`'s own
+        # rebuild, so nothing else keeps them pointed at the right file.
+        data_dir = self.setup_store.path.parent
+        self.resources = ResourceStore(data_dir / "resources.db")
+        self.ontology = OntologyStore(data_dir / "ontology.db")
+        self.search = HavenSearchService(resources=self.resources, ontology=self.ontology)
+        self.action_ledger = ActionLedgerStore(data_dir / "action_ledger.db")
+        self.setup.set_resource_store(self.resources)
+        self.computer_actions.set_director(new)
+        self.computer_actions.set_resource_store(self.resources)
+        self.computer_actions.set_ledger(self.action_ledger)
         # Mirrors the same wiring `__init__` does for the first director:
         # discovery scans must list the new world's real HA entities, not
         # the one this composition replaced.
@@ -253,6 +283,10 @@ class _Handler(BaseHTTPRequestHandler):
     def search(self) -> HavenSearchService:
         return self.server.search
 
+    @property
+    def computer_actions(self) -> ComputerActionService:
+        return self.server.computer_actions
+
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/api/state":
@@ -275,6 +309,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "service": self.service.status()})
         elif path == "/api/search":
             self._send_search(parse_qs(urlsplit(self.path).query))
+        elif path == "/api/computer/actions/history":
+            self._send_json(200, self.computer_actions.history())
         else:
             match = _JOB_DETAIL_PATH.match(path)
             if match:
@@ -395,6 +431,9 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/setup" or path.startswith("/api/setup/"):
             self._handle_setup_post(path)
             return
+        if path == "/api/computer/actions" or path.startswith("/api/computer/actions/"):
+            self._handle_computer_action_post(path)
+            return
         if path == "/api/system/diagnostics/probe":
             result = self.diagnostics.probe_provider()
             self._send_json(200 if result.get("ok") else 400, result)
@@ -493,10 +532,12 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/api/setup/preferences":
             result = setup.set_preferences(voice=body.get("voice"), intelligence=body.get("intelligence"))
         elif path == "/api/setup/household/people":
+            role = body.get("role")
             result = setup.declare_person(
                 name=body.get("name"),
                 entity_id=body.get("entity_id"),
                 room_id=body.get("room_id"),
+                role=role if isinstance(role, str) and role.strip() else "member",
             )
         elif path == "/api/setup/household/people/remove":
             result = setup.remove_person(person_id=body.get("person_id"))
@@ -514,6 +555,28 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, result)
         else:
             self._send_json(400, result)
+
+    def _handle_computer_action_post(self, path: str) -> None:
+        actions = self.computer_actions
+        body = self._read_json()
+        if body is None:
+            return
+        if path == "/api/computer/actions":
+            parameters = body.get("parameters")
+            result = actions.request_action(
+                action=body.get("action"),
+                resource_id=body.get("resource_id"),
+                parameters=parameters if isinstance(parameters, dict) else None,
+                justification=body.get("justification"),
+            )
+        elif path == "/api/computer/actions/confirm":
+            result = actions.confirm_action(request_id=body.get("request_id"))
+        elif path == "/api/computer/actions/deny":
+            result = actions.deny_action(request_id=body.get("request_id"))
+        else:
+            self._send_json(404, {"error": "not found"})
+            return
+        self._send_setup_result(result)
 
     def _handle_models_post(self, path: str) -> None:
         manager = self.models
@@ -719,7 +782,14 @@ class _Handler(BaseHTTPRequestHandler):
             limit = 20
         if limit <= 0:
             limit = 20
-        query = SearchQuery(text=text, scope_ids=scope_ids, resource_types=resource_types, limit=limit)
+        include_stale = params.get("include_stale", ["false"])[0].strip().lower() in ("1", "true", "yes")
+        query = SearchQuery(
+            text=text,
+            scope_ids=scope_ids,
+            resource_types=resource_types,
+            limit=limit,
+            include_stale=include_stale,
+        )
         hits = self.search.search(query)
         self._send_json(
             200,

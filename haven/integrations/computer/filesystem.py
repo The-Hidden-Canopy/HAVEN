@@ -40,13 +40,30 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
-from haven.core.domain import DeviceCommand, DeviceResult
+from haven.core.domain import DeviceCommand, DeviceResult, RiskTier
 from haven.resources.models import ResourceRecord
 
 PROVIDER_ID = "local_filesystem"
 
 _HASH_CHUNK_BYTES = 1 << 20
 _DEFAULT_MAX_ENTRIES = 5000
+
+# `haven.actions.ResourceAuthorityEngine`'s risk table for this provider's
+# actions. `create_folder`/`copy` are purely additive -- they never touch an
+# existing thing, and undoing one is trivial -- so they run without asking
+# twice, the same "safe automatic" tier a light or thermostat gets. `move`/
+# `rename` relocate or rename the household's only copy of something real;
+# the provider's own no-overwrite guarantee keeps that from ever destroying
+# data, but "the file is still there, just not where you expect it" is
+# exactly the kind of surprise a household should confirm once before it
+# happens, matching the two-step confirmation a garage door or door lock
+# already gets.
+FILESYSTEM_ACTION_RISK = {
+    "filesystem.create_folder": RiskTier.SAFE_AUTOMATIC,
+    "filesystem.copy": RiskTier.SAFE_AUTOMATIC,
+    "filesystem.move": RiskTier.CONFIRMATION_REQUIRED,
+    "filesystem.rename": RiskTier.CONFIRMATION_REQUIRED,
+}
 
 
 class PathOutsideAllowedRoots(ValueError):
@@ -144,6 +161,26 @@ class FilesystemProvider:
                     records.append(record)
         return tuple(records)
 
+    def resource_id_for(self, path: str | Path) -> str:
+        """The `ResourceRecord.resource_id` this provider would use for
+        `path` once canonicalized -- the seam a caller uses to mark a
+        moved-away source stale without observing it again (it can't: the
+        path is gone by the time a move or rename has already succeeded).
+        """
+
+        return _resource_id_for(_canonical(path))
+
+    def observe_one(self, path: str | Path) -> ResourceRecord | None:
+        """Re-observe exactly one path -- the seam a caller uses to verify a
+        mutation's consequence (did the resource store's own record of this
+        path become true again) without paying for a full `observe()`
+        rescan of every allowed root. Returns `None` for a path outside
+        every allowed root or one that no longer exists, exactly as
+        `observe()`'s own per-entry skip already does.
+        """
+
+        return self._record_for(Path(path), now=self._clock())
+
     def _walk(self, root: Path):
         yield root
         try:
@@ -157,9 +194,23 @@ class FilesystemProvider:
                 yield child
 
     def _record_for(self, path: Path, *, now: datetime) -> ResourceRecord | None:
+        # `path` may itself be a symlink (a file symlink -- `_walk` already
+        # refuses to descend into a symlinked *directory*, but still yields
+        # a symlinked *file* entry unresolved). Every stat/hash/read below
+        # follows symlinks, so the boundary this provider exists to enforce
+        # has to be checked against where the link actually points, not
+        # where it appears to live -- resolving here is what
+        # `_require_within_roots` already does, so a symlink whose target
+        # resolves outside every allowed root is skipped before anything
+        # touches it, the same way an out-of-bounds mutation target already
+        # is on the write side.
         try:
-            is_dir = path.is_dir()
-            stat = path.stat()
+            resolved = self._require_within_roots(path)
+        except PathOutsideAllowedRoots:
+            return None
+        try:
+            is_dir = resolved.is_dir()
+            stat = resolved.stat()
         except OSError:
             return None
         capabilities = ["filesystem.read"]
@@ -172,16 +223,16 @@ class FilesystemProvider:
         content_hash = None
         if not is_dir:
             try:
-                content_hash = _sha256_of(path)
+                content_hash = _sha256_of(resolved)
             except OSError:
                 content_hash = None
         return ResourceRecord(
-            resource_id=_resource_id_for(path),
+            resource_id=_resource_id_for(resolved),
             resource_type="folder" if is_dir else "file",
             scope_id=self._config.scope_id,
             provider_id=self.provider_id,
-            title=path.name or str(path),
-            locator=str(path),
+            title=resolved.name or str(resolved),
+            locator=str(resolved),
             capabilities=tuple(capabilities),
             observed_at=now,
             content_hash=content_hash,
@@ -303,4 +354,10 @@ class FilesystemProvider:
         )
 
 
-__all__ = ["FilesystemProvider", "FilesystemProviderConfig", "PathOutsideAllowedRoots", "PROVIDER_ID"]
+__all__ = [
+    "FILESYSTEM_ACTION_RISK",
+    "FilesystemProvider",
+    "FilesystemProviderConfig",
+    "PathOutsideAllowedRoots",
+    "PROVIDER_ID",
+]

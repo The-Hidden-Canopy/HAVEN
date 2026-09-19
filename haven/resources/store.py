@@ -14,9 +14,10 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from .models import ResourceRecord
 
@@ -71,6 +72,7 @@ def resource_record_to_dict(record: ResourceRecord) -> dict:
         "observed_at": _datetime_to_str(record.observed_at),
         "content_hash": record.content_hash,
         "metadata": [[key, value] for key, value in record.metadata],
+        "stale": record.stale,
     }
 
 
@@ -99,6 +101,7 @@ def resource_record_from_dict(payload: object) -> ResourceRecord:
         observed_at=_datetime_from_str(payload["observed_at"], name=f"{name} 'observed_at'"),
         content_hash=payload.get("content_hash"),
         metadata=tuple(metadata),
+        stale=bool(payload.get("stale", False)),
     )
 
 
@@ -186,6 +189,63 @@ class ResourceStore:
             except (ValueError, TypeError):
                 continue
         return tuple(records)
+
+    def delete(self, resource_id: str) -> None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute("DELETE FROM resources WHERE resource_id = ?", (resource_id,))
+                conn.commit()
+            finally:
+                conn.close()
+
+    def mark_stale(self, resource_id: str) -> None:
+        record = self.get(resource_id)
+        if record is None or record.stale:
+            return
+        self.save(replace(record, stale=True))
+
+    def mark_stale_by_locator_prefix(self, root: str) -> int:
+        """Immediately mark stale every resource whose `locator` is `root`
+        itself or sits under it -- used when a household revokes a folder:
+        those resources must stop appearing as current search results right
+        away, not only once the next scan reconciles them. A locator counts
+        as "under" `root` only when the next character is a path separator
+        (`/` or `\\`), so revoking `C:\\Docs` does not also stale
+        `C:\\Docs2\\...`; both separators are accepted since a `locator` is
+        an opaque string this store never otherwise parses.
+        """
+
+        marked = 0
+        for record in self.list_all():
+            locator = record.locator
+            if locator is None or record.stale:
+                continue
+            if locator == root or (locator.startswith(root) and locator[len(root) : len(root) + 1] in ("/", "\\")):
+                self.save(replace(record, stale=True))
+                marked += 1
+        return marked
+
+    def reconcile(self, *, provider_id: str, scope_id: str, observed_ids: Iterable[str]) -> int:
+        """Mark stale every resource this provider+scope previously produced
+        that this scan did not see again.
+
+        A file deleted from disk between scans, or a root a household
+        removed and then rescanned past, both surface as staleness here
+        rather than silently persisting as if still current -- `save()` on
+        its own is upsert-only and has no way to know a resource simply
+        stopped being observed.
+        """
+
+        observed = set(observed_ids)
+        marked = 0
+        for record in self.list_by_scope(scope_id):
+            if record.provider_id != provider_id or record.stale:
+                continue
+            if record.resource_id not in observed:
+                self.save(replace(record, stale=True))
+                marked += 1
+        return marked
 
 
 __all__ = ["ResourceStore", "resource_record_from_dict", "resource_record_to_dict"]

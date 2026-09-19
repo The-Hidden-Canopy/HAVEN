@@ -125,6 +125,74 @@ def test_scan_persists_real_resources_into_the_store():
         assert any(r.title == "notes.txt" for r in saved)
 
 
+def test_removing_a_root_immediately_stales_its_resources_in_the_store():
+    with tempfile.TemporaryDirectory() as tmp:
+        allowed = Path(tmp) / "Documents"
+        allowed.mkdir()
+        (allowed / "notes.txt").write_text("hello")
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+        store = ResourceStore(data_dir / "resources.db")
+        service = _service(data_dir, resource_store=store)
+        service.add_computer_provider_root(path=str(allowed))
+        service.set_computer_provider_enabled(enabled=True)
+        service.scan_computer_provider()
+        assert any(not r.stale for r in store.list_all())
+
+        service.remove_computer_provider_root(path=str(allowed.resolve()))
+
+        # No rescan happened -- removal alone must hide the folder's
+        # resources from a search-facing view without waiting for one.
+        assert all(r.stale for r in store.list_all())
+
+
+def test_rescanning_after_a_file_is_deleted_stales_it_instead_of_leaving_it_current():
+    with tempfile.TemporaryDirectory() as tmp:
+        allowed = Path(tmp) / "Documents"
+        allowed.mkdir()
+        doomed = allowed / "notes.txt"
+        doomed.write_text("hello")
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+        store = ResourceStore(data_dir / "resources.db")
+        service = _service(data_dir, resource_store=store)
+        service.add_computer_provider_root(path=str(allowed))
+        service.set_computer_provider_enabled(enabled=True)
+        service.scan_computer_provider()
+        notes_id = next(r.resource_id for r in store.list_all() if r.title == "notes.txt")
+        assert store.get(notes_id).stale is False
+
+        doomed.unlink()
+        result = service.scan_computer_provider()
+
+        assert result["ok"] is True
+        assert result["staled"] >= 1
+        assert store.get(notes_id).stale is True
+        # Reconciliation staled the old record rather than the scan
+        # silently leaving a second, live-looking copy behind.
+        assert len([r for r in store.list_all() if r.title == "notes.txt"]) == 1
+
+
+def test_rescanning_a_still_present_file_keeps_it_fresh():
+    with tempfile.TemporaryDirectory() as tmp:
+        allowed = Path(tmp) / "Documents"
+        allowed.mkdir()
+        (allowed / "notes.txt").write_text("hello")
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+        store = ResourceStore(data_dir / "resources.db")
+        service = _service(data_dir, resource_store=store)
+        service.add_computer_provider_root(path=str(allowed))
+        service.set_computer_provider_enabled(enabled=True)
+        service.scan_computer_provider()
+
+        result = service.scan_computer_provider()
+
+        assert result["ok"] is True
+        assert result["staled"] == 0
+        assert all(not r.stale for r in store.list_all())
+
+
 def test_config_survives_a_fresh_setup_service_over_the_same_directory():
     with tempfile.TemporaryDirectory() as tmp:
         allowed = Path(tmp) / "Documents"

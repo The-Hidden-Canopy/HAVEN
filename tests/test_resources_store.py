@@ -95,3 +95,121 @@ def test_a_corrupt_row_is_skipped_not_fatal():
 
         results = store.list_by_scope("project:haven")
     assert [r.resource_id for r in results] == ["file:good"]
+
+
+def test_new_records_default_to_not_stale():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ResourceStore(Path(tmp) / "resources.db")
+        store.save(_record())
+        assert store.get("file:proposal-v7").stale is False
+
+
+def test_mark_stale_sets_the_flag_and_is_idempotent():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ResourceStore(Path(tmp) / "resources.db")
+        store.save(_record())
+        store.mark_stale("file:proposal-v7")
+        assert store.get("file:proposal-v7").stale is True
+        # Calling it again on an already-stale record, or on a resource_id
+        # that does not exist, must not raise.
+        store.mark_stale("file:proposal-v7")
+        store.mark_stale("file:does-not-exist")
+        assert store.get("file:proposal-v7").stale is True
+
+
+def test_delete_removes_the_record_outright():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ResourceStore(Path(tmp) / "resources.db")
+        store.save(_record())
+        store.delete("file:proposal-v7")
+        assert store.get("file:proposal-v7") is None
+
+
+def test_mark_stale_by_locator_prefix_only_matches_the_exact_folder():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ResourceStore(Path(tmp) / "resources.db")
+        root = ResourceRecord(
+            resource_id="folder:docs",
+            resource_type="folder",
+            scope_id="project:haven",
+            provider_id="local_computer",
+            title="Docs",
+            locator="C:/Docs",
+            capabilities=("filesystem.read",),
+            observed_at=NOW,
+        )
+        inside = ResourceRecord(
+            resource_id="file:inside",
+            resource_type="file",
+            scope_id="project:haven",
+            provider_id="local_computer",
+            title="inside.txt",
+            locator="C:/Docs/inside.txt",
+            capabilities=("filesystem.read",),
+            observed_at=NOW,
+        )
+        sibling = ResourceRecord(
+            resource_id="file:sibling",
+            resource_type="file",
+            scope_id="project:haven",
+            provider_id="local_computer",
+            title="sibling.txt",
+            locator="C:/Docs2/sibling.txt",
+            capabilities=("filesystem.read",),
+            observed_at=NOW,
+        )
+        store.save(root)
+        store.save(inside)
+        store.save(sibling)
+
+        marked = store.mark_stale_by_locator_prefix("C:/Docs")
+
+        # The revoked folder itself and everything under it go stale; a
+        # differently-named sibling folder that merely shares the prefix
+        # string does not.
+        assert marked == 2
+        assert store.get("folder:docs").stale is True
+        assert store.get("file:inside").stale is True
+        assert store.get("file:sibling").stale is False
+
+
+def test_reconcile_marks_stale_anything_this_scan_did_not_see_again():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ResourceStore(Path(tmp) / "resources.db")
+        seen_again = _record("file:seen-again", "project:haven")
+        deleted = _record("file:deleted-from-disk", "project:haven")
+        other_provider = ResourceRecord(
+            resource_id="file:other-provider",
+            resource_type="file",
+            scope_id="project:haven",
+            provider_id="home_assistant",
+            title="unrelated.txt",
+            locator=None,
+            capabilities=(),
+            observed_at=NOW,
+        )
+        store.save(seen_again)
+        store.save(deleted)
+        store.save(other_provider)
+
+        marked = store.reconcile(
+            provider_id="local_computer", scope_id="project:haven", observed_ids=["file:seen-again"]
+        )
+
+        assert marked == 1
+        assert store.get("file:seen-again").stale is False
+        assert store.get("file:deleted-from-disk").stale is True
+        # A record from a different provider in the same scope is not this
+        # scan's business to judge, seen or not.
+        assert store.get("file:other-provider").stale is False
+
+
+def test_reconcile_does_not_touch_a_different_scope():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ResourceStore(Path(tmp) / "resources.db")
+        store.save(_record("file:elsewhere", "project:other"))
+
+        marked = store.reconcile(provider_id="local_computer", scope_id="project:haven", observed_ids=[])
+
+        assert marked == 0
+        assert store.get("file:elsewhere").stale is False

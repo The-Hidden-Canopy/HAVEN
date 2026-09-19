@@ -3,10 +3,10 @@
 Diagnostics are a network-free snapshot of one installation (world mode,
 provider setup, household, devices, rules, scheduler, events, models,
 voice, uptime); the provider probe is the separate user-invoked reachability
-check. Backup copies the five installation sidecars into timestamped
-directories under `<data_dir>/backups/` and restores them, stating plainly
-that the running process keeps its in-memory rules/household/enrollments
-until a restart.
+check. Backup copies every file `installation_file_names` knows about into
+timestamped directories under `<data_dir>/backups/` and restores them,
+stating plainly that the running process keeps its in-memory
+rules/household/enrollments until a restart.
 """
 
 import http.client
@@ -252,12 +252,20 @@ def test_backup_lifecycle_create_list_restore_delete() -> None:
             status, body = _post(port, "/api/system/backup")
             assert status == 200
             first_id = body["backup"]["id"]
-            assert body["backup"]["files"] == [
+            # Every file that actually exists at backup time, not a
+            # hardcoded five: the real director's history.db and the
+            # server's resources.db/ontology.db/action_ledger.db exist from
+            # boot onward too.
+            assert set(body["backup"]["files"]) == {
                 "haven.json",
                 "household.json",
                 "enrolled_devices.json",
                 "ha_token.txt",
-            ]
+                "history.db",
+                "resources.db",
+                "ontology.db",
+                "action_ledger.db",
+            }
 
             # Era two: voice off.
             status, body = _post(port, "/api/setup/preferences", {"voice": False, "intelligence": False})
@@ -319,3 +327,48 @@ def test_choose_data_dir_moves_backups_with_the_installation() -> None:
         assert not (dir_a / "backups").exists()
         moved = BackupManager(data_dir=dir_b)
         assert [entry["id"] for entry in moved.list()["backups"]] == [created["id"]]
+
+
+def test_choose_data_dir_moves_and_rebinds_resources_and_ontology() -> None:
+    """Regression: `resources.db`/`ontology.db`/`computer_provider.json`
+    used to be left behind entirely -- `choose_data_dir` never listed them,
+    and even once moved, `HavenWebServer.resources`/`.ontology` (constructed
+    once at boot) would keep pointing at the old, now-empty location."""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        old_dir = str(Path(tmp) / "old")
+        new_dir = Path(tmp) / "new"
+        with _boot(Path(old_dir)) as (server, _director, port):
+            from haven.resources import ResourceRecord
+
+            server.resources.save(
+                ResourceRecord(
+                    resource_id="file:before-move.txt",
+                    resource_type="file",
+                    scope_id="project:haven",
+                    provider_id="local_computer",
+                    title="before-move.txt",
+                    locator=None,
+                    capabilities=(),
+                    observed_at=NOW,
+                )
+            )
+
+            status, body = _post(port, "/api/setup/data-dir", {"path": str(new_dir)})
+            assert status == 200
+            assert body["ok"] is True
+
+            # The files themselves moved...
+            assert (new_dir / "resources.db").exists()
+            assert (new_dir / "ontology.db").exists()
+            assert not (Path(old_dir) / "resources.db").exists()
+
+            # ...and the live server's own store objects were rebound to
+            # the new location, not left pointing at the old, moved-away
+            # file: both the data saved before the move is still readable,
+            # and newly saved data lands in the new location.
+            assert server.resources.path == new_dir / "resources.db"
+            assert server.resources.get("file:before-move.txt") is not None
+            status, body = _get_json(port, "/api/search?q=before-move")
+            assert status == 200
+            assert body["hits"] and body["hits"][0]["resource_id"] == "file:before-move.txt"

@@ -8,11 +8,13 @@ render it on every open. The provider probe is the one deliberate exception:
 it is a separate, user-invoked reachability check against the attached
 Home Assistant states source.
 
-Backup is honest about its boundary: a backup is a copy of the five sidecar
-files that make up one installation (setup config, provider token, household
-declarations, enrolled devices, automations). Restoring copies them back,
-but rules, household, and enrollments load at boot, so the running process
-keeps its in-memory state until a restart -- the restore response says so.
+Backup is honest about its boundary: a backup is a copy of every file that
+makes up one installation (`installation_file_names` -- setup config,
+provider token, household declarations, enrolled devices, automations,
+durable history, resources, ontology, and every provider's own config).
+Restoring copies them back, but rules, household, and enrollments load at
+boot, so the running process keeps its in-memory state until a restart --
+the restore response says so.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from pathlib import Path
 
 from ..core.domain import RuleStatus
 from ..models import ModelState
+from .installation_files import installation_file_names
 from .setup_service import _ENROLLED_FILENAME, load_enrolled_sidecar
 
 _ONE_SECOND = timedelta(seconds=1)
@@ -103,13 +106,17 @@ class SystemDiagnostics:
 
 
 class BackupManager:
-    """Copies the installation sidecars into timestamped backups and back.
+    """Copies the installation's files into timestamped backups and back.
 
-    The whole installation is five files in the data dir; a backup is one
-    `backups/<UTC timestamp>/` directory holding the copies that existed.
+    Every file `installation_file_names` knows about -- config, provider
+    token, household/enrolled/automations sidecars, durable history,
+    resources, ontology, the resource action ledger, the computer
+    provider's own config, and every installed community provider's
+    config/secrets sidecars -- not a hardcoded five; the same
+    single-source-of-truth list `choose_data_dir` uses to move the
+    installation, so the two can never drift apart the way a second
+    hardcoded tuple here already once did.
     """
-
-    _SIDECARS = ("haven.json", "household.json", "enrolled_devices.json", "rules.json", "ha_token.txt")
 
     def __init__(self, *, data_dir: Path) -> None:
         self._data_dir = Path(data_dir)
@@ -126,7 +133,7 @@ class BackupManager:
             now += _ONE_SECOND
         target.mkdir(parents=True, exist_ok=False)
         files = []
-        for name in self._SIDECARS:
+        for name in installation_file_names(self._data_dir):
             source = self._data_dir / name
             if not source.exists():
                 continue
@@ -165,12 +172,17 @@ class BackupManager:
 
         source = self._require_backup_dir(backup_id)
         restored = []
-        for name in self._SIDECARS:
-            candidate = source / name
+        # Restore whatever this specific backup actually holds, not
+        # `installation_file_names` re-evaluated against the *live* data
+        # dir: a per-provider config/secrets sidecar the live install has
+        # today may not be what was present when this backup was taken (a
+        # provider installed since, or uninstalled since), and the backup
+        # snapshot itself is the authority on what it contains.
+        for candidate in sorted(source.iterdir()):
             if not candidate.is_file():
                 continue
-            shutil.copy2(candidate, self._data_dir / name)
-            restored.append(name)
+            shutil.copy2(candidate, self._data_dir / candidate.name)
+            restored.append(candidate.name)
         return {"restored": restored, "restart_required": True}
 
     def delete(self, backup_id: str) -> dict:

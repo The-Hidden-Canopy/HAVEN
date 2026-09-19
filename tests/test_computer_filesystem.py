@@ -168,6 +168,57 @@ def test_a_symlinked_directory_is_not_descended_into(tmp_path=None):
     assert str(outside / "secret.txt") not in locators
 
 
+def test_a_symlinked_file_pointing_outside_allowed_roots_is_never_read():
+    """Regression: `_walk` correctly refuses to descend into a symlinked
+    *directory*, but a symlinked *file* entry still reached `_record_for`
+    unresolved -- `stat()`/hashing follow symlinks, so this used to let a
+    file outside every allowed root be read and hashed through a link
+    planted inside one."""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "allowed"
+        root.mkdir()
+        outside = Path(tmp) / "outside"
+        outside.mkdir()
+        secret = outside / "secret.txt"
+        secret.write_text("outside content must never be read")
+        try:
+            (root / "secret-link.txt").symlink_to(secret)
+        except OSError:
+            pytest.skip("symlink creation requires elevated privilege on this host")
+
+        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        records = provider.observe()
+
+    locators = {r.locator for r in records}
+    assert str(secret) not in locators
+    # The symlink's own apparent path must not appear either -- it resolves
+    # outside the allowed roots, so nothing about it is observed at all.
+    assert str(root / "secret-link.txt") not in locators
+    assert all("outside content" not in str(r.metadata) for r in records)
+
+
+def test_a_symlinked_file_pointing_inside_allowed_roots_is_still_observed():
+    """The fix must not overreact: a symlink whose target legitimately
+    resolves inside the allowed roots is still a normal, readable resource."""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "allowed"
+        root.mkdir()
+        real_file = root / "real.txt"
+        real_file.write_text("real content")
+        try:
+            (root / "link-to-real.txt").symlink_to(real_file)
+        except OSError:
+            pytest.skip("symlink creation requires elevated privilege on this host")
+
+        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        records = {r.locator: r for r in provider.observe()}
+
+    assert str(real_file) in records
+    assert records[str(real_file)].content_hash is not None
+
+
 # -- execution: safety ----------------------------------------------------
 
 
@@ -347,3 +398,40 @@ def test_move_of_a_nonexistent_source_fails_cleanly():
         )
     assert result.success is False
     assert "does not exist" in result.detail
+
+
+# -- observe_one (consequence verification's seam) ---------------------------
+
+
+def test_observe_one_returns_a_fresh_record_for_an_existing_path():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "allowed"
+        root.mkdir()
+        (root / "notes.txt").write_text("hello")
+        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+
+        record = provider.observe_one(root / "notes.txt")
+    assert record is not None
+    assert record.title == "notes.txt"
+    assert record.observed_at == NOW
+
+
+def test_observe_one_returns_none_for_a_path_outside_allowed_roots():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "allowed"
+        root.mkdir()
+        outside = Path(tmp) / "outside.txt"
+        outside.write_text("hello")
+        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+
+        assert provider.observe_one(outside) is None
+
+
+def test_observe_one_returns_none_for_a_path_that_no_longer_exists():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "allowed"
+        root.mkdir()
+        gone = root / "gone.txt"
+        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+
+        assert provider.observe_one(gone) is None

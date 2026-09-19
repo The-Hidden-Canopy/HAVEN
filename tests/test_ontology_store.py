@@ -94,6 +94,36 @@ def test_edges_to_finds_incoming_edges_by_object():
     assert {e.assertion_id for e in edges} == {"a1", "a2"}
 
 
+def test_edges_from_respects_a_scope_filter():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = OntologyStore(Path(tmp) / "ontology.db")
+        store.save(_assertion("a1", subject="resource:x", object="project:visible", scope_id="project:haven"))
+        store.save(_assertion("a2", subject="resource:x", object="project:secret", scope_id="secret-project"))
+
+        edges = store.edges_from("resource:x", scope_ids=("project:haven",))
+    assert [e.assertion_id for e in edges] == ["a1"]
+
+
+def test_edges_to_respects_a_scope_filter():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = OntologyStore(Path(tmp) / "ontology.db")
+        store.save(_assertion("a1", subject="resource:visible", object="project:x", scope_id="project:haven"))
+        store.save(_assertion("a2", subject="resource:secret", object="project:x", scope_id="secret-project"))
+
+        edges = store.edges_to("project:x", scope_ids=("project:haven",))
+    assert [e.assertion_id for e in edges] == ["a1"]
+
+
+def test_edges_from_with_no_scope_filter_is_unrestricted():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = OntologyStore(Path(tmp) / "ontology.db")
+        store.save(_assertion("a1", subject="resource:x", object="project:a", scope_id="project:haven"))
+        store.save(_assertion("a2", subject="resource:x", object="project:b", scope_id="secret-project"))
+
+        edges = store.edges_from("resource:x")
+    assert {e.assertion_id for e in edges} == {"a1", "a2"}
+
+
 def test_scope_isolation_never_leaks_across_scopes():
     with tempfile.TemporaryDirectory() as tmp:
         store = OntologyStore(Path(tmp) / "ontology.db")

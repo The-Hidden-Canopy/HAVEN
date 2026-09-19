@@ -40,6 +40,7 @@ from .computer_provider import (
     load_computer_provider_config,
     save_computer_provider_config,
 )
+from .installation_files import installation_file_names
 from .provider_install import (
     find_installed_provider,
     is_real_installation,
@@ -526,6 +527,19 @@ class SetupService:
 
         self._director = director
 
+    def set_resource_store(self, resource_store) -> None:
+        """Rebind to a freshly built resource store after a data-dir move.
+
+        `self._resource_store` is not derived from `self._director` (the
+        resource/ontology substrate lives on `HavenWebServer` directly, not
+        the governed household loop), so `set_director` alone would leave a
+        `scan_computer_provider()` call writing into the *old* location's
+        `ResourceStore` object after `choose_data_dir` moved
+        `resources.db` out from under it.
+        """
+
+        self._resource_store = resource_store
+
     def _trigger_rebuild(self) -> None:
         if self._on_rebuild is not None:
             self._on_rebuild()
@@ -589,21 +603,18 @@ class SetupService:
         except OSError as exc:
             return {"ok": False, "error": f"data dir is not writable {resolved}: {exc}"}
         # HAVEN has one root: choosing a directory moves the installation, it
-        # does not split it. The config, provider token, enrolled-devices and
-        # household sidecars, the automations sidecar, and the backups
-        # directory all move to the new root, and the store rebinds to the
-        # moved haven.json so every path derived from store.path.parent is
-        # in the new root immediately.
+        # does not split it. Every sidecar `installation_file_names` knows
+        # about (config, provider token, enrolled-devices and household
+        # sidecars, the automations sidecar, durable history, resources,
+        # ontology, the computer provider's own config, every installed
+        # community provider's config/secrets) plus the backups directory
+        # all move to the new root, and the store rebinds to the moved
+        # haven.json so every path derived from store.path.parent is in the
+        # new root immediately.
         current_dir = self._config_dir()
         if resolved != current_dir.resolve():
-            for name in (
-                "haven.json",
-                _TOKEN_FILENAME,
-                _ENROLLED_FILENAME,
-                _HOUSEHOLD_FILENAME,
-                _RULES_FILENAME,
-                "backups",
-            ):
+            names = installation_file_names(current_dir) + ("backups",)
+            for name in names:
                 source = current_dir / name
                 if not source.exists():
                     continue
@@ -616,6 +627,13 @@ class SetupService:
         error = self._save()
         if error is not None:
             return {"ok": False, "error": error}
+        # The server's own resource/ontology stores (and search service
+        # built over them) are not part of `self._director` -- they live on
+        # `HavenWebServer` directly -- so a plain director rebuild would
+        # miss them. `_trigger_rebuild` covers both: `rebuild_director`
+        # already rebuilds the resource/ontology stores from the current
+        # data dir every time it runs.
+        self._trigger_rebuild()
         return self.status()
 
     def connect_provider(
@@ -952,6 +970,12 @@ class SetupService:
         # clearly means "stop", not "keep scanning nothing".
         updated = replace(current, allowed_roots=remaining, enabled=current.enabled and bool(remaining))
         save_computer_provider_config(self._store, updated)
+        if self._resource_store is not None:
+            # Revoking a folder must hide its indexed contents -- the folder
+            # resource itself and everything under it -- from search
+            # immediately, not only once the next scan happens to reconcile
+            # them.
+            self._resource_store.mark_stale_by_locator_prefix(path.rstrip("/\\"))
         self._trigger_rebuild()
         return self.status()
 
@@ -962,7 +986,10 @@ class SetupService:
         Deliberately synchronous and on-demand -- the same one-shot,
         caller-controls-the-cadence shape `HomeAssistantObserver.observe()`
         already uses -- rather than a background poller this module would
-        have to manage the lifecycle of.
+        have to manage the lifecycle of. Reconciling against the store after
+        saving is what turns a file deleted from disk, or a folder no longer
+        reachable, into a stale record instead of a stale record's opposite:
+        one that silently keeps looking current forever.
         """
 
         config = load_computer_provider_config(self._store)
@@ -974,7 +1001,12 @@ class SetupService:
         records = provider.observe()
         for record in records:
             self._resource_store.save(record)
-        return {"ok": True, "scanned": len(records)}
+        staled = self._resource_store.reconcile(
+            provider_id=provider.provider_id,
+            scope_id=self._director.household_id,
+            observed_ids=(record.resource_id for record in records),
+        )
+        return {"ok": True, "scanned": len(records), "staled": staled}
 
     def declare_person(
         self, *, name: str, entity_id: str | None = None, room_id: str | None = None, role: str = "member"
