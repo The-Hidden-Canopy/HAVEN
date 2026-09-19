@@ -104,27 +104,34 @@ def find_installed_provider(store: SetupConfigStore, provider_id: str) -> Instal
 
 
 def is_real_installation(
-    store: SetupConfigStore, *, household_id: str | None, home_assistant_base_url: str | None
+    store: SetupConfigStore,
+    *,
+    household_id: str | None,
+    home_assistant_base_url: str | None,
+    computer_provider_enabled: bool = False,
 ) -> bool:
     """Whether this is a real household that must never fall back to the
     demo fixture, regardless of whether any provider happens to be active
     right now.
 
-    Three independent signals, checked without preferring one over another:
+    Four independent signals, checked without preferring one over another:
 
     - `household_id`: minted exactly once, permanently, the first time this
       installation was ever real (`ensure_household_id`), and never cleared
       afterward. This is the strongest signal precisely because it survives
       a household disconnecting Home Assistant *and* uninstalling every
-      community provider -- a real household with real enrolled devices,
-      declared people, and persisted rules does not stop being real just
-      because its live evidence is temporarily (or permanently) gone; it
-      degrades to "nothing observed yet", the same honest empty state a
-      single unreachable provider already produces, never the demo fixture
-      reappearing.
+      community provider *and* disabling the computer provider -- a real
+      household with real enrolled devices, declared people, and persisted
+      rules does not stop being real just because its live evidence is
+      temporarily (or permanently) gone; it degrades to "nothing observed
+      yet", the same honest empty state a single unreachable provider
+      already produces, never the demo fixture reappearing.
     - `home_assistant_base_url`: Home Assistant's own dedicated field.
     - the installed-providers index: any community provider ever activated,
       enabled or not.
+    - `computer_provider_enabled`: the built-in filesystem provider's own
+      dedicated config (`haven/web/computer_provider.py`), the same "its
+      own field, not a shared one" treatment Home Assistant already gets.
 
     Deliberately not `SetupConfig.provider_kind is not None`: that field
     gets overwritten to whatever provider was activated *most recently*
@@ -138,6 +145,7 @@ def is_real_installation(
     return (
         household_id is not None
         or home_assistant_base_url is not None
+        or computer_provider_enabled
         or bool(load_installed_providers(store))
     )
 
