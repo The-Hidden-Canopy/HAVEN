@@ -856,6 +856,78 @@ a {
   min-height: 0;
 }
 
+/* life-search results share the HAVEN rail with conversation; the result
+   cards stay bounded so a large search cannot hide permissions or the input. */
+.search-results-panel {
+  flex: none;
+  max-height: 245px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.search-results-panel[hidden] { display: none; }
+
+.search-results-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 9px;
+}
+
+.search-clear {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.search-clear:hover { color: var(--text); }
+
+.search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.search-result:last-child { border-bottom: 0; }
+
+.search-result-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.search-result-kind { font-size: 9px; }
+
+.search-result-reason {
+  color: var(--teal);
+  font-size: 11px;
+}
+
+.search-result-claim {
+  color: var(--text);
+  font-size: 11.5px;
+}
+
+.search-result-locator {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.search-empty {
+  font-size: 11.5px;
+  padding: 4px 0;
+}
+
 /* bottom status bar */
 .statusbar {
   grid-area: status;
@@ -1178,6 +1250,16 @@ body[data-glow="listening"] .pill.pill-voice::before {
 }
 
 .composer button:hover { border-color: var(--teal-dim); color: var(--teal); }
+
+.composer-mode {
+  min-width: 48px;
+  color: var(--muted) !important;
+}
+
+.composer.search-mode .composer-mode {
+  color: var(--teal) !important;
+  border-color: var(--teal-dim);
+}
 
 /* mic waveform — pure CSS, toggled by class; hidden unless voice.mic */
 .mic-wave {

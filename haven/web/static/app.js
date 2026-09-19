@@ -55,8 +55,13 @@ const els = {
   contextList: $('#context-list'),
   conversation: $('#conversation'),
   pendingSlot: $('#pending-slot'),
+  searchResultsPanel: $('#search-results-panel'),
+  searchResults: $('#search-results'),
+  searchClear: $('#search-clear'),
   chatForm: $('#chat-form'),
   chatInput: $('#chat-input'),
+  chatSubmit: $('#chat-submit'),
+  searchMode: $('#search-mode'),
   micWave: $('#mic-wave'),
   voiceWake: $('#voice-wake'),
   voiceForm: $('#voice-form'),
@@ -96,6 +101,7 @@ const app = {
   selectedRoom: null, // room id selected in the rooms view, or null
   view: 'world',    // center view: world | rooms | activity | memory | people | automations | system | models | placeholder
   knowledgeClaims: null, // null until the Memory view loads durable knowledge
+  searchMode: false,
   glowTarget: null, // authoritative glow target room id from the engine, or null
   preview: null,    // dev-override glow state, null when following server
   completedTimer: null,
@@ -589,6 +595,99 @@ function renderConversation(payload) {
     els.conversation.appendChild(wrap);
   }
   els.conversation.scrollTop = els.conversation.scrollHeight;
+}
+
+function clearSearchResults() {
+  els.searchResults.textContent = '';
+  els.searchResultsPanel.hidden = true;
+  els.searchResultsPanel.removeAttribute('aria-busy');
+}
+
+function renderSearchResults(payload) {
+  els.searchResults.textContent = '';
+  els.searchResultsPanel.hidden = false;
+  els.searchResultsPanel.removeAttribute('aria-busy');
+  const hits = Array.isArray(payload && payload.hits) ? payload.hits : [];
+  if (!hits.length) {
+    const empty = document.createElement('p');
+    empty.className = 'search-empty muted';
+    empty.textContent = 'HAVEN found no current resources for that search.';
+    els.searchResults.appendChild(empty);
+    return;
+  }
+
+  for (const hit of hits) {
+    const resource = hit && hit.resource && typeof hit.resource === 'object'
+      ? hit.resource : {};
+    const card = document.createElement('article');
+    card.className = 'search-result';
+
+    const title = document.createElement('div');
+    title.className = 'search-result-title';
+    title.textContent = resource.title || hit.resource_id || 'Unknown resource';
+    card.appendChild(title);
+
+    const kind = document.createElement('div');
+    kind.className = 'search-result-kind micro';
+    kind.textContent = resource.resource_type || 'resource';
+    card.appendChild(kind);
+
+    const reason = document.createElement('div');
+    reason.className = 'search-result-reason';
+    reason.textContent = hit.reason || 'matched';
+    card.appendChild(reason);
+
+    const claims = Array.isArray(hit.matched_claims) ? hit.matched_claims : [];
+    for (const claim of claims) {
+      const proposition = document.createElement('div');
+      proposition.className = 'search-result-claim';
+      proposition.textContent = '“' + (claim.proposition || 'Knowledge claim') + '”';
+      card.appendChild(proposition);
+    }
+
+    const locator = document.createElement('div');
+    locator.className = 'search-result-locator muted';
+    locator.textContent = resource.locator || hit.resource_id || 'unavailable';
+    card.appendChild(locator);
+    els.searchResults.appendChild(card);
+  }
+}
+
+async function runSearch(text) {
+  els.searchResultsPanel.hidden = false;
+  els.searchResultsPanel.setAttribute('aria-busy', 'true');
+  els.searchResults.textContent = '';
+  const pending = document.createElement('p');
+  pending.className = 'search-empty muted';
+  pending.textContent = 'Searching your HAVEN…';
+  els.searchResults.appendChild(pending);
+  try {
+    const res = await fetch('/api/search?q=' + encodeURIComponent(text));
+    if (!res.ok) throw new Error('search unavailable');
+    const payload = await res.json();
+    if (!payload || payload.ok !== true) throw new Error('search unavailable');
+    renderSearchResults(payload);
+  } catch {
+    els.searchResultsPanel.removeAttribute('aria-busy');
+    els.searchResults.textContent = '';
+    const error = document.createElement('p');
+    error.className = 'search-empty muted';
+    error.textContent = 'Search is unavailable right now.';
+    els.searchResults.appendChild(error);
+  }
+}
+
+function setComposerMode(search) {
+  app.searchMode = search === true;
+  els.chatForm.classList.toggle('search-mode', app.searchMode);
+  els.chatInput.placeholder = app.searchMode
+    ? 'Find anything in your HAVEN…'
+    : 'Ask HAVEN or find anything…';
+  els.chatSubmit.textContent = app.searchMode ? 'Search' : 'Ask';
+  els.chatSubmit.setAttribute('aria-label', app.searchMode ? 'Search HAVEN' : 'Ask HAVEN');
+  els.searchMode.textContent = app.searchMode ? 'Ask' : 'Find';
+  els.searchMode.setAttribute('aria-pressed', app.searchMode ? 'true' : 'false');
+  if (!app.searchMode) clearSearchResults();
 }
 
 function renderPending(payload) {
@@ -1771,6 +1870,27 @@ function renderSetupComputerAccess(container) {
     input.value = '';
   });
   container.appendChild(form);
+
+  const chooseFolder = document.createElement('button');
+  chooseFolder.type = 'button';
+  chooseFolder.className = 'btn';
+  chooseFolder.textContent = 'Choose folder…';
+  chooseFolder.addEventListener('click', async () => {
+    const result = await postJSON('/api/desktop/pick-folder', {});
+    if (!result) {
+      showSetupError('Native folder picker unavailable. You can enter a path above.');
+      return;
+    }
+    if (result.cancelled) return;
+    if (!result.ok || typeof result.path !== 'string' || !result.path.trim()) {
+      showSetupError(typeof result.error === 'string'
+        ? result.error
+        : 'Native folder picker unavailable. You can enter a path above.');
+      return;
+    }
+    await setupPost('/api/setup/computer/roots', { path: result.path.trim() });
+  });
+  container.appendChild(chooseFolder);
 
   const enableRow = document.createElement('label');
   enableRow.className = 'pending-auto setup-pref';
@@ -3636,9 +3756,16 @@ function wireEvents() {
     const text = els.chatInput.value.trim();
     if (!text) return;
     els.chatInput.value = '';
+    if (app.searchMode) {
+      await runSearch(text);
+      return;
+    }
     const resp = await postJSON('/api/chat', { text: text, focus: app.focus });
     if (resp && resp.ok && resp.state) renderState(resp.state);
   });
+
+  els.searchMode.addEventListener('click', () => setComposerMode(!app.searchMode));
+  els.searchClear.addEventListener('click', clearSearchResults);
 
   els.voiceWake.addEventListener('click', fireWake);
   els.demoWake.addEventListener('click', fireWake);
