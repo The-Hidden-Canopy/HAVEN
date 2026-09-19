@@ -1157,7 +1157,9 @@ function renderSetupWelcome(container) {
     'providers now or add them later.'));
   container.appendChild(setupText('Your core configuration and history stay on this machine.'));
   container.appendChild(setupText(
-    'Nothing except the final setup step is required. This takes about two minutes.'));
+    'Every step can be skipped or left at its default. The only firm ' +
+    'requirement is naming an owner once you have connected a real ' +
+    'provider. This takes about two minutes.'));
 }
 
 /* --- step 2: data directory --- */
@@ -1387,7 +1389,7 @@ function renderSetupDiscovery(container) {
   const scan = document.createElement('button');
   scan.type = 'button';
   scan.className = 'btn';
-  scan.textContent = provider.configured === true ? 'Scan' : 'Scan this computer/network';
+  scan.textContent = provider.configured === true ? 'Scan' : 'Check for available devices';
   scan.addEventListener('click', async () => {
     await setupPost('/api/setup/discovery/scan', {});
   });

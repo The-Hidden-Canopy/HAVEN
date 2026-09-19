@@ -35,6 +35,7 @@ from ..discovery.models import DiscoveredDevice
 from ..integrations.home_assistant.client import LiveHomeAssistantAdapter
 from ..providers.plugin import ProviderManifest
 from .provider_install import (
+    any_provider_configured,
     find_installed_provider,
     load_installed_providers,
     remove_installed_provider,
@@ -530,8 +531,15 @@ class SetupService:
                     "resolved": str(resolved),
                 },
                 "provider": {
-                    "configured": config.provider_kind is not None,
-                    "kind": config.provider_kind,
+                    # Home Assistant's own dedicated field, never
+                    # `provider_kind` -- that field no longer means "the"
+                    # active provider (see `any_provider_configured`), and
+                    # this object is specifically the Home Assistant
+                    # connect step's own status, not a household-wide
+                    # summary (`list_provider_packages()` covers installed
+                    # community providers separately).
+                    "configured": config.provider_base_url is not None,
+                    "kind": "home_assistant" if config.provider_base_url is not None else None,
                     "base_url": config.provider_base_url,
                 },
                 "discovery": {
@@ -690,7 +698,11 @@ class SetupService:
                 installed = installed_by_entry_point.get(discovered.entry_point_name)
                 row["installed"] = installed is not None
                 row["enabled"] = installed.enabled if installed is not None else False
-                row["active"] = installed is not None and self._config.provider_kind == manifest.provider_id
+                # "Active" means "installed and enabled" -- every enabled
+                # provider participates in the composition simultaneously
+                # (`build_provider_composition`), so there is no single
+                # provider_id left to compare against.
+                row["active"] = installed is not None and installed.enabled
             rows.append(row)
         return {"ok": True, "providers": rows}
 
@@ -728,10 +740,12 @@ class SetupService:
             config=config or {},
             secret_fields=secret_fields,
         )
-        self._config = replace(self._config, provider_kind=manifest.provider_id)
-        error = self._save()
-        if error is not None:
-            return {"ok": False, "error": error}
+        # Deliberately never touches `self._config`/`provider_kind`: that
+        # field is Home Assistant's own connect step, not "the" active
+        # provider (see `any_provider_configured`'s docstring) -- installing
+        # a second provider must never look like it silently replaced the
+        # first. `installed_providers.json` (just written above) is this
+        # provider's own durable "configured" record.
         self._trigger_rebuild()
         return {"ok": True, "provider_id": manifest.provider_id}
 
@@ -847,14 +861,15 @@ class SetupService:
 
     def complete(self) -> dict:
         # A real provider means real actions are possible once the wizard
-        # closes; a household that has connected one must declare a real
-        # owner before that happens, or every governed action would run as
+        # closes; a household that has configured one (Home Assistant, or
+        # any installed community provider) must declare a real owner
+        # before that happens, or every governed action would run as
         # whatever fixture identity `DemoDirector` falls back to. A pure
-        # demo run (no provider chosen) has no such requirement -- its
+        # demo run (nothing ever configured) has no such requirement -- its
         # fixture identity is the point, not a gap.
-        if self._config.provider_kind is not None and not any(
-            person.role == "owner" for person in self.household.people
-        ):
+        if any_provider_configured(
+            self._store, home_assistant_base_url=self._config.provider_base_url
+        ) and not any(person.role == "owner" for person in self.household.people):
             return {"ok": False, "error": "declare a household owner before finishing setup"}
         self._config = replace(self._config, completed=True)
         error = self._save()
