@@ -13,6 +13,7 @@ def test_composer_exposes_ask_and_find_modes_with_search_results_surface():
     assert 'id="chat-input"' in index
     assert 'placeholder="Ask HAVEN or find anything' in index
     assert 'id="search-mode"' in index
+    assert 'id="composer-feedback"' in index
     assert 'id="search-results-panel"' in index
     assert "3: { title: 'You'" in app
     assert "4: { title: 'This computer'" in app
@@ -38,3 +39,19 @@ def test_composer_exposes_ask_and_find_modes_with_search_results_surface():
     assert "search-result-action-feedback" in app
     assert "HAVEN could not reach the local service." in app
     assert "button.textContent = idleLabel + 'ed ✓'" in app
+    assert "postJSONDetailed('/api/chat'" in app
+    assert "showComposerFeedback" in app
+
+
+def test_main_surface_exposes_authoring_for_rooms_people_contexts_and_automations():
+    index = (STATIC_ROOT / "index.html").read_text(encoding="utf-8")
+    app = (STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+
+    for element_id in ("rooms-add", "people-add", "contexts-add", "automations-add", "authoring-panel"):
+        assert f'id="{element_id}"' in index
+    for route in ("/api/rooms", "/api/people", "/api/contexts", "/api/automations"):
+        assert route in app
+    assert "openAuthoringDialog" in app
+    assert "patchJSONDetailed" in app
+    assert "deleteJSONDetailed" in app
+    assert "owner must approve it before the scheduler can act" in app

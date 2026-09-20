@@ -13,6 +13,7 @@ const els = {
   roomsCount: $('#rooms-count'),
   roomNav: $('#room-nav'),
   roomDetail: $('#room-detail'),
+  roomsAdd: $('#rooms-add'),
   navItems: document.querySelectorAll('.rail-nav li'),
   activityList: $('#activity-list'),
   activityCount: $('#activity-count'),
@@ -20,8 +21,12 @@ const els = {
   memoryCount: $('#memory-count'),
   peopleList: $('#people-list'),
   peopleCount: $('#people-count'),
+  peopleAdd: $('#people-add'),
+  contextsList: $('#contexts-list'),
+  contextsAdd: $('#contexts-add'),
   automationsList: $('#automations-list'),
   automationsCount: $('#automations-count'),
+  automationsAdd: $('#automations-add'),
   systemBody: $('#system-body'),
   modelsCount: $('#models-count'),
   modelsList: $('#models-list'),
@@ -62,6 +67,7 @@ const els = {
   chatInput: $('#chat-input'),
   chatSubmit: $('#chat-submit'),
   searchMode: $('#search-mode'),
+  composerFeedback: $('#composer-feedback'),
   micWave: $('#mic-wave'),
   voiceWake: $('#voice-wake'),
   voiceForm: $('#voice-form'),
@@ -90,6 +96,13 @@ const els = {
   setupBody: $('#setup-body'),
   setupBack: $('#setup-back'),
   setupNext: $('#setup-next'),
+  authoringScrim: $('#authoring-scrim'),
+  authoringPanel: $('#authoring-panel'),
+  authoringTitle: $('#authoring-title'),
+  authoringNote: $('#authoring-note'),
+  authoringForm: $('#authoring-form'),
+  authoringError: $('#authoring-error'),
+  authoringClose: $('#authoring-close'),
 };
 
 /* Voice states that mean HAVEN is actively capturing audio. */
@@ -98,9 +111,13 @@ const VOICE_ACTIVE = new Set(['wake', 'listening', 'interpreting']);
 const app = {
   data: null,
   focus: null,      // room id or null
+  automationFocus: null, // rule id or null
   selectedRoom: null, // room id selected in the rooms view, or null
   view: 'world',    // center view: world | rooms | activity | memory | people | automations | system | models | placeholder
   knowledgeClaims: null, // null until the Memory view loads durable knowledge
+  peopleDirectory: null, // declared people from the authoring endpoint
+  contextsDirectory: null, // declared contexts from the authoring endpoint
+  authoring: null, // {kind, record} while the authoring dialog is open
   searchMode: false,
   glowTarget: null, // authoritative glow target room id from the engine, or null
   preview: null,    // dev-override glow state, null when following server
@@ -172,6 +189,52 @@ async function postJSON(url, body) {
   if (!response || response.httpOk !== true) return null;
   const { httpOk: _httpOk, status: _status, ...payload } = response;
   return payload;
+}
+
+function showComposerFeedback(text, error = false) {
+  if (!els.composerFeedback) return;
+  els.composerFeedback.hidden = !text;
+  els.composerFeedback.textContent = text || '';
+  els.composerFeedback.classList.toggle('error', Boolean(text) && error);
+}
+
+async function patchJSONDetailed(url, body) {
+  return requestJSON(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body == null ? {} : body),
+  });
+}
+
+async function deleteJSONDetailed(url, body) {
+  return requestJSON(url, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body == null ? {} : body),
+  });
+}
+
+async function refreshLiveState() {
+  const response = await requestJSON('/api/state');
+  if (response && response.httpOk === true) renderState(response);
+  return response;
+}
+
+async function refreshAuthoringDirectories() {
+  const [people, contexts] = await Promise.all([
+    requestJSON('/api/people'),
+    requestJSON('/api/contexts'),
+  ]);
+  if (people && people.httpOk === true && people.ok === true && Array.isArray(people.people)) {
+    app.peopleDirectory = people.people;
+  }
+  if (contexts && contexts.httpOk === true && contexts.ok === true && Array.isArray(contexts.contexts)) {
+    app.contextsDirectory = contexts.contexts;
+  }
+  if (app.data) {
+    renderPeople(app.data);
+    renderContextsAuthoring();
+  }
 }
 
 /* ---------- rendering ---------- */
@@ -320,6 +383,12 @@ function renderRooms(payload) {
 }
 
 function renderFocusLabel() {
+  const automations = (app.data && app.data.automations) || [];
+  const automation = automations.find((rule) => rule.rule_id === app.automationFocus);
+  if (automation) {
+    els.focusLabel.textContent = 'Focused: ' + (automation.summary || 'automation');
+    return;
+  }
   const rooms = (app.data && app.data.rooms) || [];
   const room = rooms.find((r) => r.id === app.focus);
   els.focusLabel.textContent = 'Focused: ' + (room ? room.name : 'none');
@@ -328,6 +397,7 @@ function renderFocusLabel() {
 /* ---------- rooms view: navigator chips + room detail ---------- */
 
 function selectRoom(roomId) {
+  app.automationFocus = null;
   if (app.selectedRoom === roomId) {
     app.selectedRoom = null;
     app.focus = null;
@@ -396,6 +466,14 @@ function makeRoomDetail(room) {
     ? room.people.join(' · ')
     : 'Empty';
   head.appendChild(who);
+  const actions = document.createElement('span');
+  actions.className = 'authoring-actions';
+  actions.appendChild(authoringButton('Edit', () => openAuthoringDialog('room', room)));
+  actions.appendChild(authoringButton('Delete', async () => {
+    if (!window.confirm('Remove the ' + room.name + ' room declaration?')) return;
+    await submitAuthoring('/api/rooms/' + encodeURIComponent(room.id), {}, 'DELETE');
+  }));
+  head.appendChild(actions);
   pane.appendChild(head);
 
   if (room.camera) {
@@ -2245,39 +2323,342 @@ async function refreshSetupOnBoot() {
 
 /* ---------- people, automations, system views ---------- */
 
+function authoringButton(label, handler, extraClass) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn' + (extraClass ? ' ' + extraClass : '');
+  button.textContent = label;
+  button.addEventListener('click', handler);
+  return button;
+}
+
+function authoringField(form, labelText, input) {
+  const field = document.createElement('div');
+  field.className = 'authoring-field';
+  const label = document.createElement('label');
+  label.htmlFor = input.id;
+  label.textContent = labelText;
+  field.appendChild(label);
+  field.appendChild(input);
+  form.appendChild(field);
+  return input;
+}
+
+function authoringInput(id, type, value, placeholder) {
+  const input = document.createElement('input');
+  input.id = id;
+  input.name = id;
+  input.type = type;
+  input.value = value == null ? '' : String(value);
+  if (placeholder) input.placeholder = placeholder;
+  input.autocomplete = 'off';
+  return input;
+}
+
+function authoringTextarea(id, value, placeholder) {
+  const input = document.createElement('textarea');
+  input.id = id;
+  input.name = id;
+  input.value = value == null ? '' : String(value);
+  if (placeholder) input.placeholder = placeholder;
+  return input;
+}
+
+function authoringSelect(id, options, selected) {
+  const select = document.createElement('select');
+  select.id = id;
+  select.name = id;
+  for (const option of options) {
+    const row = document.createElement('option');
+    row.value = String(option.value);
+    row.textContent = option.label;
+    row.selected = String(option.value) === String(selected);
+    select.appendChild(row);
+  }
+  return select;
+}
+
+function appendWeekdayField(form, selectedDays) {
+  const field = document.createElement('div');
+  field.className = 'authoring-field';
+  const label = document.createElement('span');
+  label.textContent = 'Days (leave all unchecked for every day)';
+  field.appendChild(label);
+  const days = document.createElement('div');
+  days.className = 'authoring-weekdays';
+  const names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  for (let index = 0; index < names.length; index += 1) {
+    const wrapper = document.createElement('label');
+    wrapper.className = 'authoring-weekday';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.name = 'weekday';
+    checkbox.value = String(index);
+    checkbox.checked = Array.isArray(selectedDays) && selectedDays.includes(index);
+    wrapper.appendChild(checkbox);
+    wrapper.appendChild(document.createTextNode(names[index]));
+    days.appendChild(wrapper);
+  }
+  field.appendChild(days);
+  form.appendChild(field);
+}
+
+function selectedWeekdays(form) {
+  return Array.from(form.querySelectorAll('input[name="weekday"]:checked'))
+    .map((input) => Number(input.value));
+}
+
+function showAuthoringError(text) {
+  els.authoringError.hidden = !text;
+  els.authoringError.textContent = text || '';
+}
+
+function closeAuthoringDialog() {
+  app.authoring = null;
+  els.authoringPanel.hidden = true;
+  els.authoringScrim.hidden = true;
+  els.authoringForm.textContent = '';
+  showAuthoringError('');
+}
+
+async function applyAuthoringResponse(response) {
+  if (!response || response.httpOk !== true || response.ok !== true) {
+    showAuthoringError(
+      (response && (response.error || response.detail)) ||
+      'HAVEN could not save that change.'
+    );
+    return false;
+  }
+  closeAuthoringDialog();
+  if (response.state) renderState(response.state);
+  else await refreshLiveState();
+  await refreshAuthoringDirectories();
+  return true;
+}
+
+async function submitAuthoring(url, body, method) {
+  const response = method === 'PATCH'
+    ? await patchJSONDetailed(url, body)
+    : method === 'DELETE'
+      ? await deleteJSONDetailed(url, body)
+      : await postJSONDetailed(url, body);
+  await applyAuthoringResponse(response);
+}
+
+async function openAuthoringDialog(kind, record) {
+  app.authoring = { kind: kind, record: record || null };
+  els.authoringPanel.hidden = false;
+  els.authoringScrim.hidden = false;
+  els.authoringForm.textContent = '';
+  showAuthoringError('');
+
+  const editing = !!record;
+  const titles = {
+    room: editing ? 'Edit room' : 'Add room',
+    person: editing ? 'Edit person' : 'Add person',
+    context: editing ? 'Edit context' : 'Add context',
+    automation: editing ? 'Edit proposed automation' : 'Add automation',
+  };
+  els.authoringTitle.textContent = titles[kind] || 'Add to your world';
+  els.authoringNote.textContent = kind === 'automation'
+    ? (editing
+      ? 'This proposal is not approved yet. Editing creates a new audited draft; approved automations stay immutable.'
+      : 'HAVEN will propose this rule first. An owner must approve it before the scheduler can act.')
+    : 'This is a household declaration. It remains yours even when a provider is unavailable.';
+
+  const form = els.authoringForm;
+  if (kind === 'room') {
+    const name = authoringField(form, 'Room name', authoringInput('authoring-name', 'text', record && record.name, 'e.g. Office'));
+    const actions = document.createElement('div');
+    actions.className = 'authoring-form-actions';
+    actions.appendChild(authoringButton('Cancel', closeAuthoringDialog));
+    actions.appendChild(authoringButton(editing ? 'Save room' : 'Add room', async () => {
+      await submitAuthoring(
+        editing ? '/api/rooms/' + encodeURIComponent(record.id || record.room_id) : '/api/rooms',
+        { name: name.value.trim() },
+        editing ? 'PATCH' : 'POST'
+      );
+    }, 'btn-approve'));
+    form.appendChild(actions);
+  } else if (kind === 'person') {
+    const personId = record && (record.person_id || record.id);
+    const name = authoringField(form, 'Name', authoringInput('authoring-name', 'text', record && record.name, 'e.g. Gerron'));
+    const role = authoringField(form, 'Role', authoringSelect(
+      'authoring-role',
+      [{ value: 'member', label: 'Member' }, { value: 'owner', label: 'Owner' }],
+      record && record.role ? record.role : 'member'
+    ));
+    const actions = document.createElement('div');
+    actions.className = 'authoring-form-actions';
+    actions.appendChild(authoringButton('Cancel', closeAuthoringDialog));
+    actions.appendChild(authoringButton(editing ? 'Save person' : 'Add person', async () => {
+      await submitAuthoring(
+        editing ? '/api/people/' + encodeURIComponent(personId) : '/api/people',
+        editing ? { name: name.value.trim(), role: role.value } : { name: name.value.trim(), role: role.value },
+        editing ? 'PATCH' : 'POST'
+      );
+    }, 'btn-approve'));
+    form.appendChild(actions);
+  } else if (kind === 'context') {
+    const contextId = record && record.context_id;
+    const label = authoringField(form, 'Context name', authoringInput('authoring-label', 'text', record && record.label, 'e.g. Working late'));
+    const entity = authoringField(form, 'Provider entity', authoringInput('authoring-entity', 'text', record && record.entity_id, 'e.g. input_boolean.working_late'));
+    const actions = document.createElement('div');
+    actions.className = 'authoring-form-actions';
+    actions.appendChild(authoringButton('Cancel', closeAuthoringDialog));
+    actions.appendChild(authoringButton(editing ? 'Save context' : 'Add context', async () => {
+      await submitAuthoring(
+        editing ? '/api/contexts/' + encodeURIComponent(contextId) : '/api/contexts',
+        { label: label.value.trim(), entity_id: entity.value.trim() },
+        editing ? 'PATCH' : 'POST'
+      );
+    }, 'btn-approve'));
+    form.appendChild(actions);
+  } else if (kind === 'automation') {
+    const rule = record || {};
+    const schedule = rule.schedule || {};
+    const source = authoringField(form, 'What should HAVEN do?', authoringTextarea(
+      'authoring-source', rule.summary, 'e.g. Turn off the office light'
+    ));
+    const time = authoringField(form, 'At', authoringInput('authoring-time', 'time', schedule.time_of_day || '22:00'));
+    appendWeekdayField(form, Array.isArray(schedule.weekdays) ? schedule.weekdays : []);
+    let target = null;
+    let capability = null;
+    let options = [];
+    if (!editing) {
+      const optionResponse = await requestJSON('/api/automations/options');
+      options = optionResponse && optionResponse.ok === true && Array.isArray(optionResponse.options)
+        ? optionResponse.options : [];
+      if (!options.length) {
+        const unavailable = document.createElement('p');
+        unavailable.className = 'authoring-inline-note muted';
+        unavailable.textContent = 'No writable device capabilities are available yet.';
+        form.appendChild(unavailable);
+      } else {
+        target = authoringField(form, 'Device', authoringSelect(
+          'authoring-target',
+          options.map((option, index) => ({
+            value: index,
+            label: (option.room ? option.room + ' · ' : '') + option.device_id,
+          })),
+          0
+        ));
+        capability = authoringField(form, 'Control', authoringSelect('authoring-capability', [], 0));
+        const syncCapabilities = () => {
+          capability.textContent = '';
+          const selected = options[Number(target.value)];
+          if (selected) {
+            const row = document.createElement('option');
+            row.value = selected.capability;
+            row.textContent = selected.capability + ' · ' + selected.service;
+            capability.appendChild(row);
+          }
+        };
+        target.addEventListener('change', syncCapabilities);
+        syncCapabilities();
+      }
+    }
+    const actions = document.createElement('div');
+    actions.className = 'authoring-form-actions';
+    actions.appendChild(authoringButton('Cancel', closeAuthoringDialog));
+    actions.appendChild(authoringButton(editing ? 'Save proposal' : 'Propose automation', async () => {
+      const body = {
+        source_text: source.value.trim(),
+        time_of_day: time.value,
+        weekdays: selectedWeekdays(form),
+        interpretation: source.value.trim(),
+        justification: editing ? 'edited automation in HAVEN' : undefined,
+      };
+      if (editing) {
+        await submitAuthoring('/api/automations/' + encodeURIComponent(rule.rule_id), body, 'PATCH');
+        return;
+      }
+      const selected = options[Number(target && target.value)];
+      if (!selected) {
+        showAuthoringError('Choose a writable device capability first.');
+        return;
+      }
+      body.target_device_id = selected.device_id;
+      body.capability = selected.capability;
+      body.service = selected.service;
+      await submitAuthoring('/api/automations', body, 'POST');
+    }, 'btn-approve'));
+    form.appendChild(actions);
+  }
+}
+
 function renderPeople(payload) {
-  const people = Array.isArray(payload.people) ? payload.people : [];
+  const people = Array.isArray(app.peopleDirectory)
+    ? app.peopleDirectory
+    : (Array.isArray(payload.people) ? payload.people : []);
   els.peopleCount.textContent =
     people.length + (people.length === 1 ? ' person' : ' people');
   els.peopleList.textContent = '';
   if (!people.length) {
     const empty = document.createElement('div');
     empty.className = 'feed-empty muted';
-    empty.textContent = 'No one home.';
+    empty.textContent = 'No people declared yet.';
     els.peopleList.appendChild(empty);
+  } else {
+    for (const person of people) {
+      const personId = person.person_id || person.id;
+      const present = person.present === true || !!person.room;
+      const card = document.createElement('div');
+      card.className = 'person-card';
+
+      const name = document.createElement('div');
+      name.className = 'room-name';
+      name.textContent = person.name || 'Unknown';
+      card.appendChild(name);
+
+      const role = document.createElement('div');
+      role.className = 'room-sub';
+      role.textContent = (person.role || 'member') + (person.room ? ' · ' + person.room : '');
+      card.appendChild(role);
+
+      const status = document.createElement('span');
+      status.className = 'person-status micro' + (present ? ' present' : '');
+      status.textContent = present ? 'PRESENT' : 'AWAY';
+      card.appendChild(status);
+
+      const actions = document.createElement('div');
+      actions.className = 'authoring-actions';
+      actions.appendChild(authoringButton('Edit', () => openAuthoringDialog('person', person)));
+      actions.appendChild(authoringButton('Delete', async () => {
+        if (!window.confirm('Remove ' + (person.name || personId) + ' from this HAVEN?')) return;
+        await submitAuthoring('/api/people/' + encodeURIComponent(personId), {}, 'DELETE');
+      }));
+      card.appendChild(actions);
+      els.peopleList.appendChild(card);
+    }
+  }
+  renderContextsAuthoring();
+}
+
+function renderContextsAuthoring() {
+  if (!els.contextsList) return;
+  const contexts = Array.isArray(app.contextsDirectory) ? app.contextsDirectory : [];
+  els.contextsList.textContent = '';
+  if (!contexts.length) {
+    const empty = document.createElement('p');
+    empty.className = 'feed-empty muted';
+    empty.textContent = 'No contexts declared yet.';
+    els.contextsList.appendChild(empty);
     return;
   }
-  for (const person of people) {
-    const present = !!person.room;
-    const card = document.createElement('div');
-    card.className = 'person-card';
-
-    const name = document.createElement('div');
-    name.className = 'room-name';
-    name.textContent = person.name || 'Unknown';
-    card.appendChild(name);
-
-    const room = document.createElement('div');
-    room.className = 'room-sub';
-    room.textContent = present ? person.room : 'Away';
-    card.appendChild(room);
-
-    const status = document.createElement('span');
-    status.className = 'person-status micro' + (present ? ' present' : '');
-    status.textContent = present ? 'PRESENT' : 'AWAY';
-    card.appendChild(status);
-
-    els.peopleList.appendChild(card);
+  for (const context of contexts) {
+    const row = document.createElement('div');
+    row.className = 'feed-row';
+    row.appendChild(makeCtxRow(context.label, context.entity_id));
+    const actions = document.createElement('span');
+    actions.className = 'authoring-actions';
+    actions.appendChild(authoringButton('Edit', () => openAuthoringDialog('context', context)));
+    actions.appendChild(authoringButton('Delete', async () => {
+      if (!window.confirm('Remove the ' + (context.label || 'context') + ' declaration?')) return;
+      await submitAuthoring('/api/contexts/' + encodeURIComponent(context.context_id), {}, 'DELETE');
+    }));
+    row.appendChild(actions);
+    els.contextsList.appendChild(row);
   }
 }
 
@@ -2289,6 +2670,9 @@ const AUTO_BADGE_CLASS = {
 
 function renderAutomations(payload) {
   const rules = Array.isArray(payload.automations) ? payload.automations : [];
+  if (app.automationFocus && !rules.some((rule) => rule.rule_id === app.automationFocus)) {
+    app.automationFocus = null;
+  }
   els.automationsCount.textContent =
     rules.length + (rules.length === 1 ? ' rule' : ' rules');
   els.automationsList.textContent = '';
@@ -2301,7 +2685,8 @@ function renderAutomations(payload) {
   }
   for (const rule of rules) {
     const row = document.createElement('div');
-    row.className = 'feed-row';
+    row.className = 'feed-row automation-row' +
+      (app.automationFocus === rule.rule_id ? ' focused' : '');
 
     const action = document.createElement('span');
     action.className = 'feed-type micro';
@@ -2334,6 +2719,47 @@ function renderAutomations(payload) {
     stamp.className = 'feed-stamp';
     stamp.textContent = fmtDateTime(rule.approved_at);
     row.appendChild(stamp);
+
+    const actions = document.createElement('span');
+    actions.className = 'automation-actions';
+    actions.appendChild(authoringButton(
+      app.automationFocus === rule.rule_id ? 'Focused' : 'Focus',
+      () => {
+        app.automationFocus = app.automationFocus === rule.rule_id ? null : rule.rule_id;
+        renderAutomations(payload);
+        renderFocusLabel();
+      }
+    ));
+    if (rule.status === 'proposed') {
+      actions.appendChild(authoringButton('Edit', () => openAuthoringDialog('automation', rule)));
+      actions.appendChild(authoringButton('Approve', async () => {
+        await applyAuthoringResponse(await postJSONDetailed(
+          '/api/automations/' + encodeURIComponent(rule.rule_id) + '/approve',
+          { justification: 'owner approved automation from HAVEN' }
+        ));
+      }, 'btn-approve'));
+    }
+    if (rule.status === 'approved') {
+      const scheduler = (app.data && Array.isArray(app.data.scheduler))
+        ? app.data.scheduler.find((item) => item.rule_id === rule.rule_id) : null;
+      const toggle = authoringButton(scheduler && scheduler.enabled === false ? 'Enable' : 'Disable', async () => {
+        await applyAuthoringResponse(await patchJSONDetailed(
+          '/api/automations/' + encodeURIComponent(rule.rule_id),
+          { enabled: !(scheduler && scheduler.enabled === false) }
+        ));
+      });
+      actions.appendChild(toggle);
+    }
+    if (rule.status === 'proposed' || rule.status === 'approved') {
+      actions.appendChild(authoringButton(rule.status === 'proposed' ? 'Discard' : 'Revoke', async () => {
+        if (!window.confirm('Revoke this automation?')) return;
+        await applyAuthoringResponse(await deleteJSONDetailed(
+          '/api/automations/' + encodeURIComponent(rule.rule_id),
+          { justification: 'owner revoked automation from HAVEN' }
+        ));
+      }));
+    }
+    if (actions.childNodes.length) row.appendChild(actions);
 
     els.automationsList.appendChild(row);
   }
@@ -3808,6 +4234,7 @@ function switchView(view, label) {
   els.center.dataset.view = view;
   if (view !== 'memory') app.knowledgeClaims = null;
   if (view === 'memory') refreshKnowledge();
+  if (view === 'people') refreshAuthoringDirectories();
   if (view === 'models') refreshModels();
   if (view === 'system') refreshSystemDetails();
   if (view === 'placeholder') {
@@ -3963,16 +4390,42 @@ function wireEvents() {
     const text = els.chatInput.value.trim();
     if (!text) return;
     els.chatInput.value = '';
+    showComposerFeedback('');
     if (app.searchMode) {
       await runSearch(text);
       return;
     }
-    const resp = await postJSON('/api/chat', { text: text, focus: app.focus });
-    if (resp && resp.ok && resp.state) renderState(resp.state);
+    const resp = await postJSONDetailed('/api/chat', {
+      text: text,
+      focus: app.focus,
+      automation_id: app.automationFocus,
+    });
+    if (!resp || resp.httpOk !== true || resp.ok !== true) {
+      showComposerFeedback(
+        (resp && (resp.error || resp.detail)) ||
+        'HAVEN could not process that request.',
+        true
+      );
+      return;
+    }
+    if (resp.state) {
+      renderState(resp.state);
+      // A declaration without live provider evidence is intentionally absent
+      // from state.people, so refresh the declaration directory after a
+      // composer mutation rather than waiting for a view change.
+      if (resp.authoring) await refreshAuthoringDirectories();
+    }
   });
 
   els.searchMode.addEventListener('click', () => setComposerMode(!app.searchMode));
   els.searchClear.addEventListener('click', clearSearchResults);
+
+  els.roomsAdd.addEventListener('click', () => openAuthoringDialog('room'));
+  els.peopleAdd.addEventListener('click', () => openAuthoringDialog('person'));
+  els.contextsAdd.addEventListener('click', () => openAuthoringDialog('context'));
+  els.automationsAdd.addEventListener('click', () => openAuthoringDialog('automation'));
+  els.authoringClose.addEventListener('click', closeAuthoringDialog);
+  els.authoringScrim.addEventListener('click', closeAuthoringDialog);
 
   els.voiceWake.addEventListener('click', fireWake);
   els.demoWake.addEventListener('click', fireWake);
@@ -4127,6 +4580,9 @@ function wireEvents() {
      must be finished or the page closed */
   els.setupBack.addEventListener('click', () => setupGotoStep(setupState.step - 1));
   els.setupNext.addEventListener('click', onSetupNext);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !els.authoringPanel.hidden) closeAuthoringDialog();
+  });
 }
 
 async function boot() {
@@ -4142,6 +4598,7 @@ async function boot() {
   }
 
   await refreshHostCapabilities();
+  await refreshAuthoringDirectories();
   await refreshSetupOnBoot();
 
   const es = new EventSource('/events');

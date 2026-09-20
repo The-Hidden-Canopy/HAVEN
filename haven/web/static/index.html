@@ -26,7 +26,7 @@
             <img class="haven-logo" src="/haven-logo-light.png" alt="HAVEN" width="190" height="56">
           </picture>
         </span>
-        <span class="brand-sub">Home&nbsp;&middot;&nbsp;<span id="local-time">&mdash;</span></span>
+        <span class="brand-sub">Local&nbsp;&middot;&nbsp;<span id="local-time">&mdash;</span></span>
       </div>
       <div class="topbar-right">
         <span id="state-pill" class="pill pill-dormant">DORMANT</span>
@@ -99,7 +99,10 @@
       <section class="view view-rooms" aria-label="Rooms">
         <div class="center-head">
           <h1>ROOMS</h1>
-          <span id="rooms-count" class="muted">&mdash;</span>
+          <div class="center-head-actions">
+            <span id="rooms-count" class="muted">&mdash;</span>
+            <button id="rooms-add" type="button" class="btn btn-sm">+ Add room</button>
+          </div>
         </div>
         <div id="room-nav" class="room-nav" aria-label="Room navigator"></div>
         <div id="room-detail" class="room-detail"></div>
@@ -124,15 +127,28 @@
       <section class="view view-people" aria-label="People">
         <div class="center-head">
           <h1>PEOPLE</h1>
-          <span id="people-count" class="muted">&mdash;</span>
+          <div class="center-head-actions">
+            <span id="people-count" class="muted">&mdash;</span>
+            <button id="people-add" type="button" class="btn btn-sm">+ Add person</button>
+          </div>
         </div>
         <section id="people-list" class="card-grid" aria-label="People"></section>
+        <section class="authoring-subsection" aria-label="Contexts">
+          <div class="authoring-subhead">
+            <h2 class="micro">CONTEXTS</h2>
+            <button id="contexts-add" type="button" class="btn btn-sm">+ Add context</button>
+          </div>
+          <div id="contexts-list" class="feed"></div>
+        </section>
       </section>
 
       <section class="view view-automations" aria-label="Automations">
         <div class="center-head">
           <h1>AUTOMATIONS</h1>
-          <span id="automations-count" class="muted">&mdash;</span>
+          <div class="center-head-actions">
+            <span id="automations-count" class="muted">&mdash;</span>
+            <button id="automations-add" type="button" class="btn btn-sm">+ Add automation</button>
+          </div>
         </div>
         <div id="automations-list" class="feed"></div>
       </section>
@@ -255,6 +271,7 @@
         <button id="chat-submit" type="submit" aria-label="Ask HAVEN">Ask</button>
         <button id="search-mode" type="button" class="composer-mode" aria-pressed="false">Find</button>
       </form>
+      <p id="composer-feedback" class="composer-feedback" hidden aria-live="polite"></p>
     </aside>
 
     <footer class="statusbar">
@@ -289,6 +306,20 @@
       <button id="chain-close" type="button" class="chain-close" aria-label="Close trust chain">&times;</button>
     </div>
     <div id="chain-body" class="chain-body"></div>
+  </aside>
+
+  <div id="authoring-scrim" class="authoring-scrim" hidden></div>
+  <aside id="authoring-panel" class="authoring-panel" role="dialog" aria-modal="true" aria-labelledby="authoring-title" hidden>
+    <div class="authoring-head">
+      <div>
+        <span class="micro">HAVEN AUTHORING</span>
+        <h2 id="authoring-title">Add to your world</h2>
+      </div>
+      <button id="authoring-close" type="button" class="chain-close" aria-label="Close authoring panel">&times;</button>
+    </div>
+    <p id="authoring-note" class="authoring-note muted"></p>
+    <form id="authoring-form" class="authoring-form"></form>
+    <p id="authoring-error" class="model-error" hidden></p>
   </aside>
 
   <div id="setup-scrim" class="setup-scrim" hidden></div>

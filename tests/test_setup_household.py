@@ -271,7 +271,7 @@ def test_remove_person_and_context() -> None:
 
         # The removal is persisted: a fresh service sees the empty household.
         second = _service(Path(tmp) / "data")
-        assert second.status()["setup"]["household"] == {"people": [], "contexts": []}
+        assert second.status()["setup"]["household"] == {"rooms": [], "people": [], "contexts": []}
 
 
 class _FakeUrlopenResponse:
@@ -324,6 +324,7 @@ def test_status_envelope_carries_the_household_key() -> None:
         service.declare_context(label="Working late", entity_id="input_boolean.working_late")
         household = service.status()["setup"]["household"]
         assert household == {
+            "rooms": [],
             "people": [
                 {
                     "person_id": "gerron",
@@ -389,7 +390,7 @@ def test_load_household_declarations_missing_and_malformed() -> None:
         path.write_text("{ not json", encoding="utf-8")
         store = SetupConfigStore(Path(tmp) / "haven.json")
         service = SetupService(store=store, director=DemoDirector(clock=lambda: NOW), clock=lambda: NOW)
-        assert service.status()["setup"]["household"] == {"people": [], "contexts": []}
+        assert service.status()["setup"]["household"] == {"rooms": [], "people": [], "contexts": []}
 
 
 def test_declared_presence_reaches_state_through_the_real_composition_path() -> None:
@@ -440,4 +441,4 @@ def test_malformed_household_file_boots_without_people() -> None:
             assert body["people"] == []
             assert body["contexts"] == []
             _, setup_body = _get_json(port, "/api/setup")
-            assert setup_body["setup"]["household"] == {"people": [], "contexts": []}
+            assert setup_body["setup"]["household"] == {"rooms": [], "people": [], "contexts": []}

@@ -130,9 +130,15 @@ def event_to_dict(
         summary = f"Rule proposed: {label}"
     elif event_type == EventType.RULE_APPROVED:
         summary = f"Rule approved: {label} by {event.actor_id}"
+    elif event_type == EventType.RULE_REVOKED:
+        summary = f"Rule revoked: {label} by {event.actor_id}"
     elif event_type == EventType.RULE_CLARIFIED:
         summary = f"Rule clarified: {label} by {event.actor_id}"
-    elif event_type in (EventType.RULE_APPROVAL_BLOCKED, EventType.RULE_CLARIFICATION_BLOCKED):
+    elif event_type in (
+        EventType.RULE_APPROVAL_BLOCKED,
+        EventType.RULE_CLARIFICATION_BLOCKED,
+        EventType.RULE_REVOCATION_BLOCKED,
+    ):
         summary = f"Rule blocked: {label} ({payload.get('code')})"
     elif event_type == EventType.ACTION_AUTHORIZED:
         summary = f"Action authorized on {device} by {event.actor_id}"
@@ -198,13 +204,28 @@ def rule_to_dict(rule: Rule, *, device_room: str | None = None) -> dict[str, Any
     draft = rule.draft
     source = draft.source_text.strip() or draft.interpretation
     action = draft.capability if draft.capability is not None else draft.action_kind.value
+    schedule = draft.schedule_trigger
     return {
         "rule_id": rule.rule_id,
         "summary": _one_line(source),
         "action": action,
         "target": _rule_target(draft, device_room=device_room),
+        "target_device_id": draft.target_device_id,
+        "capability": draft.capability,
+        "parameters": {key: value for key, value in draft.parameters},
+        "schedule": (
+            {
+                "time_of_day": schedule.time_of_day.isoformat(),
+                "weekdays": sorted(schedule.weekdays),
+            }
+            if schedule is not None
+            else None
+        ),
         "status": rule.status.value,
         "approved_at": rule.approved_at.isoformat() if rule.approved_at is not None else None,
+        "approved_by": rule.approved_by,
+        "revoked_at": rule.revoked_at.isoformat() if rule.revoked_at is not None else None,
+        "revoked_by": rule.revoked_by,
     }
 
 
