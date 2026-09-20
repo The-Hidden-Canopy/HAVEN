@@ -14,4 +14,4 @@ if %errorlevel%==0 (
     set "PY=python"
 )
 
-%PY% -m haven.web.server %*
+%PY% -m haven.desktop %*
