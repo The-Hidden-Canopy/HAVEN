@@ -477,6 +477,7 @@ class SetupService:
         clock: Callable[[], datetime] | None = None,
         ha_states_source=None,
         on_rebuild: Callable[[], None] | None = None,
+        on_data_dir_changed: Callable[[Path], None] | None = None,
         include_demo_candidates: bool = False,
         resource_store=None,
         knowledge_service=None,
@@ -497,6 +498,9 @@ class SetupService:
         # saved instead of leaving the running app on whatever it built at
         # boot until someone restarts the process.
         self._on_rebuild = on_rebuild
+        # DesktopShell uses this to move its held instance lock along with
+        # the installation when onboarding changes the data root.
+        self._on_data_dir_changed = on_data_dir_changed
         # False by default: a real household's first-run scan should never
         # show `ble:bulb-a1f2`/`mdns:therm-living`/`wifi:plug-heater` as if
         # they were real nearby devices -- those are the demo trial's own
@@ -641,6 +645,8 @@ class SetupService:
         # already rebuilds the resource/ontology stores from the current
         # data dir every time it runs.
         self._trigger_rebuild()
+        if self._on_data_dir_changed is not None:
+            self._on_data_dir_changed(resolved)
         return self.status()
 
     def connect_provider(

@@ -30,7 +30,37 @@ def test_computer_status_defaults_to_disabled():
     with tempfile.TemporaryDirectory() as tmp:
         service = _service(Path(tmp))
         status = service.status()
-    assert status["setup"]["computer"] == {"enabled": False, "allowed_roots": [], "read_only": False}
+    assert status["setup"]["computer"] == {"enabled": False, "allowed_roots": [], "read_only": True}
+
+
+def test_enabling_computer_access_keeps_the_default_read_only():
+    with tempfile.TemporaryDirectory() as tmp:
+        allowed = Path(tmp) / "Documents"
+        allowed.mkdir()
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+        service = _service(data_dir)
+        service.add_computer_provider_root(path=str(allowed))
+
+        result = service.set_computer_provider_enabled(enabled=True)
+
+    assert result["ok"] is True
+    assert result["setup"]["computer"]["read_only"] is True
+
+
+def test_file_organization_requires_explicit_write_opt_in():
+    with tempfile.TemporaryDirectory() as tmp:
+        allowed = Path(tmp) / "Documents"
+        allowed.mkdir()
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+        service = _service(data_dir)
+        service.add_computer_provider_root(path=str(allowed))
+
+        result = service.set_computer_provider_enabled(enabled=True, read_only=False)
+
+    assert result["ok"] is True
+    assert result["setup"]["computer"]["read_only"] is False
 
 
 def test_enabling_without_any_allowed_root_is_refused():

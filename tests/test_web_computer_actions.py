@@ -59,7 +59,7 @@ def test_a_safe_action_executes_over_http_and_is_findable_afterward():
 
         with _boot(data_dir) as (server, port):
             _post(port, "/api/setup/computer/roots", {"path": str(allowed)})
-            _post(port, "/api/setup/computer", {"enabled": True})
+            _post(port, "/api/setup/computer", {"enabled": True, "read_only": False})
             # Enabling computer access alone takes a fresh install out of
             # demo mode into a real, ownerless household -- an owner must be
             # declared before any authorized action (filesystem or device)
@@ -101,7 +101,7 @@ def test_a_move_requires_confirmation_over_http():
 
         with _boot(data_dir) as (server, port):
             _post(port, "/api/setup/computer/roots", {"path": str(allowed)})
-            _post(port, "/api/setup/computer", {"enabled": True})
+            _post(port, "/api/setup/computer", {"enabled": True, "read_only": False})
             _post(port, "/api/setup/household/people", {"name": "Gerron Smith", "role": "owner"})
             _post(port, "/api/setup/computer/scan", {})
 

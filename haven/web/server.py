@@ -31,7 +31,7 @@ from .models_api import (
     scan_payload,
 )
 from .receipts_api import action_chain, event_action_id
-from .service_manager import ServiceManager
+from .service_manager import StartupManager
 from .setup_config import SetupConfigStore, default_data_dir
 from .setup_service import SetupService
 from .computer_actions import ComputerActionService
@@ -87,6 +87,7 @@ class HavenWebServer(ThreadingHTTPServer):
         ha_client=None,
         session_token: str | None = None,
         folder_picker=None,
+        on_data_dir_changed=None,
     ) -> None:
         self.static_root = static_root
         self._session_token = session_token
@@ -146,12 +147,13 @@ class HavenWebServer(ThreadingHTTPServer):
             director=self.director,
             clock=clock,
             on_rebuild=self.rebuild_director,
+            on_data_dir_changed=on_data_dir_changed,
             include_demo_candidates=self._director_demo,
             resource_store=self.resources,
             knowledge_service=self.knowledge,
         )
         # Authorization + consequence verification in front of
-        # `FilesystemProvider.execute()` -- independent of `self.setup`
+        # `FilesystemProvider.execute_provider()` -- independent of `self.setup`
         # (which only owns the wizard's own enable/roots/scan config), the
         # same way `self.search` sits beside rather than inside it.
         self.computer_actions = ComputerActionService(
@@ -169,7 +171,7 @@ class HavenWebServer(ThreadingHTTPServer):
         # Logon-startup management: the launch command is built lazily per
         # call, so the port getter reads the bound port (ephemeral in tests,
         # fixed in production) at call time, never at construction.
-        self.service = ServiceManager(
+        self.service = StartupManager(
             data_dir=Path(resolved_data_dir),
             port_getter=lambda: self.server_address[1],
         )
@@ -186,6 +188,18 @@ class HavenWebServer(ThreadingHTTPServer):
         # model pair are available; a no-op (returns False) otherwise, so
         # boot never fails or blocks on missing hardware/models.
         self.director.start_voice()
+
+    def host_capabilities(self) -> dict:
+        """Describe the native host surface available to the renderer.
+
+        The renderer is shared by browser, desktop, and future tablet hosts.
+        It must ask what this host can do instead of assuming that a desktop
+        endpoint exists just because the same HTML is being served.
+        """
+
+        if self.folder_picker is None:
+            return {"host": "browser", "capabilities": []}
+        return {"host": "desktop", "capabilities": ["folder_picker"]}
 
     def _build_director(self) -> HavenApplication:
         # The application factory reads the saved setup and builds the user's
@@ -249,7 +263,7 @@ class HavenWebServer(ThreadingHTTPServer):
         # them too, otherwise a data-dir move would rebind the stores while
         # backup/service actions continued operating on the old directory.
         self.backups = BackupManager(data_dir=data_dir)
-        self.service = ServiceManager(
+        self.service = StartupManager(
             data_dir=data_dir,
             port_getter=lambda: self.server_address[1],
         )
@@ -303,7 +317,7 @@ class _Handler(BaseHTTPRequestHandler):
         return self.server.backups
 
     @property
-    def service(self) -> ServiceManager:
+    def service(self) -> StartupManager:
         return self.server.service
 
     @property
@@ -369,6 +383,8 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/state":
             self._send_json(200, self.director.state())
+        elif path == "/api/host/capabilities":
+            self._send_json(200, self.server.host_capabilities())
         elif path == "/api/scheduler":
             self._send_json(200, {"ok": True, "scheduler": self.director.scheduler_status()})
         elif path == "/api/models":
@@ -502,7 +518,7 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/voice/cancel":
             self._send_json(200, self.director.voice_cancel())
             return
-        if path == "/api/desktop/pick-folder":
+        if path in ("/api/host/pick-folder", "/api/desktop/pick-folder"):
             self._pick_folder()
             return
         if path == "/api/models/assign":
@@ -1118,11 +1134,13 @@ def make_server(
     ha_client=None,
     session_token: str | None = None,
     folder_picker=None,
+    on_data_dir_changed=None,
 ) -> tuple[HavenWebServer, HavenApplication]:
     root = Path(static_root) if static_root is not None else Path(__file__).parent / "static"
     server = HavenWebServer(
         ("127.0.0.1", port), root, clock=clock, models_root=models_root, data_dir=data_dir,
         demo=demo, ha_client=ha_client, session_token=session_token, folder_picker=folder_picker,
+        on_data_dir_changed=on_data_dir_changed,
     )
     return server, server.director
 

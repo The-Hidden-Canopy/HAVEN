@@ -17,7 +17,7 @@ default matches and the command stays bare; otherwise the command sets
 ``HAVEN_DATA_DIR`` for the child process, since a scheduled task cannot carry
 per-task environment variables.
 
-Linux follow-up (not built here): the same ServiceManager shape backed by a
+Linux follow-up (not built here): the same StartupManager shape backed by a
 systemd user unit written under ``~/.config/systemd/user/`` would give the
 equivalent ``install``/``uninstall``/``status`` on systemd desktops.
 """
@@ -50,7 +50,7 @@ def _tail(text: str | None) -> str:
     return lines[-1] if lines else ""
 
 
-class ServiceManager:
+class StartupManager:
     """Installs, removes, and probes the ``HAVEN`` logon task.
 
     ``port_getter`` exists because the server's bound port is only known
@@ -125,7 +125,7 @@ class ServiceManager:
         scheduled task cannot carry its own environment.
         """
 
-        base = f'"{sys.executable}" -m haven.web.server --port {port}'
+        base = f'"{sys.executable}" -m haven.desktop --background --port {port}'
         if _DATA_DIR_ENV not in os.environ and self._data_dir == Path.home() / ".haven":
             return base
         # `set VAR=value&&` runs the assignment into the command without a
@@ -143,4 +143,8 @@ def _parse_status(stdout: str | None) -> str | None:
     return None
 
 
-__all__ = ["TASK_NAME", "ServiceManager"]
+# Compatibility name for callers that still use the old web/API vocabulary.
+ServiceManager = StartupManager
+
+
+__all__ = ["TASK_NAME", "StartupManager", "ServiceManager"]

@@ -43,6 +43,10 @@ def test_desktop_session_requires_cookie_and_bootstrap_sets_one():
             assert status == 401
             assert json.loads(body)["error"] == "HAVEN desktop session required"
 
+            status, _, body = _request(port, "GET", "/api/host/capabilities")
+            assert status == 401
+            assert json.loads(body)["error"] == "HAVEN desktop session required"
+
             status, headers, body = _request(
                 port, "GET", "/__desktop_bootstrap?session=launch-token"
             )

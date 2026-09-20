@@ -141,7 +141,7 @@ def test_install_command_pins_non_default_data_dir() -> None:
     command = args[10]
     assert f"set HAVEN_DATA_DIR={data_dir}&&" in command
     assert f'"{sys.executable}"' in command
-    assert "-m haven.web.server" in command
+    assert "-m haven.desktop --background" in command
     assert "--port 8123" in command
 
 
@@ -156,7 +156,7 @@ def test_install_command_default_data_dir_is_bare() -> None:
         manager.install()
     command = runner.calls[0][-1]
     assert "HAVEN_DATA_DIR" not in command
-    assert "-m haven.web.server --port 8080" in command
+    assert "-m haven.desktop --background --port 8080" in command
 
 
 def test_install_failure_maps_stderr() -> None:
