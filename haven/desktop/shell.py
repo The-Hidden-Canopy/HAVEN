@@ -16,6 +16,7 @@ replace only this module while keeping the server and renderer contracts.
 from __future__ import annotations
 
 import argparse
+import base64
 import http.client
 import json
 import os
@@ -52,17 +53,136 @@ def _activation_path(data_dir: Path) -> Path:
     return data_dir / _ACTIVATION_FILE
 
 
+def _protect_activation_token(token: str) -> str | None:
+    """Protect a token with the current Windows user's DPAPI profile."""
+
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class _DataBlob(ctypes.Structure):
+        _fields_ = [
+            ("cbData", wintypes.DWORD),
+            ("pbData", ctypes.POINTER(ctypes.c_byte)),
+        ]
+
+    raw = token.encode("utf-8")
+    source = ctypes.create_string_buffer(raw)
+    input_blob = _DataBlob(len(raw), ctypes.cast(source, ctypes.POINTER(ctypes.c_byte)))
+    output_blob = _DataBlob()
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    blob_pointer = ctypes.POINTER(_DataBlob)
+    crypt32.CryptProtectData.argtypes = [
+        blob_pointer,
+        ctypes.c_wchar_p,
+        blob_pointer,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        blob_pointer,
+    ]
+    crypt32.CryptProtectData.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+    if not crypt32.CryptProtectData(
+        ctypes.byref(input_blob),
+        "HAVEN desktop activation",
+        None,
+        None,
+        None,
+        0,
+        ctypes.byref(output_blob),
+    ):
+        error = ctypes.get_last_error()
+        raise OSError(error, "Windows DPAPI could not protect the HAVEN activation token")
+    try:
+        protected = ctypes.string_at(output_blob.pbData, output_blob.cbData)
+    finally:
+        if output_blob.pbData:
+            kernel32.LocalFree(ctypes.cast(output_blob.pbData, ctypes.c_void_p))
+    return base64.urlsafe_b64encode(protected).decode("ascii")
+
+
+def _unprotect_activation_token(value: str) -> str | None:
+    """Unprotect a Windows DPAPI activation token, or return None."""
+
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class _DataBlob(ctypes.Structure):
+        _fields_ = [
+            ("cbData", wintypes.DWORD),
+            ("pbData", ctypes.POINTER(ctypes.c_byte)),
+        ]
+
+    try:
+        raw = base64.urlsafe_b64decode(value.encode("ascii"))
+    except (ValueError, UnicodeError):
+        return None
+    source = ctypes.create_string_buffer(raw)
+    input_blob = _DataBlob(len(raw), ctypes.cast(source, ctypes.POINTER(ctypes.c_byte)))
+    output_blob = _DataBlob()
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    blob_pointer = ctypes.POINTER(_DataBlob)
+    description_pointer = ctypes.POINTER(ctypes.c_wchar_p)
+    crypt32.CryptUnprotectData.argtypes = [
+        blob_pointer,
+        description_pointer,
+        blob_pointer,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        blob_pointer,
+    ]
+    crypt32.CryptUnprotectData.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+    if not crypt32.CryptUnprotectData(
+        ctypes.byref(input_blob),
+        None,
+        None,
+        None,
+        None,
+        0,
+        ctypes.byref(output_blob),
+    ):
+        return None
+    try:
+        return ctypes.string_at(output_blob.pbData, output_blob.cbData).decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        return None
+    finally:
+        if output_blob.pbData:
+            kernel32.LocalFree(ctypes.cast(output_blob.pbData, ctypes.c_void_p))
+
+
 def _write_activation_record(path: Path, *, port: int, token: str) -> None:
     """Publish the resident shell endpoint atomically."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     try:
+        protected = _protect_activation_token(token)
+        if os.name == "nt" and protected is None:
+            raise OSError("Windows DPAPI is unavailable; refusing to persist an activation token")
+        token_payload = {"token_protected": protected} if protected is not None else {"token": token}
         temporary.write_text(
-            json.dumps({"port": int(port), "token": token}, separators=(",", ":")),
+            json.dumps({"port": int(port), **token_payload}, separators=(",", ":")),
             encoding="utf-8",
         )
         os.replace(temporary, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            # Windows ACLs are inherited from the private data directory;
+            # chmod is still useful for Unix hosts without changing startup
+            # behavior when the platform does not expose POSIX modes.
+            pass
     finally:
         try:
             temporary.unlink()
@@ -81,6 +201,16 @@ def _read_activation_record(path: Path) -> tuple[int, str] | None:
     token = payload.get("token")
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         return None
+    protected = payload.get("token_protected")
+    if isinstance(protected, str) and protected:
+        try:
+            token = _unprotect_activation_token(protected)
+        except (OSError, TypeError, ValueError):
+            # A damaged or unavailable user profile must make activation
+            # unavailable, never fall back to treating ciphertext as a token.
+            return None
+    else:
+        token = payload.get("token")
     if not isinstance(token, str) or not token:
         return None
     return port, token
@@ -133,7 +263,14 @@ def _remove_activation_record(data_dir: Path, *, token: str | None) -> None:
 
 
 def _activate_process_windows(process_ids: set[int]) -> bool:
-    """Restore and foreground a visible top-level window for these PIDs."""
+    """Restore and foreground a visible top-level window for these PIDs.
+
+    Windows normally prevents a background process from stealing focus.  The
+    thread-input attachment below is the documented workaround for a user
+    initiated local activation request.  If foregrounding is still denied,
+    flashing the matching taskbar window is the honest fallback: the caller
+    gets attention without HAVEN claiming that focus changed.
+    """
 
     if os.name != "nt" or not process_ids:
         return False
@@ -141,21 +278,72 @@ def _activate_process_windows(process_ids: set[int]) -> bool:
     from ctypes import wintypes
 
     user32 = ctypes.windll.user32
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetCurrentThreadId.restype = wintypes.DWORD
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.ShowWindow.restype = wintypes.BOOL
+    user32.BringWindowToTop.argtypes = [wintypes.HWND]
+    user32.BringWindowToTop.restype = wintypes.BOOL
+    user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user32.SetForegroundWindow.restype = wintypes.BOOL
+    user32.SetActiveWindow.argtypes = [wintypes.HWND]
+    user32.SetActiveWindow.restype = wintypes.HWND
+    user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+    user32.AttachThreadInput.restype = wintypes.BOOL
+    user32.FlashWindowEx.restype = wintypes.BOOL
     activated = False
+    attention_requested = False
+
+    class _FlashWindowInfo(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.UINT),
+            ("hwnd", wintypes.HWND),
+            ("dwFlags", wintypes.DWORD),
+            ("uCount", wintypes.UINT),
+            ("dwTimeout", wintypes.DWORD),
+        ]
+
+    user32.FlashWindowEx.argtypes = [ctypes.POINTER(_FlashWindowInfo)]
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def visit(hwnd, _lparam):
-        nonlocal activated
+        nonlocal activated, attention_requested
         owner = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        target_thread = user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
         if owner.value not in process_ids or not user32.IsWindowVisible(hwnd):
             return True
         user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-        user32.SetForegroundWindow(hwnd)
-        activated = True
-        return False
+        current_thread = user32.GetCurrentThreadId()
+        attached = False
+        if target_thread and target_thread != current_thread:
+            attached = bool(user32.AttachThreadInput(current_thread, target_thread, True))
+        try:
+            user32.BringWindowToTop(hwnd)
+            user32.SetActiveWindow(hwnd)
+            user32.SetForegroundWindow(hwnd)
+            activated = user32.GetForegroundWindow() == hwnd
+            if not activated:
+                flash = _FlashWindowInfo(
+                    ctypes.sizeof(_FlashWindowInfo),
+                    hwnd,
+                    0x00000002 | 0x0000000C,  # FLASHW_TRAY | FLASHW_TIMERNOFG
+                    3,
+                    0,
+                )
+                user32.FlashWindowEx(ctypes.byref(flash))
+                attention_requested = True
+        finally:
+            if attached:
+                user32.AttachThreadInput(current_thread, target_thread, False)
+        return not activated and not attention_requested
 
     user32.EnumWindows(visit, 0)
+    # A taskbar flash is useful, but it is not the same thing as foreground
+    # focus.  Keep the boolean truthful for the IPC response.
     return activated
 
 

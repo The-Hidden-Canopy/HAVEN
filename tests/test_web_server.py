@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+import haven.web.server as web_server
 from haven.web.server import make_server
 
 UTC = timezone.utc
@@ -17,7 +18,7 @@ FIXED_NOW = datetime(2026, 9, 16, 20, 0, tzinfo=UTC)
 
 @pytest.fixture()
 def server():
-    instance, director = make_server(0, clock=lambda: FIXED_NOW)
+    instance, director = make_server(0, clock=lambda: FIXED_NOW, demo=True)
     thread = threading.Thread(target=instance.serve_forever, daemon=True)
     thread.start()
     yield instance, director, instance.server_address[1]
@@ -70,6 +71,35 @@ def _read_event(response: http.client.HTTPResponse) -> tuple[str | None, str]:
 
 def _room(state: dict, room_id: str) -> dict:
     return next(room for room in state["rooms"] if room["id"] == room_id)
+
+
+def test_local_web_launcher_supplies_the_native_folder_picker(monkeypatch, capsys):
+    picker = object()
+    captured = {}
+
+    class FakeServer:
+        server_address = ("127.0.0.1", 8080)
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            captured["closed"] = True
+
+    def fake_make_server(port, **kwargs):
+        captured["port"] = port
+        captured.update(kwargs)
+        return FakeServer(), None
+
+    monkeypatch.setattr(web_server, "make_server", fake_make_server)
+    monkeypatch.setattr(web_server, "choose_folder", picker)
+
+    web_server.main(["--port", "0"])
+
+    assert captured["port"] == 0
+    assert captured["folder_picker"] is picker
+    assert captured["closed"] is True
+    capsys.readouterr()
 
 
 def _device(state: dict, room_id: str, device_id: str) -> dict:

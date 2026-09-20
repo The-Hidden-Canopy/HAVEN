@@ -1,12 +1,12 @@
 """The first-run onboarding workflow behind `/api/setup`.
 
-The demo world stays untouched: these steps persist HAVEN's own installation
-config (data dir, provider, preferences) and enroll demo discovery candidates
-into the director's device registry. When a Home Assistant state source is
-attached (the live adapter, at boot), the discovery scan also lists the
-provider's real entities as candidates. A real BLE/mDNS scan is a future
-native seam; the demo rows of the scan are honestly labeled demo candidates
-in the shape a real transport would produce.
+These steps persist HAVEN's own installation config (data dir, provider,
+preferences) and enroll discovered candidates into the director's device
+registry. When a Home Assistant state source is attached (the live adapter,
+at boot), the discovery scan also lists the provider's real entities as
+candidates. A real BLE/mDNS scan is a future native seam; only an explicit
+demo composition exposes the demo rows, which are honestly labeled demo
+candidates in the shape a real transport would produce.
 
 HAVEN has one root: choosing a data directory moves the installation (config,
 token sidecar, enrolled-devices sidecar), it does not split it. The enrolled

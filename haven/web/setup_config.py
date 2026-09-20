@@ -1,8 +1,8 @@
 """First-run setup config: HAVEN's own installation state, persisted as JSON.
 
-This is deliberately separate from the demo world the web surface shows:
 `haven.json` records how this HAVEN installation was set up (data dir,
-provider, preferences), not what the simulated household is doing.
+provider, identity, and preferences), not the live world projection. The
+simulated household is an explicit demo-only composition.
 """
 
 from __future__ import annotations
@@ -56,12 +56,11 @@ class SetupConfig:
     Token material is never stored here: `provider_token_file` is only the
     filename of a sidecar the provider step writes next to the config.
 
-    `household_id` is `None` until this installation has a real household to
-    identify (see `haven.web.application.ensure_household_id`): a pure demo
-    run never mints one, but the moment a provider is configured, one is
-    generated and persisted here permanently, so restarts and rebuilds always
-    read back the same identity instead of a hardcoded literal every
-    installation would otherwise share.
+    `household_id` is minted and persisted on the first normal boot (see
+    `haven.web.application.ensure_household_id`). An explicit demo run never
+    mints one. Restarts and rebuilds therefore always read back the same
+    identity instead of a hardcoded literal every installation would
+    otherwise share.
     """
 
     version: int = _CONFIG_VERSION

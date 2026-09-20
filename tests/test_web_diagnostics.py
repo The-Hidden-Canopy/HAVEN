@@ -86,12 +86,13 @@ def _seed_real_setup(data_dir: Path) -> None:
 
 
 @contextmanager
-def _boot(data_dir: Path, ha_client=None):
+def _boot(data_dir: Path, ha_client=None, *, demo: bool = False):
     instance, director = make_server(
         0,
         data_dir=str(data_dir),
         clock=lambda: NOW,
         ha_client=ha_client,
+        demo=demo,
         models_root=data_dir / "models-root",
     )
     thread = threading.Thread(target=instance.serve_forever, daemon=True)
@@ -192,20 +193,33 @@ def test_diagnostics_in_demo_mode() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp) / "data"
         data_dir.mkdir(parents=True)
-        with _boot(data_dir) as (_, director, port):
+        with _boot(data_dir, demo=True) as (_, director, port):
             assert director.house is not None
             status, body = _get_json(port, "/api/system/diagnostics")
             assert status == 200
             diag = body["diagnostics"]
             assert diag["world"] == {"mode": "demo"}
             assert diag["provider"] == {"configured": False, "kind": None, "base_url": None}
-            # The demo household is the fallback world: five demo devices,
+            # The explicit demo household has five demo devices,
             # three approved scenario rules, one enabled schedule.
             assert diag["devices"]["registered"] == 5
             assert diag["devices"]["enrolled"] == 0
             assert diag["rules"]["approved"] == 3
             assert diag["scheduler"]["entries"] == 3
             assert diag["scheduler"]["enabled"] == 1
+
+
+def test_diagnostics_in_a_fresh_normal_installation_is_local_not_demo() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp) / "data"
+        with _boot(data_dir) as (_, director, port):
+            assert director.house is None
+            status, body = _get_json(port, "/api/system/diagnostics")
+            assert status == 200
+            diag = body["diagnostics"]
+            assert diag["world"] == {"mode": "local"}
+            assert diag["provider"] == {"configured": False, "kind": None, "base_url": None}
+            assert diag["devices"] == {"enrolled": 0, "registered": 0}
 
 
 def test_probe_provider_reachable_unreachable_and_demo() -> None:

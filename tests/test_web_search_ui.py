@@ -19,7 +19,7 @@ def test_composer_exposes_ask_and_find_modes_with_search_results_surface():
     assert "5: { title: 'Connections'" in app
     assert "6: { title: 'Intelligence & voice'" in app
     assert "renderSetupConnections" in app
-    assert 'Choose folder' in app
+    assert 'Browse for folder' in app
     assert "/api/host/capabilities" in app
     assert "/api/host/pick-folder" in app
     assert "/api/desktop/pick-folder" not in app
@@ -32,3 +32,9 @@ def test_composer_exposes_ask_and_find_modes_with_search_results_surface():
     assert "filesystem.open" in app
     assert "filesystem.reveal" in app
     assert "user selected this resource from HAVEN search" in app
+    assert "postJSONDetailed" in app
+    assert "runResourceAction" in app
+    assert "Could not ' + idleLabel.toLowerCase()" in app
+    assert "search-result-action-feedback" in app
+    assert "HAVEN could not reach the local service." in app
+    assert "button.textContent = idleLabel + 'ed ✓'" in app

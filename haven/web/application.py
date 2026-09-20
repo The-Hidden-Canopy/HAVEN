@@ -1,20 +1,20 @@
-"""The composition root: build the household from persisted setup config.
+"""The composition root: build one HAVEN from persisted setup config.
 
-Normal boot reads the saved setup and builds the user's house when a provider
-is configured; until a provider is configured (or with ``demo=True``) the
-demo household is the fallback world. Agents are optional; with intelligence
-disabled HAVEN runs its deterministic floor.
+Normal boot always builds the user's real installation. A fresh installation
+with no providers yet gets a persistent identity and an empty, truthful world
+whose live evidence is unavailable; it never gets fictional devices or a
+fixture household. The simulated household (``SimulatedHouse``, the
+garage/camera/office-light scenario, and the ``gerron`` fixture identity) is
+available only through the explicit ``demo=True``/``--demo`` path. Agents are
+optional; with intelligence disabled HAVEN runs its deterministic floor.
 
-The demo household (``SimulatedHouse``, the garage/camera/office-light
-scenario, the ``gerron`` fixture identity) is reserved for exactly those two
-cases -- nothing configured yet, or an explicit ``demo=True``. Once a
-household has named a provider (Home Assistant, or an installed community
-package), it never falls back to that fixture again: if a provider's
-connection details cannot be read or its own ``build()`` fails right now,
-HAVEN still builds the household's *real* registry, declarations, and rules,
-just with less live evidence -- the same honest "nothing observed yet" a
-real provider that is merely unreachable already degrades to, never a
-fictional house that looks real.
+Once a household has named a provider (Home Assistant, an installed
+community package, or the local computer provider), it never falls back to
+the fixture again: if a provider's connection details cannot be read or its
+own ``build()`` fails right now, HAVEN still builds the household's *real*
+registry, declarations, and rules, just with less live evidence -- the same
+honest "nothing observed yet" a real provider that is merely unreachable
+already degrades to, never a fictional house that looks real.
 
 A household's world and execution are a *composite* of every provider it has
 enabled, not a single exclusive choice: Home Assistant (this repo's one
@@ -47,11 +47,10 @@ from haven.models import ModelManager
 from haven.perception.observation import ObservationProvider
 from haven.providers.world import CompositeObserver
 
-from .computer_provider import load_computer_provider_config
 from .demo import DemoDirector
 from .haven_application import Clock, HavenApplication
 from .history_persist import HistoryStore
-from .provider_install import is_real_installation, load_installed_provider_config, load_installed_providers
+from .provider_install import load_installed_provider_config, load_installed_providers
 from .rules_persist import RulesPersistence
 from .setup_config import SetupConfig, SetupConfigError, SetupConfigStore, _write_json_atomic
 from .setup_service import (
@@ -171,12 +170,12 @@ def build_provider_composition(
 def ensure_household_id(store: SetupConfigStore, config: SetupConfig) -> tuple[SetupConfig, str]:
     """Return `config` with a real `household_id`, minting and persisting one if absent.
 
-    Called once a household has a provider configured -- a pure demo run
-    never reaches this, so it never mints an id. The mint happens exactly
-    once per installation: every later boot reads the same persisted UUID
-    back from `haven.json`, so rules and receipts a previous run wrote under
-    it stay valid, and two separate HAVEN installations can never collide on
-    the literal fixture id every one of them used to share.
+    Normal boot calls this before composition, including a fresh installation
+    with no providers. The explicit demo path never reaches it. The mint
+    happens exactly once per installation: every later boot reads the same
+    persisted UUID back from `haven.json`, so rules and receipts a previous
+    run wrote under it stay valid, and two separate HAVEN installations can
+    never collide on the literal fixture id every one of them used to share.
     """
 
     if config.household_id:
@@ -203,37 +202,37 @@ def build_application(
 ) -> HavenApplication:
     """Build the director for this installation.
 
-    Decision table: ``demo=True``, or this installation was never real to
-    begin with (`is_real_installation`: no persisted `household_id`, no
-    Home Assistant connection, nothing ever installed), builds the demo
-    household (scenario, `SimulatedHouse`, the `gerron` fixture identity).
-    Once a household IS real, every other case builds the *real*
-    composition -- enrolled devices, declared people, persisted rules,
-    preferences -- with a world and execution registry that are a
-    *composite* of every provider this installation currently has enabled
-    (`build_provider_composition`): Home Assistant if configured and
-    reachable, plus every installed community provider that is enabled and
-    can be built right now. A provider that cannot be built, or that a
-    household has since disconnected or uninstalled entirely, degrades only
-    its own contribution -- a real household with nothing reachable at all
-    still gets its real registry/declarations/rules, just with no live
-    evidence, never the demo fixture reappearing.
+    The decision is deliberately small: ``demo=True`` is the only path that
+    builds the simulated household. Every normal boot, including a brand-new
+    installation with no provider configured yet, builds the real composition
+    -- enrolled devices, declared people, persisted rules, preferences --
+    with a world and execution registry that are a *composite* of every
+    provider this installation currently has enabled
+    (`build_provider_composition`). A fresh install therefore has a unique
+    household id and no live evidence, not fictional devices. A provider that
+    cannot be built, or that a household has since disconnected or uninstalled
+    entirely, degrades only its own contribution -- the installation keeps
+    its real registry/declarations/rules and never becomes the demo again.
     """
 
+    config_load_failed = False
     try:
         config = store.load()
     except SetupConfigError:
+        # Keep the malformed file in place so SetupService can report the
+        # configuration error and the user can repair it. A normal boot still
+        # gets a real empty application, but must not silently replace a
+        # broken setup file while composing that fallback.
         config = SetupConfig()
-    if demo or not is_real_installation(
-        store,
-        household_id=config.household_id,
-        home_assistant_base_url=config.provider_base_url,
-        computer_provider_enabled=load_computer_provider_config(store).enabled,
-    ):
+        config_load_failed = True
+    if demo:
         return DemoDirector(clock=clock, model_manager=model_manager)
 
     resolved_clock: Clock = clock or (lambda: datetime.now(timezone.utc))
-    config, household_id = ensure_household_id(store, config)
+    if config_load_failed:
+        household_id = str(uuid4())
+    else:
+        config, household_id = ensure_household_id(store, config)
     registry = DeviceRegistry()
     enrolled = load_enrolled_sidecar(store.path.parent / _ENROLLED_FILENAME)
     for manifest in enrolled.manifests:
