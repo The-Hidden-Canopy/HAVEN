@@ -5,6 +5,16 @@ surface remains the renderer and the Python web server remains the local
 runtime and authority boundary.
 """
 
-from .shell import DesktopShell, DesktopShellError, find_edge_executable
+from .shell import (
+    DesktopShell,
+    DesktopShellAlreadyRunning,
+    DesktopShellError,
+    find_edge_executable,
+)
 
-__all__ = ["DesktopShell", "DesktopShellError", "find_edge_executable"]
+__all__ = [
+    "DesktopShell",
+    "DesktopShellAlreadyRunning",
+    "DesktopShellError",
+    "find_edge_executable",
+]

@@ -21,6 +21,20 @@ def test_default_is_disabled_with_no_roots():
     assert config == ComputerProviderConfig()
     assert config.enabled is False
     assert config.allowed_roots == ()
+    assert config.read_only is True
+
+
+def test_legacy_config_without_read_only_field_migrates_to_safe_default():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = SetupConfigStore(Path(tmp) / "haven.json")
+        (Path(tmp) / "computer_provider.json").write_text(
+            '{"enabled": true, "allowed_roots": ["C:/Docs"]}', encoding="utf-8"
+        )
+        config = load_computer_provider_config(store)
+
+    assert config.enabled is True
+    assert config.allowed_roots == ("C:/Docs",)
+    assert config.read_only is True
 
 
 def test_save_and_reload_round_trips():
@@ -63,4 +77,9 @@ def test_build_filesystem_provider_returns_a_real_provider_when_configured():
         config = ComputerProviderConfig(enabled=True, allowed_roots=(tmp,))
         provider = build_filesystem_provider(config, scope_id="project:haven")
         assert provider is not None
-        assert provider.observe() is not None
+        records = provider.observe()
+        assert records is not None
+        assert all(
+            record.capabilities == ("filesystem.read", "filesystem.open", "filesystem.reveal")
+            for record in records
+        )

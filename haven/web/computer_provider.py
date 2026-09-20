@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from .setup_config import SetupConfigStore, _write_json_atomic
 
@@ -26,7 +27,9 @@ _FILENAME = "computer_provider.json"
 class ComputerProviderConfig:
     enabled: bool = False
     allowed_roots: tuple[str, ...] = ()
-    read_only: bool = False
+    # Reading/indexing is the safe default.  Mutation capability must be an
+    # explicit second choice in onboarding and remains subject to Authority.
+    read_only: bool = True
 
 
 def _config_path(store: SetupConfigStore) -> Path:
@@ -46,7 +49,10 @@ def load_computer_provider_config(store: SetupConfigStore) -> ComputerProviderCo
     return ComputerProviderConfig(
         enabled=bool(data.get("enabled", False)),
         allowed_roots=tuple(roots),
-        read_only=bool(data.get("read_only", False)),
+        # Older config files did not have this field.  Treating an omitted
+        # value as writable would silently expand an existing installation's
+        # capability on upgrade, so legacy files migrate to read-only.
+        read_only=bool(data.get("read_only", True)),
     )
 
 
@@ -61,7 +67,13 @@ def save_computer_provider_config(store: SetupConfigStore, config: ComputerProvi
     )
 
 
-def build_filesystem_provider(config: ComputerProviderConfig, *, scope_id: str):
+def build_filesystem_provider(
+    config: ComputerProviderConfig,
+    *,
+    scope_id: str,
+    open_path: Callable[[Path], None] | None = None,
+    reveal_path: Callable[[Path], None] | None = None,
+):
     """The real `FilesystemProvider` this config describes, or `None`.
 
     `None` whenever this cannot be built right now -- disabled, no roots
@@ -77,7 +89,11 @@ def build_filesystem_provider(config: ComputerProviderConfig, *, scope_id: str):
 
     try:
         return FilesystemProvider(
-            allowed_roots=config.allowed_roots, scope_id=scope_id, read_only=config.read_only
+            allowed_roots=config.allowed_roots,
+            scope_id=scope_id,
+            read_only=config.read_only,
+            open_path=open_path,
+            reveal_path=reveal_path,
         )
     except ValueError:
         return None
