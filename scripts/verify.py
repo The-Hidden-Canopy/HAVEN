@@ -46,6 +46,7 @@ _ENVIRONMENT_SKIP_MARKERS = (
     "no audio",
     "no microphone",
     "no speaker",
+    "native audio hardware tests are opt-in",
     "no c compiler",
     "no msvc",
     "compiler on path",

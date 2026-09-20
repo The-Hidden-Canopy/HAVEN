@@ -4,10 +4,14 @@ Proves the composition root: saved setup -> factory -> HA world/execution ->
 authority -> room controls, plus HA-backed discovery in the setup scan.
 """
 import json
+import sys
 import threading
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from haven.devices.manifest import CapabilityDescriptor, ControlClass, DeviceManifest
 from haven.web.server import make_server

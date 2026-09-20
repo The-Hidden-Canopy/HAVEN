@@ -10,6 +10,7 @@ applies that proposal through ``SetupService``.
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from haven.intelligence.intents import MutationProposal
 
@@ -25,6 +26,13 @@ _ROOM_RENAME = re.compile(
 )
 _ROOM_DELETE = re.compile(r"^(?:remove|delete)\s+(?:the\s+)?(.+)$", re.IGNORECASE)
 _PERSON_CREATE = re.compile(r"^(.+?)\s+lives\s+here(?:\s+too)?$", re.IGNORECASE)
+_CONTEXT_CREATE = re.compile(
+    r"^(?:add|create)\s+(?:a\s+)?context\s+"
+    r"(?:(?:called|named)\s+)?(?P<label>.+?)\s+"
+    r"(?:from|using|as)\s+"
+    r"(?P<entity>[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_-]+)$",
+    re.IGNORECASE,
+)
 _AUTOMATION_CREATE = re.compile(
     r"^(?:every\s+)?(?P<days>weekday|weekdays|weekend|weekends|day|daily|"
     r"monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+"
@@ -106,7 +114,7 @@ def _proposal(
     entity_kind: str,
     operation: str,
     source_text: str,
-    attributes: tuple[tuple[str, str], ...],
+    attributes: tuple[tuple[str, Any], ...],
     target_id: str | None = None,
 ) -> MutationProposal | None:
     try:
@@ -138,6 +146,7 @@ def parse_authoring_intent(
     * ``Call this room the shop.`` (requires the current room focus)
     * ``Remove the old guest room.``
     * ``Bryan lives here too.``
+    * ``Add a context called Working late using input_boolean.working_late.``
     * ``Don't run that automation on Fridays.`` (requires an explicit
       automation focus)
 
@@ -152,6 +161,21 @@ def parse_authoring_intent(
     source_text = text.strip()
     phrase = _clean_phrase(source_text)
     if not phrase:
+        return None
+
+    match = _CONTEXT_CREATE.fullmatch(phrase)
+    if match:
+        label = _label(match.group("label"))
+        entity_id = _label(match.group("entity"))
+        if label is not None and entity_id is not None:
+            return _proposal(
+                entity_kind="context",
+                operation="create",
+                source_text=source_text,
+                attributes=(("label", label), ("entity_id", entity_id)),
+            )
+    if re.match(r"^(?:add|create)\s+(?:a\s+)?context\b", phrase, re.IGNORECASE):
+        # Never reinterpret an incomplete context request as a room.
         return None
 
     for pattern in _ROOM_CREATE:
