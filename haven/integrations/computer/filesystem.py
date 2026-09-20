@@ -2,11 +2,12 @@
 
 Satisfies `haven.perception.observation.ObservationProvider` for reading
 (one `haven.resources.ResourceRecord` per file/folder under an explicitly
-allowed root) and `haven.execution.registry.ExecutionAdapter` for writing
-(create-folder/copy/move/rename), so it plugs into the exact same seams a
-Home Assistant or community provider does -- `CompositeObserver` for
-observation, `ExecutionProviderRegistry` for execution -- nothing here is a
-special case Haven Core needs to know about.
+allowed root), keeps `haven.execution.registry.ExecutionAdapter` for legacy
+device-shaped compatibility, and provides the provider-neutral
+`.execute_provider(ProviderCommand) -> ProviderResult` seam for computer
+capabilities. It plugs into the same observation/execution boundaries as a
+Home Assistant or community provider -- nothing here is a special case Haven
+Core needs to know about.
 
 The one non-negotiable safety property, matching the "canonical path
 checks, allowed roots" discipline real filesystem tools need: every path
@@ -34,13 +35,16 @@ deliberate human decision, never an inferred default.
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, overload
 
 from haven.core.domain import DeviceCommand, DeviceResult, RiskTier
+from haven.execution import ProviderCommand, ProviderResult
 from haven.resources.models import ResourceRecord
 
 PROVIDER_ID = "local_filesystem"
@@ -59,11 +63,22 @@ _DEFAULT_MAX_ENTRIES = 5000
 # happens, matching the two-step confirmation a garage door or door lock
 # already gets.
 FILESYSTEM_ACTION_RISK = {
+    "filesystem.open": RiskTier.SAFE_AUTOMATIC,
+    "filesystem.reveal": RiskTier.SAFE_AUTOMATIC,
     "filesystem.create_folder": RiskTier.SAFE_AUTOMATIC,
     "filesystem.copy": RiskTier.SAFE_AUTOMATIC,
     "filesystem.move": RiskTier.CONFIRMATION_REQUIRED,
     "filesystem.rename": RiskTier.CONFIRMATION_REQUIRED,
 }
+
+_FILESYSTEM_MUTATIONS = frozenset(
+    {
+        "filesystem.create_folder",
+        "filesystem.copy",
+        "filesystem.move",
+        "filesystem.rename",
+    }
+)
 
 
 class PathOutsideAllowedRoots(ValueError):
@@ -91,6 +106,27 @@ def _resource_id_for(path: Path) -> str:
     return f"file:{path.as_posix()}"
 
 
+def _native_open(path: Path) -> None:
+    """Ask the local operating system to open one already-confined path."""
+
+    startfile = getattr(os, "startfile", None)
+    if startfile is None:
+        raise OSError("native file open is only available on Windows")
+    startfile(str(path))
+
+
+def _native_reveal(path: Path) -> None:
+    """Reveal one already-confined path in Windows Explorer."""
+
+    if os.name != "nt":
+        raise OSError("native file reveal is only available on Windows")
+    target = str(path) if path.is_dir() else f"/select,{path}"
+    # No shell=True: the path is data, not a command fragment.  The process
+    # is intentionally asynchronous; ProviderResult means Explorer accepted
+    # the request, not that a GUI window has finished painting.
+    subprocess.Popen(["explorer.exe", target], close_fds=True)
+
+
 @dataclass(frozen=True)
 class FilesystemProviderConfig:
     """What a household explicitly declared, never inferred."""
@@ -114,6 +150,8 @@ class FilesystemProvider:
         read_only: bool = False,
         max_entries: int = _DEFAULT_MAX_ENTRIES,
         clock: Callable[[], datetime] | None = None,
+        open_path: Callable[[Path], None] | None = None,
+        reveal_path: Callable[[Path], None] | None = None,
     ) -> None:
         roots = tuple(_canonical(root) for root in allowed_roots)
         if not roots:
@@ -127,6 +165,8 @@ class FilesystemProvider:
             allowed_roots=roots, scope_id=scope_id.strip(), read_only=read_only, max_entries=max_entries
         )
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._open_path = open_path or _native_open
+        self._reveal_path = reveal_path or _native_reveal
 
     @property
     def allowed_roots(self) -> tuple[Path, ...]:
@@ -238,7 +278,7 @@ class FilesystemProvider:
             stat = resolved.stat()
         except OSError:
             return None
-        capabilities = ["filesystem.read"]
+        capabilities = ["filesystem.read", "filesystem.open", "filesystem.reveal"]
         if not self._config.read_only:
             capabilities += ["filesystem.move", "filesystem.rename"]
             if is_dir:
@@ -266,7 +306,141 @@ class FilesystemProvider:
 
     # -- execution --------------------------------------------------------
 
+    @overload
     def execute(self, command: DeviceCommand) -> DeviceResult:
+        ...
+
+    @overload
+    def execute(self, command: ProviderCommand) -> ProviderResult:
+        ...
+
+    def execute(self, command: DeviceCommand | ProviderCommand) -> DeviceResult | ProviderResult:
+        """Compatibility entry point for the original device-shaped seam."""
+
+        if isinstance(command, ProviderCommand):
+            return self.execute_provider(command)
+        if command.service in {"filesystem.open", "filesystem.reveal"}:
+            result = self.execute_provider(
+                ProviderCommand(
+                    request_id=command.request_id,
+                    provider_id=self.provider_id,
+                    capability=command.service,
+                    target_resource_id=command.target_device_id,
+                    parameters=command.parameters,
+                    requested_at=command.requested_at,
+                )
+            )
+            return DeviceResult(
+                success=result.success,
+                detail=result.detail,
+                observed_at=result.observed_at,
+                source=result.source,
+            )
+        return self._execute_device(command)
+
+    def execute_provider(self, command: ProviderCommand) -> ProviderResult:
+        """Execute an open-vocabulary, already-authorized provider command.
+
+        Computer actions use this method so the resource path no longer has
+        to masquerade as a device command.  Mutations deliberately delegate
+        to the legacy implementation below, preserving its tested behavior
+        while the new open/reveal capabilities establish the generic seam.
+        """
+
+        now = self._clock()
+        if command.provider_id != self.provider_id:
+            return ProviderResult(
+                success=False,
+                detail=f"command targets provider {command.provider_id!r}, not {self.provider_id!r}",
+                observed_at=now,
+                source=self.provider_id,
+            )
+        params = dict(command.parameters)
+        try:
+            if command.capability == "filesystem.open":
+                return self._open(params, now=now)
+            if command.capability == "filesystem.reveal":
+                return self._reveal(params, now=now)
+            if command.capability not in _FILESYSTEM_MUTATIONS:
+                return ProviderResult(
+                    success=False,
+                    detail=f"unknown filesystem capability: {command.capability!r}",
+                    observed_at=now,
+                    source=self.provider_id,
+                )
+            result = self._execute_device(
+                DeviceCommand(
+                    request_id=command.request_id,
+                    target_device_id=command.target_resource_id or command.capability,
+                    service=command.capability,
+                    parameters=command.parameters,
+                    requested_at=command.requested_at,
+                )
+            )
+            return ProviderResult(
+                success=result.success,
+                detail=result.detail,
+                observed_at=result.observed_at,
+                source=result.source,
+            )
+        except PathOutsideAllowedRoots as exc:
+            return ProviderResult(success=False, detail=str(exc), observed_at=now, source=self.provider_id)
+        except (KeyError, TypeError, ValueError, OSError) as exc:
+            detail = str(exc) or exc.__class__.__name__
+            return ProviderResult(
+                success=False,
+                detail=f"{command.capability} failed: {detail}",
+                observed_at=now,
+                source=self.provider_id,
+            )
+
+    def _existing_target(self, params: dict) -> Path:
+        target = self._require_within_roots(params["path"])
+        if not target.exists():
+            raise FileNotFoundError(str(target))
+        return target
+
+    def _open(self, params: dict, *, now: datetime) -> ProviderResult:
+        target = self._existing_target(params)
+        try:
+            self._open_path(target)
+        except OSError as exc:
+            detail = str(exc) or exc.__class__.__name__
+            return ProviderResult(
+                success=False,
+                detail=f"could not open {target}: {detail}",
+                observed_at=now,
+                source=self.provider_id,
+            )
+        return ProviderResult(
+            success=True,
+            detail=f"requested open {target}",
+            observed_at=self._clock(),
+            source=self.provider_id,
+            metadata=(("operation", "open"), ("path", str(target))),
+        )
+
+    def _reveal(self, params: dict, *, now: datetime) -> ProviderResult:
+        target = self._existing_target(params)
+        try:
+            self._reveal_path(target)
+        except OSError as exc:
+            detail = str(exc) or exc.__class__.__name__
+            return ProviderResult(
+                success=False,
+                detail=f"could not reveal {target}: {detail}",
+                observed_at=now,
+                source=self.provider_id,
+            )
+        return ProviderResult(
+            success=True,
+            detail=f"requested reveal {target}",
+            observed_at=self._clock(),
+            source=self.provider_id,
+            metadata=(("operation", "reveal"), ("path", str(target))),
+        )
+
+    def _execute_device(self, command: DeviceCommand) -> DeviceResult:
         """Route an already-authorized command to a mutation method.
 
         `command.target_device_id` names the resource id the command acts

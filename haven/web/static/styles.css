@@ -923,6 +923,17 @@ a {
   font-size: 10px;
 }
 
+.search-result-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.search-result-actions .btn-small {
+  padding: 3px 8px;
+  font-size: 10px;
+}
+
 .search-empty {
   font-size: 11.5px;
   padding: 4px 0;

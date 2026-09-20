@@ -90,3 +90,23 @@ def test_scan_over_http_populates_resources_findable_through_search():
             assert status == 200
             assert body["ok"] is True
             assert any(hit["resource_id"].endswith("nasa_report.txt") for hit in body["hits"])
+
+
+def test_http_setup_keeps_computer_read_only_until_write_is_explicitly_enabled():
+    with tempfile.TemporaryDirectory() as tmp:
+        allowed = Path(tmp) / "Documents"
+        allowed.mkdir()
+        data_dir = str(Path(tmp) / "data")
+
+        with _boot(data_dir) as (_server, port):
+            _post(port, "/api/setup/computer/roots", {"path": str(allowed)})
+
+            status, body = _post(port, "/api/setup/computer", {"enabled": True})
+            assert status == 200
+            assert body["setup"]["computer"]["read_only"] is True
+
+            status, body = _post(
+                port, "/api/setup/computer", {"enabled": True, "read_only": False}
+            )
+            assert status == 200
+            assert body["setup"]["computer"]["read_only"] is False

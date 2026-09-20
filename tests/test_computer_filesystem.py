@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from haven.core.domain import DeviceCommand
+from haven.execution import ProviderCommand
 from haven.integrations.computer import FilesystemProvider, PathOutsideAllowedRoots
 
 UTC = timezone.utc
@@ -121,7 +122,11 @@ def test_read_only_provider_reports_read_capability_only():
 
         provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", read_only=True, clock=lambda: NOW)
         records = {r.locator: r for r in provider.observe()}
-    assert records[str(root / "a.txt")].capabilities == ("filesystem.read",)
+    assert records[str(root / "a.txt")].capabilities == (
+        "filesystem.read",
+        "filesystem.open",
+        "filesystem.reveal",
+    )
 
 
 def test_writable_provider_declares_mutation_capabilities():
@@ -304,6 +309,115 @@ def test_unknown_service_fails_cleanly_not_an_exception():
         result = provider.execute(_command("filesystem.delete_everything"))
         assert result.success is False
         assert "unknown filesystem service" in result.detail
+
+
+def test_provider_open_uses_the_native_callback_without_needing_write_access():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "allowed"
+        root.mkdir()
+        target = root / "notes.txt"
+        target.write_text("hello")
+        opened = []
+        provider = FilesystemProvider(
+            allowed_roots=(root,),
+            scope_id="project:haven",
+            read_only=True,
+            clock=lambda: NOW,
+            open_path=opened.append,
+        )
+
+        result = provider.execute(
+            ProviderCommand(
+                request_id="open-1",
+                provider_id="local_filesystem",
+                capability="filesystem.open",
+                target_resource_id="file:notes",
+                parameters=(("path", str(target)),),
+                requested_at=NOW,
+            )
+        )
+
+        assert result.success is True
+        assert opened == [target.resolve()]
+        assert dict(result.metadata)["operation"] == "open"
+
+
+def test_provider_reveal_uses_the_native_callback_for_a_directory():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "allowed"
+        root.mkdir()
+        revealed = []
+        provider = FilesystemProvider(
+            allowed_roots=(root,),
+            scope_id="project:haven",
+            clock=lambda: NOW,
+            reveal_path=revealed.append,
+        )
+
+        result = provider.execute_provider(
+            ProviderCommand(
+                request_id="reveal-1",
+                provider_id="local_filesystem",
+                capability="filesystem.reveal",
+                target_resource_id="file:allowed",
+                parameters=(("path", str(root)),),
+                requested_at=NOW,
+            )
+        )
+
+        assert result.success is True
+        assert revealed == [root.resolve()]
+        assert dict(result.metadata)["operation"] == "reveal"
+
+
+def test_provider_open_rejects_a_path_outside_the_root_before_native_callback():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "allowed"
+        root.mkdir()
+        outside = Path(tmp) / "outside.txt"
+        outside.write_text("do not open")
+        opened = []
+        provider = FilesystemProvider(
+            allowed_roots=(root,),
+            scope_id="project:haven",
+            clock=lambda: NOW,
+            open_path=opened.append,
+        )
+
+        result = provider.execute_provider(
+            ProviderCommand(
+                request_id="open-escape",
+                provider_id="local_filesystem",
+                capability="filesystem.open",
+                target_resource_id="file:outside",
+                parameters=(("path", str(outside)),),
+                requested_at=NOW,
+            )
+        )
+
+        assert result.success is False
+        assert "outside every allowed root" in result.detail
+        assert opened == []
+
+
+def test_provider_command_with_the_wrong_provider_id_fails_closed():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "allowed"
+        root.mkdir()
+        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        result = provider.execute_provider(
+            ProviderCommand(
+                request_id="wrong-provider",
+                provider_id="browser",
+                capability="filesystem.reveal",
+                target_resource_id=None,
+                parameters=(("path", str(root)),),
+                requested_at=NOW,
+            )
+        )
+
+        assert result.success is False
+        assert "not 'local_filesystem'" in result.detail
 
 
 # -- execution: real mutations ----------------------------------------------

@@ -649,6 +649,39 @@ function renderSearchResults(payload) {
     locator.className = 'search-result-locator muted';
     locator.textContent = resource.locator || hit.resource_id || 'unavailable';
     card.appendChild(locator);
+
+    const capabilities = new Set(Array.isArray(resource.capabilities) ? resource.capabilities : []);
+    const availableActions = [
+      ['filesystem.open', 'Open'],
+      ['filesystem.reveal', 'Reveal'],
+    ].filter(([action]) => capabilities.has(action));
+    if (availableActions.length) {
+      const actions = document.createElement('div');
+      actions.className = 'search-result-actions';
+      for (const [action, label] of availableActions) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn btn-small';
+        button.textContent = label;
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          button.textContent = label + '…';
+          const response = await postJSON('/api/computer/actions', {
+            action,
+            resource_id: hit.resource_id,
+            justification: 'user selected this resource from HAVEN search',
+          });
+          if (response && response.ok && response.success) {
+            button.textContent = label + 'ed';
+            return;
+          }
+          button.disabled = false;
+          button.textContent = label;
+        });
+        actions.appendChild(button);
+      }
+      card.appendChild(actions);
+    }
     els.searchResults.appendChild(card);
   }
 }
@@ -1213,10 +1246,10 @@ const SETUP_STEP_COUNT = 7;
 const SETUP_STEP_NAMES = {
   1: { title: 'Welcome', optional: false },
   2: { title: 'Storage', optional: false },
-  3: { title: 'Connect your home', optional: true },
-  4: { title: 'Find devices', optional: true },
-  5: { title: 'People & context', optional: false },
-  6: { title: 'Features', optional: true },
+  3: { title: 'You', optional: false },
+  4: { title: 'This computer', optional: true },
+  5: { title: 'Connections', optional: true },
+  6: { title: 'Intelligence & voice', optional: true },
   7: { title: 'Ready', optional: false },
 };
 
@@ -1227,6 +1260,36 @@ const setupState = {
   furthest: 1,       // furthest step reached; indicator clicks beyond are locked
   open: false,
 };
+
+const hostState = {
+  host: 'browser',
+  capabilities: [],
+};
+
+function hostSupports(capability) {
+  return hostState.capabilities.includes(capability);
+}
+
+async function refreshHostCapabilities() {
+  try {
+    const res = await fetch('/api/host/capabilities');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || typeof data !== 'object') return;
+    if (typeof data.host === 'string' && data.host.trim()) {
+      hostState.host = data.host;
+    }
+    hostState.capabilities = Array.isArray(data.capabilities)
+      ? data.capabilities.filter((value) => typeof value === 'string')
+      : [];
+  } catch {
+    // Browser mode is the safe fallback when the host contract is absent.
+  }
+}
+
+async function pickHostFolder() {
+  return postJSON('/api/host/pick-folder', {});
+}
 
 function setupObj() {
   const s = setupState.setup;
@@ -1369,6 +1432,29 @@ function renderSetupDataDir(container) {
   });
   container.appendChild(form);
 
+  if (hostSupports('folder_picker')) {
+    const chooseNative = document.createElement('button');
+    chooseNative.type = 'button';
+    chooseNative.className = 'btn';
+    chooseNative.textContent = 'Choose with native folder picker';
+    chooseNative.addEventListener('click', async () => {
+      const result = await pickHostFolder();
+      if (!result) {
+        showSetupError('Native folder picker unavailable. You can enter a path above.');
+        return;
+      }
+      if (result.cancelled) return;
+      if (!result.ok || typeof result.path !== 'string' || !result.path.trim()) {
+        showSetupError(typeof result.error === 'string'
+          ? result.error
+          : 'Native folder picker unavailable. You can enter a path above.');
+        return;
+      }
+      await setupPost('/api/setup/data-dir', { path: result.path.trim() });
+    });
+    container.appendChild(chooseNative);
+  }
+
   const useDefault = document.createElement('button');
   useDefault.type = 'button';
   useDefault.className = 'btn';
@@ -1379,7 +1465,7 @@ function renderSetupDataDir(container) {
   container.appendChild(useDefault);
 }
 
-/* --- step 3: provider --- */
+/* --- connections: Home Assistant and devices --- */
 
 function setupFieldLabel(container, title, detail) {
   const wrap = document.createElement('div');
@@ -1460,14 +1546,14 @@ function renderSetupProvider(container) {
   skip.textContent = 'Skip home setup';
   skip.addEventListener('click', async () => {
     const ok = await setupPost('/api/setup/provider', { skip: true });
-    if (ok) setupGotoStep(4);
+    if (ok) setupGotoStep(6);
   });
   container.appendChild(skip);
   container.appendChild(setupText(
     'HAVEN works without Home Assistant. You can add Home Assistant or other home providers later from Settings.'));
 }
 
-/* --- step 4: discovery --- */
+/* --- connections: device discovery --- */
 
 const SETUP_DEVICE_TYPES = ['light', 'thermostat', 'switch', 'fan', 'cover', 'camera'];
 
@@ -1576,7 +1662,7 @@ function renderSetupDiscovery(container) {
   skipDevices.type = 'button';
   skipDevices.className = 'btn';
   skipDevices.textContent = 'Skip devices';
-  skipDevices.addEventListener('click', () => setupGotoStep(5));
+  skipDevices.addEventListener('click', () => setupGotoStep(6));
   container.appendChild(skipDevices);
 
   const candidates = Array.isArray(discovery.candidates) ? discovery.candidates : [];
@@ -1590,7 +1676,18 @@ function renderSetupDiscovery(container) {
   }
 }
 
-/* --- step 5: household --- */
+function renderSetupConnections(container) {
+  container.appendChild(setupMicroHeading('Home Assistant'));
+  container.appendChild(setupText(
+    'Home Assistant is one optional connection for the devices and state ' +
+    'around you. HAVEN also works without it.'));
+  renderSetupProvider(container);
+
+  container.appendChild(setupMicroHeading('Devices'));
+  renderSetupDiscovery(container);
+}
+
+/* --- step 3: you and authority --- */
 
 /* setupPost re-renders the step on success, so the name input reseeds from
    here — entering several sensors for one person is the common case. */
@@ -1800,7 +1897,7 @@ function renderSetupHousehold(container) {
   container.appendChild(contextsSection);
 }
 
-/* --- step 6: preferences --- */
+/* --- step 6: intelligence and voice --- */
 
 function setupPrefChecked(container, key) {
   const input = container.querySelector('input[data-pref="' + key + '"]');
@@ -1840,9 +1937,12 @@ function renderSetupComputerAccess(container) {
 
   container.appendChild(setupMicroHeading('Computer access'));
   container.appendChild(setupText(
-    'HAVEN can index files and folders you choose — for search, recall, ' +
-    'and (later) organizing them — the same way it indexes home devices.'));
-  container.appendChild(setupText('Nothing is read until you add a folder and turn this on.'));
+    'Choose the folders HAVEN may read and index for search, recall, and ' +
+    'document understanding. Computer access is separate from permission ' +
+    'to change files.'));
+  container.appendChild(setupText(
+    'Reading is the safe default. File organization is an explicit second ' +
+    'choice, and every change still crosses HAVEN authority.'));
 
   if (!roots.length) {
     container.appendChild(setupText('No folders added yet.'));
@@ -1871,26 +1971,28 @@ function renderSetupComputerAccess(container) {
   });
   container.appendChild(form);
 
-  const chooseFolder = document.createElement('button');
-  chooseFolder.type = 'button';
-  chooseFolder.className = 'btn';
-  chooseFolder.textContent = 'Choose folder…';
-  chooseFolder.addEventListener('click', async () => {
-    const result = await postJSON('/api/desktop/pick-folder', {});
-    if (!result) {
-      showSetupError('Native folder picker unavailable. You can enter a path above.');
-      return;
-    }
-    if (result.cancelled) return;
-    if (!result.ok || typeof result.path !== 'string' || !result.path.trim()) {
-      showSetupError(typeof result.error === 'string'
-        ? result.error
-        : 'Native folder picker unavailable. You can enter a path above.');
-      return;
-    }
-    await setupPost('/api/setup/computer/roots', { path: result.path.trim() });
-  });
-  container.appendChild(chooseFolder);
+  if (hostSupports('folder_picker')) {
+    const chooseFolder = document.createElement('button');
+    chooseFolder.type = 'button';
+    chooseFolder.className = 'btn';
+    chooseFolder.textContent = 'Choose folder…';
+    chooseFolder.addEventListener('click', async () => {
+      const result = await pickHostFolder();
+      if (!result) {
+        showSetupError('Native folder picker unavailable. You can enter a path above.');
+        return;
+      }
+      if (result.cancelled) return;
+      if (!result.ok || typeof result.path !== 'string' || !result.path.trim()) {
+        showSetupError(typeof result.error === 'string'
+          ? result.error
+          : 'Native folder picker unavailable. You can enter a path above.');
+        return;
+      }
+      await setupPost('/api/setup/computer/roots', { path: result.path.trim() });
+    });
+    container.appendChild(chooseFolder);
+  }
 
   const enableRow = document.createElement('label');
   enableRow.className = 'pending-auto setup-pref';
@@ -1898,14 +2000,12 @@ function renderSetupComputerAccess(container) {
   enableBox.type = 'checkbox';
   enableBox.checked = computer.enabled === true;
   enableBox.disabled = !roots.length;
-  enableBox.addEventListener('change', async () => {
-    await setupPost('/api/setup/computer', { enabled: enableBox.checked });
-  });
+  enableBox.setAttribute('aria-label', 'Allow HAVEN to read and index these folders');
   enableRow.appendChild(enableBox);
   const enableText = document.createElement('span');
   enableText.className = 'setup-pref-text';
   const enableName = document.createElement('span');
-  enableName.textContent = 'Enable computer access';
+  enableName.textContent = 'Allow HAVEN to read/index these folders';
   const enableSub = document.createElement('span');
   enableSub.className = 'muted';
   enableSub.textContent = roots.length
@@ -1915,6 +2015,39 @@ function renderSetupComputerAccess(container) {
   enableText.appendChild(enableSub);
   enableRow.appendChild(enableText);
   container.appendChild(enableRow);
+
+  const organizeRow = document.createElement('label');
+  organizeRow.className = 'pending-auto setup-pref';
+  const organizeBox = document.createElement('input');
+  organizeBox.type = 'checkbox';
+  organizeBox.checked = computer.read_only !== true;
+  organizeBox.disabled = !computer.enabled;
+  organizeBox.setAttribute('aria-label', 'Allow HAVEN to organize files');
+  organizeRow.appendChild(organizeBox);
+  const organizeText = document.createElement('span');
+  organizeText.className = 'setup-pref-text';
+  const organizeName = document.createElement('span');
+  organizeName.textContent = 'Allow HAVEN to organize files';
+  const organizeSub = document.createElement('span');
+  organizeSub.className = 'muted';
+  organizeSub.textContent = 'Enables write capabilities; each action still requires authority and approval.';
+  organizeText.appendChild(organizeName);
+  organizeText.appendChild(organizeSub);
+  organizeRow.appendChild(organizeText);
+  container.appendChild(organizeRow);
+
+  enableBox.addEventListener('change', async () => {
+    await setupPost('/api/setup/computer', {
+      enabled: enableBox.checked,
+      read_only: !organizeBox.checked,
+    });
+  });
+  organizeBox.addEventListener('change', async () => {
+    await setupPost('/api/setup/computer', {
+      enabled: enableBox.checked,
+      read_only: !organizeBox.checked,
+    });
+  });
 
   if (computer.enabled === true) {
     const scanBtn = document.createElement('button');
@@ -1930,6 +2063,10 @@ function renderSetupComputerAccess(container) {
 
 function renderSetupPreferences(container) {
   const prefs = setupObj().preferences || {};
+  container.appendChild(setupMicroHeading('Intelligence & voice'));
+  container.appendChild(setupText(
+    'Choose which optional capabilities HAVEN should use on this machine. ' +
+    'Models can be installed or connected later.'));
   container.appendChild(makeSetupPref(
     container, 'voice', 'Enable voice',
     'Use a microphone, wake-word model, speech recognition, and speech ' +
@@ -1941,8 +2078,6 @@ function renderSetupPreferences(container) {
     'conversation and understanding. HAVEN\u2019s authority system remains ' +
     'separate from whichever model you use.',
     prefs.intelligence === true));
-  container.appendChild(setupText('Models can be installed or connected later.'));
-  renderSetupComputerAccess(container);
 }
 
 /* --- step 7: finish --- */
@@ -1964,6 +2099,13 @@ function renderSetupFinish(container) {
   const enrolled = Array.isArray(discovery.enrolled) ? discovery.enrolled.length : 0;
   container.appendChild(makeCtxRow(
     'Devices enrolled', String(enrolled)));
+  const computer = (s.computer && typeof s.computer === 'object') ? s.computer : {};
+  const roots = Array.isArray(computer.allowed_roots) ? computer.allowed_roots : [];
+  container.appendChild(makeCtxRow(
+    'Computer',
+    computer.enabled === true
+      ? 'ready · ' + roots.length + (roots.length === 1 ? ' folder' : ' folders')
+      : 'not connected'));
   const household = (s.household && typeof s.household === 'object') ? s.household : {};
   const people = Array.isArray(household.people) ? household.people : [];
   const owner = people.find((p) => p && typeof p === 'object' && p.role === 'owner');
@@ -1985,9 +2127,9 @@ function renderSetupFinish(container) {
 const SETUP_STEP_RENDERERS = {
   1: renderSetupWelcome,
   2: renderSetupDataDir,
-  3: renderSetupProvider,
-  4: renderSetupDiscovery,
-  5: renderSetupHousehold,
+  3: renderSetupHousehold,
+  4: renderSetupComputerAccess,
+  5: renderSetupConnections,
   6: renderSetupPreferences,
   7: renderSetupFinish,
 };
@@ -3934,6 +4076,7 @@ async function boot() {
     // Backend may not be up yet — the first SSE `state` event will render.
   }
 
+  await refreshHostCapabilities();
   await refreshSetupOnBoot();
 
   const es = new EventSource('/events');

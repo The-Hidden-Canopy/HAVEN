@@ -1,4 +1,4 @@
-"""The execution-adapter contract and a registry keyed by provider_id.
+"""The execution-adapter contracts and device registry keyed by provider_id.
 
 `HavenRuntime` already has one caller of this: `_execution_adapter_for()`
 resolves a target device's `DeviceManifest.provider_id` (from
@@ -6,6 +6,10 @@ resolves a target device's `DeviceManifest.provider_id` (from
 back to a single default adapter (`home_assistant`) only when this registry
 was never given one for a device -- so a deployment that has not opted into
 multi-provider routing sees no behavior change at all.
+
+`ProviderExecutionAdapter` is the additive open-vocabulary seam for
+computer/life providers. It intentionally does not change the existing
+device registry or force legacy integrations to accept a new command shape.
 """
 
 from __future__ import annotations
@@ -13,6 +17,8 @@ from __future__ import annotations
 from typing import Protocol
 
 from haven.core.domain import DeviceCommand, DeviceResult
+
+from .commands import ProviderCommand, ProviderResult
 
 
 def _require_text(value: str, *, name: str) -> str:
@@ -24,6 +30,11 @@ def _require_text(value: str, *, name: str) -> str:
 class ExecutionAdapter(Protocol):
     def execute(self, command: DeviceCommand) -> DeviceResult:
         """Execute one already-authorized command."""
+
+
+class ProviderExecutionAdapter(Protocol):
+    def execute_provider(self, command: ProviderCommand) -> ProviderResult:
+        """Execute one already-authorized provider capability request."""
 
 
 class UnknownExecutionProvider(KeyError):
@@ -55,4 +66,9 @@ class ExecutionProviderRegistry:
             raise UnknownExecutionProvider(provider_id) from None
 
 
-__all__ = ["ExecutionAdapter", "ExecutionProviderRegistry", "UnknownExecutionProvider"]
+__all__ = [
+    "ExecutionAdapter",
+    "ExecutionProviderRegistry",
+    "ProviderExecutionAdapter",
+    "UnknownExecutionProvider",
+]

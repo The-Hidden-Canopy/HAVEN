@@ -20,14 +20,20 @@ UTC = timezone.utc
 NOW = datetime(2026, 9, 19, 12, 0, tzinfo=UTC)
 
 
-def _harness(data_dir: Path):
+def _harness(data_dir: Path, *, open_path=None, reveal_path=None):
     store = SetupConfigStore(data_dir / "haven.json")
     director = DemoDirector(clock=lambda: NOW)
     resources = ResourceStore(data_dir / "resources.db")
     ledger = ActionLedgerStore(data_dir / "action_ledger.db")
     setup = SetupService(store=store, director=director, clock=lambda: NOW, resource_store=resources)
     actions = ComputerActionService(
-        store=store, director=director, resource_store=resources, ledger=ledger, clock=lambda: NOW
+        store=store,
+        director=director,
+        resource_store=resources,
+        ledger=ledger,
+        clock=lambda: NOW,
+        open_path=open_path,
+        reveal_path=reveal_path,
     )
     return setup, actions, resources, ledger, director
 
@@ -54,7 +60,7 @@ def test_a_safe_action_executes_immediately_and_updates_the_resource_store():
         data_dir.mkdir()
         setup, actions, resources, ledger, director = _harness(data_dir)
         setup.add_computer_provider_root(path=str(allowed))
-        setup.set_computer_provider_enabled(enabled=True)
+        setup.set_computer_provider_enabled(enabled=True, read_only=False)
 
         new_folder = allowed / "New Folder"
         result = actions.request_action(
@@ -76,6 +82,68 @@ def test_a_safe_action_executes_immediately_and_updates_the_resource_store():
         assert entries[0].success is True
 
 
+def test_open_action_uses_provider_command_and_remains_governed_in_read_only_mode():
+    with tempfile.TemporaryDirectory() as tmp:
+        allowed = Path(tmp) / "Documents"
+        allowed.mkdir()
+        source = allowed / "notes.txt"
+        source.write_text("hello")
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+        opened = []
+        setup, actions, resources, ledger, director = _harness(data_dir, open_path=opened.append)
+        setup.add_computer_provider_root(path=str(allowed))
+        # The default computer permission is read-only. Opening a current
+        # resource is a provider operation, not a file mutation, so it must
+        # remain available without granting organize-files capability.
+        setup.set_computer_provider_enabled(enabled=True)
+        setup.scan_computer_provider()
+        source_id = next(r.resource_id for r in resources.list_all() if r.title == "notes.txt")
+
+        result = actions.request_action(
+            action="filesystem.open",
+            resource_id=source_id,
+            justification="user selected the document from search",
+        )
+
+        assert result["ok"] is True
+        assert result["success"] is True
+        assert opened == [source.resolve()]
+        entries = ledger.list_by_household(director.household_id)
+        assert len(entries) == 1
+        assert entries[0].status is DecisionStatus.ALLOW
+        assert entries[0].success is True
+
+
+def test_reveal_action_rejects_a_path_that_does_not_match_the_named_resource():
+    with tempfile.TemporaryDirectory() as tmp:
+        allowed = Path(tmp) / "Documents"
+        allowed.mkdir()
+        source = allowed / "notes.txt"
+        source.write_text("hello")
+        decoy = allowed / "decoy.txt"
+        decoy.write_text("not the selected resource")
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+        revealed = []
+        setup, actions, resources, _, _ = _harness(data_dir, reveal_path=revealed.append)
+        setup.add_computer_provider_root(path=str(allowed))
+        setup.set_computer_provider_enabled(enabled=True)
+        setup.scan_computer_provider()
+        source_id = next(r.resource_id for r in resources.list_all() if r.title == "notes.txt")
+
+        result = actions.request_action(
+            action="filesystem.reveal",
+            resource_id=source_id,
+            parameters={"path": str(decoy)},
+            justification="user selected the document from search",
+        )
+
+        assert result["ok"] is False
+        assert "does not match" in result["error"]
+        assert revealed == []
+
+
 def test_a_risky_action_requires_confirmation_before_it_touches_anything():
     with tempfile.TemporaryDirectory() as tmp:
         allowed = Path(tmp) / "Documents"
@@ -86,7 +154,7 @@ def test_a_risky_action_requires_confirmation_before_it_touches_anything():
         data_dir.mkdir()
         setup, actions, resources, ledger, director = _harness(data_dir)
         setup.add_computer_provider_root(path=str(allowed))
-        setup.set_computer_provider_enabled(enabled=True)
+        setup.set_computer_provider_enabled(enabled=True, read_only=False)
         setup.scan_computer_provider()
         source_id = next(r.resource_id for r in resources.list_all() if r.title == "notes.txt")
 
@@ -119,7 +187,7 @@ def test_confirming_a_pending_action_executes_it_and_verifies_the_consequence():
         data_dir.mkdir()
         setup, actions, resources, ledger, director = _harness(data_dir)
         setup.add_computer_provider_root(path=str(allowed))
-        setup.set_computer_provider_enabled(enabled=True)
+        setup.set_computer_provider_enabled(enabled=True, read_only=False)
         setup.scan_computer_provider()
         source_id = next(r.resource_id for r in resources.list_all() if r.title == "notes.txt")
 
@@ -161,7 +229,7 @@ def test_denying_a_pending_action_leaves_the_filesystem_untouched():
         data_dir.mkdir()
         setup, actions, resources, ledger, director = _harness(data_dir)
         setup.add_computer_provider_root(path=str(allowed))
-        setup.set_computer_provider_enabled(enabled=True)
+        setup.set_computer_provider_enabled(enabled=True, read_only=False)
         setup.scan_computer_provider()
         source_id = next(r.resource_id for r in resources.list_all() if r.title == "notes.txt")
 
@@ -190,7 +258,7 @@ def test_an_unjustified_request_is_denied_and_never_touches_the_filesystem():
         data_dir.mkdir()
         setup, actions, resources, ledger, director = _harness(data_dir)
         setup.add_computer_provider_root(path=str(allowed))
-        setup.set_computer_provider_enabled(enabled=True)
+        setup.set_computer_provider_enabled(enabled=True, read_only=False)
 
         new_folder = allowed / "New Folder"
         result = actions.request_action(
@@ -213,7 +281,7 @@ def test_a_resource_id_that_does_not_match_the_source_parameter_is_denied():
         data_dir.mkdir()
         setup, actions, resources, ledger, director = _harness(data_dir)
         setup.add_computer_provider_root(path=str(allowed))
-        setup.set_computer_provider_enabled(enabled=True)
+        setup.set_computer_provider_enabled(enabled=True, read_only=False)
         setup.scan_computer_provider()
         real_id = next(r.resource_id for r in resources.list_all() if r.title == "real.txt")
 
@@ -236,7 +304,7 @@ def test_an_unknown_resource_id_is_denied():
         data_dir.mkdir()
         setup, actions, resources, ledger, director = _harness(data_dir)
         setup.add_computer_provider_root(path=str(allowed))
-        setup.set_computer_provider_enabled(enabled=True)
+        setup.set_computer_provider_enabled(enabled=True, read_only=False)
 
         result = actions.request_action(
             action="filesystem.copy",
@@ -258,7 +326,7 @@ def test_a_stale_resource_id_is_denied():
         data_dir.mkdir()
         setup, actions, resources, ledger, director = _harness(data_dir)
         setup.add_computer_provider_root(path=str(allowed))
-        setup.set_computer_provider_enabled(enabled=True)
+        setup.set_computer_provider_enabled(enabled=True, read_only=False)
         setup.scan_computer_provider()
         source_id = next(r.resource_id for r in resources.list_all() if r.title == "notes.txt")
         resources.mark_stale(source_id)
@@ -281,7 +349,7 @@ def test_history_lists_every_attempt_most_recent_first():
         data_dir.mkdir()
         setup, actions, resources, ledger, director = _harness(data_dir)
         setup.add_computer_provider_root(path=str(allowed))
-        setup.set_computer_provider_enabled(enabled=True)
+        setup.set_computer_provider_enabled(enabled=True, read_only=False)
 
         actions.request_action(
             action="filesystem.create_folder",
@@ -320,7 +388,7 @@ def test_no_owner_declared_refuses_every_action():
             store=store, director=director, resource_store=resources, ledger=ledger, clock=lambda: NOW
         )
         setup.add_computer_provider_root(path=str(allowed))
-        setup.set_computer_provider_enabled(enabled=True)
+        setup.set_computer_provider_enabled(enabled=True, read_only=False)
 
         result = actions.request_action(
             action="filesystem.create_folder",

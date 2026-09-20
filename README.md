@@ -74,8 +74,9 @@ does. What exists spans both, including:
 - a zero-dependency desktop host (`haven/desktop`) that keeps that same
   HTML/CSS/JS renderer, starts the loopback server, opens it in a native
   Edge app window, binds the launch to a fresh HTTP-only session cookie, and
-  exposes the first native capability seam: a Windows folder picker. The
-  browser surface remains available for development and tablet-sized hosts;
+  exposes a renderer-facing host capability seam, currently a Windows folder
+  picker. The browser surface reports no native host capabilities and remains
+  available for development and tablet-sized hosts;
 - a voice input surface on that web layer: an honest
   `dormant -> wake -> listening -> interpreting` session with a refractory
   window and interruption, where spoken commands take exactly the same
@@ -607,12 +608,26 @@ python -m haven.desktop
 This starts HAVEN on an ephemeral loopback port and opens the existing
 renderer in an Edge app window. The desktop launch gets a fresh per-launch
 session cookie; the local API is not usable without that cookie. The shell
-also enables `Choose folder…` in computer setup, which calls the Windows
-folder picker and sends the selected root through the existing setup and
-`FilesystemProvider` boundary.
+also advertises the `folder_picker` host capability. The same native picker
+can choose the installation data directory or a computer-provider root; both
+selections go through the existing setup and `FilesystemProvider` boundaries.
+
+Computer access starts read-only: selecting folders permits indexing and
+search, not file mutation. The setup wizard exposes file organization as a
+separate explicit capability; enabling it still does not bypass HAVEN's
+authority or approval path.
 
 The renderer is still available directly when developing or hosting the same
 surface elsewhere:
+
+The desktop host can also stay resident without opening a window. This is the
+mode used by the optional Windows logon task; it owns the same installation
+lock as the windowed host, so a second HAVEN process cannot open the same data
+directory concurrently:
+
+```powershell
+python -m haven.desktop --background --port 8080
+```
 
 The local web surface renders a simulated household against the real
 authority engine — no network, credentials, or model required:

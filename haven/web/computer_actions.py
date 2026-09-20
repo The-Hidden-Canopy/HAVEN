@@ -1,5 +1,5 @@
 """`ComputerActionService`: authorization and consequence verification for
-`FilesystemProvider`'s write-side actions.
+`FilesystemProvider`'s governed resource actions.
 
 This is the seam an earlier review named directly: "computer mutation is
 not yet wired through the actual HAVEN authority/runtime path" -- real, but
@@ -30,8 +30,9 @@ Every requested action:
    in-memory `HavenApplication._pending` dict already accepts, not a
    promise a durable row for a still-undecided attempt would be right to
    make;
-4. once ALLOWed, is executed by the real `FilesystemProvider`, which
-   re-validates every path itself regardless of this layer's own checks --
+4. once ALLOWed, is executed by the real `FilesystemProvider` through its
+   provider-neutral `ProviderCommand` seam, which re-validates every path
+   itself regardless of this layer's own checks --
    defense in depth, matching every other integration in this repo;
 5. has its consequence verified: whatever it touched is re-observed right
    away and folded into the `ResourceStore` (`_verify_consequence`) -- a
@@ -47,11 +48,12 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from uuid import uuid4
 
 from ..actions import ActionLedgerEntry, ActionLedgerStore, ResourceActionDecision, ResourceActionRequest, ResourceAuthorityEngine
-from ..core.domain import ConfirmationToken, DecisionStatus, DeviceCommand
+from ..core.domain import ConfirmationToken, DecisionStatus
+from ..execution import ProviderCommand
 from ..integrations.computer.filesystem import FILESYSTEM_ACTION_RISK, FilesystemProvider
 from ..resources import ResourceStore
 from .computer_provider import build_filesystem_provider, load_computer_provider_config
@@ -67,7 +69,11 @@ _SOURCE_PARAMETER = {
     "filesystem.copy": "source",
     "filesystem.move": "source",
     "filesystem.rename": "source",
+    "filesystem.open": "path",
+    "filesystem.reveal": "path",
 }
+
+_RESOURCE_REQUIRED = frozenset({"filesystem.open", "filesystem.reveal"})
 
 
 def _new_id(prefix: str) -> str:
@@ -83,12 +89,16 @@ class ComputerActionService:
         resource_store: ResourceStore,
         ledger: ActionLedgerStore,
         clock=None,
+        open_path: Callable[[Path], None] | None = None,
+        reveal_path: Callable[[Path], None] | None = None,
     ) -> None:
         self._store = store
         self._director = director
         self._resource_store = resource_store
         self._ledger = ledger
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._open_path = open_path
+        self._reveal_path = reveal_path
         self._engine = ResourceAuthorityEngine(action_risk=FILESYSTEM_ACTION_RISK)
         self._pending: dict[str, ResourceActionRequest] = {}
 
@@ -110,7 +120,12 @@ class ComputerActionService:
 
     def _provider(self) -> FilesystemProvider | None:
         config = load_computer_provider_config(self._store)
-        return build_filesystem_provider(config, scope_id=self._director.household_id)
+        return build_filesystem_provider(
+            config,
+            scope_id=self._director.household_id,
+            open_path=self._open_path,
+            reveal_path=self._reveal_path,
+        )
 
     # -- the three caller-facing entry points ------------------------------
 
@@ -242,6 +257,8 @@ class ComputerActionService:
         not back up. `None` (no `resource_id` given) is not an error --
         `filesystem.create_folder` has nothing to name yet."""
 
+        if action in _RESOURCE_REQUIRED and resource_id is None:
+            return "a current resource_id is required for this action"
         if resource_id is None:
             return None
         record = self._resource_store.get(resource_id)
@@ -260,14 +277,20 @@ class ComputerActionService:
 
     def _execute(self, provider: FilesystemProvider, request: ResourceActionRequest, decision) -> dict:
         now = self._clock()
-        command = DeviceCommand(
+        parameters = dict(request.parameters)
+        if request.action in _RESOURCE_REQUIRED and "path" not in parameters and request.resource_id:
+            record = self._resource_store.get(request.resource_id)
+            if record is not None and record.locator is not None:
+                parameters["path"] = record.locator
+        command = ProviderCommand(
             request_id=request.request_id,
-            target_device_id=request.resource_id or request.action,
-            service=request.action,
-            parameters=request.parameters,
+            provider_id=request.provider_id,
+            capability=request.action,
+            target_resource_id=request.resource_id,
+            parameters=tuple(parameters.items()),
             requested_at=now,
         )
-        result = provider.execute(command)
+        result = provider.execute_provider(command)
         if result.success:
             self._verify_consequence(provider, request)
         self._record(request, decision, success=result.success, detail=result.detail)
