@@ -16,6 +16,8 @@ replace only this module while keeping the server and renderer contracts.
 from __future__ import annotations
 
 import argparse
+import http.client
+import json
 import os
 import secrets
 import shutil
@@ -41,6 +43,120 @@ class DesktopShellError(RuntimeError):
 
 class DesktopShellAlreadyRunning(DesktopShellError):
     """A different HAVEN host already owns this installation."""
+
+
+_ACTIVATION_FILE = ".haven-desktop-control.json"
+
+
+def _activation_path(data_dir: Path) -> Path:
+    return data_dir / _ACTIVATION_FILE
+
+
+def _write_activation_record(path: Path, *, port: int, token: str) -> None:
+    """Publish the resident shell endpoint atomically."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps({"port": int(port), "token": token}, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _read_activation_record(path: Path) -> tuple[int, str] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    port = payload.get("port")
+    token = payload.get("token")
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        return None
+    if not isinstance(token, str) or not token:
+        return None
+    return port, token
+
+
+def _request_activation(data_dir: Path) -> bool:
+    """Ask the owner of an already-held installation lock to activate."""
+
+    record = _read_activation_record(_activation_path(data_dir))
+    if record is None:
+        return False
+    port, token = record
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+    try:
+        body = json.dumps({"token": token}).encode("utf-8")
+        connection.request(
+            "POST",
+            "/__desktop_activate",
+            body=body,
+            headers={"Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        response_body = response.read()
+        if response.status != 200:
+            return False
+        try:
+            payload = json.loads(response_body)
+        except (ValueError, TypeError):
+            return False
+        return isinstance(payload, dict) and payload.get("ok") is True
+    except (OSError, ValueError):
+        return False
+    finally:
+        connection.close()
+
+
+def _remove_activation_record(data_dir: Path, *, token: str | None) -> None:
+    """Remove only the control record owned by this shell."""
+
+    if not token:
+        return
+    path = _activation_path(data_dir)
+    record = _read_activation_record(path)
+    if record is None or record[1] != token:
+        return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _activate_process_windows(process_ids: set[int]) -> bool:
+    """Restore and foreground a visible top-level window for these PIDs."""
+
+    if os.name != "nt" or not process_ids:
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    activated = False
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def visit(hwnd, _lparam):
+        nonlocal activated
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value not in process_ids or not user32.IsWindowVisible(hwnd):
+            return True
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.SetForegroundWindow(hwnd)
+        activated = True
+        return False
+
+    user32.EnumWindows(visit, 0)
+    return activated
 
 
 def _resolved_data_dir(data_dir: str | Path | None) -> Path:
@@ -155,6 +271,7 @@ class DesktopShell:
         server_factory: Callable = make_server,
         process_factory: Callable = subprocess.Popen,
         folder_picker: Callable[[], str | None] = choose_folder,
+        window_activator: Callable[[], bool] | None = None,
     ) -> None:
         self.data_dir = _resolved_data_dir(data_dir)
         self.demo = demo
@@ -164,13 +281,17 @@ class DesktopShell:
         self._server_factory = server_factory
         self._process_factory = process_factory
         self._folder_picker = folder_picker
+        self._window_activator = window_activator
         self.server = None
         self.server_thread: Thread | None = None
         self.process = None
         self.session_token: str | None = None
+        self.bootstrap_token: str | None = None
+        self.activation_token: str | None = None
         self.bootstrap_url: str | None = None
         self._edge_profile = None
         self._instance_lock: InstanceLock | None = None
+        self._reserved_instance_lock: InstanceLock | None = None
 
     def _resolve_edge(self) -> Path:
         edge = self.edge_path or find_edge_executable()
@@ -181,16 +302,82 @@ class DesktopShell:
             )
         return edge
 
-    def _on_data_dir_changed(self, data_dir: Path) -> None:
-        """Move the held lock when setup moves this installation."""
+    def _before_data_dir_changed(self, data_dir: Path) -> None:
+        """Reserve a target installation lock before setup moves anything."""
 
         target = Path(data_dir).expanduser().resolve()
         if self._instance_lock is None or self._instance_lock.data_dir == target:
             return
-        replacement = InstanceLock(target).acquire()
+        if self._reserved_instance_lock is not None:
+            if self._reserved_instance_lock.data_dir == target:
+                return
+            self._reserved_instance_lock.release()
+            self._reserved_instance_lock = None
+        self._reserved_instance_lock = InstanceLock(target).acquire()
+
+    def _on_data_dir_changed(self, data_dir: Path) -> None:
+        """Commit the already-reserved lock after setup moved successfully."""
+
+        target = Path(data_dir).expanduser().resolve()
+        if self._instance_lock is None or self._instance_lock.data_dir == target:
+            return
+        replacement = self._reserved_instance_lock
+        if replacement is None:
+            # Keep the callback safe for non-desktop callers that may still
+            # invoke it directly, while the normal DesktopShell path always
+            # reserves before setup starts moving files.
+            replacement = InstanceLock(target).acquire()
+        elif replacement.data_dir != target:
+            replacement.release()
+            self._reserved_instance_lock = None
+            raise DesktopShellError("reserved HAVEN instance lock does not match the new data directory")
+        self._reserved_instance_lock = None
+        previous_data_dir = self.data_dir
         previous = self._instance_lock
         self._instance_lock = replacement
+        self.data_dir = target
+        if self.server is not None and previous_data_dir != target:
+            try:
+                self._publish_activation_record()
+            except OSError:
+                # The live server and lock are already valid.  Keep the old
+                # record only if publishing the new one failed; it is safer
+                # than deleting the only activation route during a move.
+                pass
+            else:
+                _remove_activation_record(previous_data_dir, token=self.activation_token)
         previous.release()
+
+    def _on_data_dir_change_failed(self) -> None:
+        """Release a reservation when setup aborts before committing it."""
+
+        reservation = self._reserved_instance_lock
+        self._reserved_instance_lock = None
+        if reservation is not None:
+            reservation.release()
+
+    def _activate_existing_window(self) -> bool:
+        if self._window_activator is not None:
+            try:
+                return bool(self._window_activator())
+            except Exception:
+                return False
+        if self.background or self._edge_profile is None:
+            return False
+        process_ids = set(_edge_profile_process_ids(Path(self._edge_profile.name)))
+        process_id = getattr(self.process, "pid", None)
+        if isinstance(process_id, int) and process_id > 0:
+            process_ids.add(process_id)
+        return _activate_process_windows(process_ids)
+
+    def _publish_activation_record(self) -> None:
+        if self.server is None or self.activation_token is None:
+            return
+        _write_activation_record(
+            _activation_path(self.data_dir),
+            port=self.server.server_address[1],
+            token=self.activation_token,
+        )
 
     def start(self) -> "DesktopShell":
         if self.server is not None or self.process is not None:
@@ -199,6 +386,8 @@ class DesktopShell:
             self._instance_lock = InstanceLock(self.data_dir).acquire()
             edge = None if self.background else self._resolve_edge()
             self.session_token = secrets.token_urlsafe(32)
+            self.bootstrap_token = secrets.token_urlsafe(32)
+            self.activation_token = secrets.token_urlsafe(32)
             # Edge otherwise hands `--app` off to an already-running browser
             # profile and the child process exits immediately.  A per-launch
             # profile keeps this desktop shell's lifetime tied to its window
@@ -210,8 +399,13 @@ class DesktopShell:
                 data_dir=self.data_dir,
                 demo=self.demo,
                 session_token=self.session_token,
+                bootstrap_token=self.bootstrap_token,
+                activation_token=self.activation_token,
+                on_activate=self._activate_existing_window,
                 folder_picker=self._folder_picker,
+                before_data_dir_changed=self._before_data_dir_changed,
                 on_data_dir_changed=self._on_data_dir_changed,
+                on_data_dir_change_failed=self._on_data_dir_change_failed,
             )
             self.server_thread = Thread(
                 target=self.server.serve_forever,
@@ -220,10 +414,11 @@ class DesktopShell:
             )
             self.server_thread.start()
             port = self.server.server_address[1]
+            self._publish_activation_record()
             if not self.background:
                 self.bootstrap_url = (
                     f"http://127.0.0.1:{port}/__desktop_bootstrap?session="
-                    f"{quote(self.session_token, safe='')}"
+                    f"{quote(self.bootstrap_token, safe='')}"
                 )
                 self.process = self._process_factory(
                     [
@@ -237,7 +432,9 @@ class DesktopShell:
                 )
         except InstanceAlreadyRunning as exc:
             self._instance_lock = None
-            raise DesktopShellAlreadyRunning(str(exc)) from exc
+            activated = _request_activation(self.data_dir)
+            detail = "; activation requested" if activated else ""
+            raise DesktopShellAlreadyRunning(f"{exc}{detail}") from exc
         except Exception as exc:
             self.close()
             if isinstance(exc, DesktopShellError):
@@ -275,6 +472,7 @@ class DesktopShell:
             self.close()
 
     def close(self) -> None:
+        _remove_activation_record(self.data_dir, token=self.activation_token)
         process = self.process
         self.process = None
         if process is not None:
@@ -320,6 +518,10 @@ class DesktopShell:
         self._instance_lock = None
         if lock is not None:
             lock.release()
+        self._on_data_dir_change_failed()
+        self.session_token = None
+        self.bootstrap_token = None
+        self.activation_token = None
 
     def run(self) -> int:
         self.start()

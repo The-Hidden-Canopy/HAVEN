@@ -71,6 +71,48 @@ FILESYSTEM_ACTION_RISK = {
     "filesystem.rename": RiskTier.CONFIRMATION_REQUIRED,
 }
 
+# `os.startfile()` follows the Windows file association.  That is useful for
+# documents and media, but it also launches executables and scripts.  Keep the
+# first computer surface deliberately view-oriented: unknown file types get
+# `filesystem.reveal`, not an implicit process launch.  Direct provider calls
+# enforce the same boundary as observed capabilities do.
+_OPENABLE_SUFFIXES = frozenset(
+    {
+        ".avi",
+        ".bmp",
+        ".csv",
+        ".doc",
+        ".docx",
+        ".flac",
+        ".gif",
+        ".htm",
+        ".html",
+        ".jpeg",
+        ".jpg",
+        ".json",
+        ".markdown",
+        ".md",
+        ".m4a",
+        ".mkv",
+        ".mov",
+        ".mp3",
+        ".mp4",
+        ".odt",
+        ".pdf",
+        ".png",
+        ".rst",
+        ".rtf",
+        ".svg",
+        ".tsv",
+        ".txt",
+        ".wav",
+        ".webp",
+        ".xml",
+        ".yaml",
+        ".yml",
+    }
+)
+
 _FILESYSTEM_MUTATIONS = frozenset(
     {
         "filesystem.create_folder",
@@ -133,7 +175,7 @@ class FilesystemProviderConfig:
 
     allowed_roots: tuple[Path, ...]
     scope_id: str
-    read_only: bool = False
+    read_only: bool = True
     max_entries: int = _DEFAULT_MAX_ENTRIES
 
 
@@ -147,7 +189,7 @@ class FilesystemProvider:
         *,
         allowed_roots: Iterable[str | Path],
         scope_id: str,
-        read_only: bool = False,
+        read_only: bool = True,
         max_entries: int = _DEFAULT_MAX_ENTRIES,
         clock: Callable[[], datetime] | None = None,
         open_path: Callable[[Path], None] | None = None,
@@ -278,7 +320,9 @@ class FilesystemProvider:
             stat = resolved.stat()
         except OSError:
             return None
-        capabilities = ["filesystem.read", "filesystem.open", "filesystem.reveal"]
+        capabilities = ["filesystem.read", "filesystem.reveal"]
+        if self._can_open(resolved, is_dir=is_dir):
+            capabilities.insert(1, "filesystem.open")
         if not self._config.read_only:
             capabilities += ["filesystem.move", "filesystem.rename"]
             if is_dir:
@@ -400,8 +444,27 @@ class FilesystemProvider:
             raise FileNotFoundError(str(target))
         return target
 
+    @staticmethod
+    def _can_open(target: Path, *, is_dir: bool | None = None) -> bool:
+        """Whether `filesystem.open` is a view/open operation, not launch."""
+
+        directory = target.is_dir() if is_dir is None else is_dir
+        if directory:
+            return True
+        return target.suffix.lower() in _OPENABLE_SUFFIXES
+
     def _open(self, params: dict, *, now: datetime) -> ProviderResult:
         target = self._existing_target(params)
+        if not self._can_open(target):
+            return ProviderResult(
+                success=False,
+                detail=(
+                    f"filesystem.open is not available for {target.name!r}; "
+                    "use filesystem.reveal for this file"
+                ),
+                observed_at=now,
+                source=self.provider_id,
+            )
         try:
             self._open_path(target)
         except OSError as exc:
