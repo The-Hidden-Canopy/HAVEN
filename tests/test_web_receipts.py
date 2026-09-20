@@ -166,7 +166,7 @@ def test_event_action_id_resolves_only_action_events(director) -> None:
 
 @pytest.fixture()
 def server():
-    instance, director = make_server(0, clock=lambda: FIXED_NOW)
+    instance, director = make_server(0, clock=lambda: FIXED_NOW, demo=True)
     thread = threading.Thread(target=instance.serve_forever, daemon=True)
     thread.start()
     yield instance, director, instance.server_address[1]

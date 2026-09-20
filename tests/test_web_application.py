@@ -1,4 +1,4 @@
-"""The application factory: demo fallback, real Home Assistant world, preferences."""
+"""The application factory: explicit demo, real empty boot, and providers."""
 
 import json
 import tempfile
@@ -173,7 +173,7 @@ def test_configured_provider_with_missing_token_stays_real_but_unreachable():
     assert director.runtime.execution_providers.is_registered(HA_PROVIDER_ID) is False
 
 
-def test_bare_provider_kind_with_no_base_url_or_installed_provider_is_unconfigured():
+def test_bare_provider_kind_with_no_base_url_or_installed_provider_builds_empty_real_installation():
     """`provider_kind` alone, with no `provider_base_url` and nothing in
     `installed_providers.json`, is indistinguishable from a fresh install --
     `connect_provider`/`install_provider_package` never produce this state
@@ -187,9 +187,12 @@ def test_bare_provider_kind_with_no_base_url_or_installed_provider_is_unconfigur
         director = build_application(
             store=store, model_manager=None, clock=lambda: NOW, ha_client=_FakeHAClient()
         )
+        persisted_id = SetupConfigStore(data_dir / "haven.json").load().household_id
 
-    assert director.house is not None
-    assert not isinstance(director.world, HomeAssistantWorldProvider)
+    assert director.house is None
+    assert isinstance(director.world, HomeAssistantWorldProvider)
+    assert director.world.observe(NOW).devices == ()
+    assert director.household_id == persisted_id
 
 
 class _FakePhilipsHueProvider:
@@ -383,13 +386,18 @@ def test_an_installed_providers_package_going_missing_stays_real_but_unreachable
     assert director.household_id != HOUSEHOLD_ID
 
 
-def test_no_provider_configured_yet_builds_the_demo_household():
+def test_no_provider_configured_yet_builds_empty_real_installation():
     with tempfile.TemporaryDirectory() as tmp:
-        store = SetupConfigStore(Path(tmp) / "haven.json")
+        data_dir = Path(tmp)
+        store = SetupConfigStore(data_dir / "haven.json")
         director = build_application(store=store, model_manager=None, clock=lambda: NOW)
+        persisted = SetupConfigStore(data_dir / "haven.json").load()
 
-    assert director.house is not None
-    assert not isinstance(director.world, HomeAssistantWorldProvider)
+    assert director.house is None
+    assert isinstance(director.world, HomeAssistantWorldProvider)
+    assert director.world.observe(NOW).devices == ()
+    assert director.household_id == persisted.household_id
+    assert director.household_id != HOUSEHOLD_ID
 
 
 def test_intelligence_disabled_runs_the_scripted_floor():

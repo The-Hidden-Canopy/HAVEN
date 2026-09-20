@@ -934,6 +934,15 @@ a {
   font-size: 10px;
 }
 
+.search-result-action-feedback {
+  min-height: 0;
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.search-result-action-note.success { color: var(--teal); }
+.search-result-action-note.error { color: var(--red); }
+
 .search-empty {
   font-size: 11.5px;
   padding: 4px 0;

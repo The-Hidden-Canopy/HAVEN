@@ -33,6 +33,7 @@ from .models_api import (
 )
 from .receipts_api import action_chain, event_action_id
 from .service_manager import StartupManager
+from .folder_picker import choose_folder
 from .setup_config import SetupConfigStore, default_data_dir
 from .setup_service import SetupService
 from .computer_actions import ComputerActionService
@@ -139,11 +140,11 @@ class HavenWebServer(ThreadingHTTPServer):
         # lock, callbacks fired outside it).
         self.models = ModelManager(resolved_models_root)
         self.model_jobs = DownloadJobManager(self.models)
-        # The application factory reads the saved setup and builds the user's
-        # house when a provider is configured, the demo household otherwise.
+        # The application factory always builds the real installation on a
+        # normal boot. Only an explicit --demo constructor flag creates the
+        # simulated household; a fresh install is a real, empty HAVEN world.
         # The director's model bridge routes chat/asr/tts through this same
-        # manager, so a model loaded in the UI is a model the demo can speak
-        # with.
+        # manager.
         self.director = self._build_director()
         # The "life search bar" substrate: independent of the household loop
         # above, the same way `self.models`/`self.backups` are their own
@@ -218,11 +219,8 @@ class HavenWebServer(ThreadingHTTPServer):
         return {"host": "desktop", "capabilities": ["folder_picker"]}
 
     def _build_director(self) -> HavenApplication:
-        # The application factory reads the saved setup and builds the user's
-        # house when a provider is configured, the demo household otherwise.
-        # The director's model bridge routes chat/asr/tts through this same
-        # manager, so a model loaded in the UI is a model the demo can speak
-        # with.
+        # Keep rebuilds on the same explicit mode: normal boot remains a real
+        # installation even when every provider is currently unavailable.
         return build_application(
             store=self.setup_store,
             model_manager=self.models,
@@ -1211,11 +1209,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--demo",
         action="store_true",
-        help="force the demo household; normal boot reads the saved setup and builds "
-        "the user's house when a provider is configured",
+        help="force the explicit demo household; normal boot builds the real installation",
     )
     args = parser.parse_args(argv)
-    server, _ = make_server(args.port, demo=args.demo)
+    # The ordinary local web launcher still runs the shared renderer in a
+    # browser, but it is a local host and can offer the same native folder
+    # picker as HAVEN Desktop. Setup remains the authority boundary after the
+    # picker returns a path.
+    server, _ = make_server(args.port, demo=args.demo, folder_picker=choose_folder)
     host, port = server.server_address
     print(f"HAVEN web surface listening on http://{host}:{port}", file=sys.stderr)
     try:

@@ -57,7 +57,15 @@ class SystemDiagnostics:
             "diagnostics": {
                 "data_dir": str(server.setup_store.path.parent),
                 "config_error": status.get("config_error"),
-                "world": {"mode": "demo" if director.house is not None else "home_assistant"},
+                "world": {
+                    "mode": (
+                        "demo"
+                        if director.house is not None
+                        else "home_assistant"
+                        if director.ha_states_source is not None
+                        else "local"
+                    )
+                },
                 "provider": status["setup"]["provider"],
                 "household": {
                     "people": len(setup.household.people),

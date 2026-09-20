@@ -140,18 +140,38 @@ function applyGlowTargets(roomId) {
   }
 }
 
-async function postJSON(url, body) {
+async function requestJSON(url, options) {
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body == null ? {} : body),
-    });
-    if (!res.ok) return null; // e.g. 404 on expired request — ignore quietly
-    return await res.json();
+    const res = await fetch(url, options || {});
+    const body = await res.json().catch(() => ({}));
+    const envelope = body && typeof body === 'object' && !Array.isArray(body)
+      ? body : {};
+    return Object.assign({}, envelope, { httpOk: res.ok, status: res.status });
   } catch {
-    return null;
+    return {
+      httpOk: false,
+      status: 0,
+      error: 'HAVEN could not reach the local service.',
+    };
   }
+}
+
+async function postJSONDetailed(url, body) {
+  return requestJSON(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body == null ? {} : body),
+  });
+}
+
+async function postJSON(url, body) {
+  const response = await postJSONDetailed(url, body);
+  // Preserve the original quiet behavior for existing low-risk/demo callers:
+  // resource actions opt into postJSONDetailed so their backend error body is
+  // visible instead of being collapsed into a silent reset.
+  if (!response || response.httpOk !== true) return null;
+  const { httpOk: _httpOk, status: _status, ...payload } = response;
+  return payload;
 }
 
 /* ---------- rendering ---------- */
@@ -603,6 +623,53 @@ function clearSearchResults() {
   els.searchResultsPanel.removeAttribute('aria-busy');
 }
 
+function showResourceActionNote(container, text, tone) {
+  let note = container.querySelector('.search-result-action-note');
+  if (!note) {
+    note = document.createElement('div');
+    note.className = 'search-result-action-note';
+    container.appendChild(note);
+  }
+  note.className = 'search-result-action-note ' + (tone || '');
+  note.textContent = text;
+}
+
+async function runResourceAction(button, { action, resourceId, idleLabel, feedback }) {
+  button.disabled = true;
+  button.textContent = idleLabel + '…';
+  showResourceActionNote(feedback, '', '');
+
+  const response = await postJSONDetailed('/api/computer/actions', {
+    action,
+    resource_id: resourceId,
+    justification: 'user selected this resource from HAVEN search',
+  });
+  const succeeded = response && response.httpOk === true
+    && response.ok === true && response.success === true;
+  if (succeeded) {
+    button.textContent = idleLabel + 'ed ✓';
+    showResourceActionNote(feedback, idleLabel + 'ed.', 'success');
+    setTimeout(() => {
+      if (!button.isConnected) return;
+      button.disabled = false;
+      button.textContent = idleLabel;
+    }, 900);
+    return;
+  }
+
+  const detail = response && (response.error || response.detail);
+  const message = typeof detail === 'string' && detail.trim()
+    ? detail.trim()
+    : 'Action failed.';
+  showResourceActionNote(
+    feedback,
+    'Could not ' + idleLabel.toLowerCase() + ': ' + message,
+    'error'
+  );
+  button.disabled = false;
+  button.textContent = idleLabel;
+}
+
 function renderSearchResults(payload) {
   els.searchResults.textContent = '';
   els.searchResultsPanel.hidden = false;
@@ -658,29 +725,23 @@ function renderSearchResults(payload) {
     if (availableActions.length) {
       const actions = document.createElement('div');
       actions.className = 'search-result-actions';
+      const feedback = document.createElement('div');
+      feedback.className = 'search-result-action-feedback';
       for (const [action, label] of availableActions) {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'btn btn-small';
         button.textContent = label;
-        button.addEventListener('click', async () => {
-          button.disabled = true;
-          button.textContent = label + '…';
-          const response = await postJSON('/api/computer/actions', {
-            action,
-            resource_id: hit.resource_id,
-            justification: 'user selected this resource from HAVEN search',
-          });
-          if (response && response.ok && response.success) {
-            button.textContent = label + 'ed';
-            return;
-          }
-          button.disabled = false;
-          button.textContent = label;
-        });
+        button.addEventListener('click', () => runResourceAction(button, {
+          action,
+          resourceId: hit.resource_id,
+          idleLabel: label,
+          feedback,
+        }));
         actions.appendChild(button);
       }
       card.appendChild(actions);
+      card.appendChild(feedback);
     }
     els.searchResults.appendChild(card);
   }
@@ -1436,7 +1497,7 @@ function renderSetupDataDir(container) {
     const chooseNative = document.createElement('button');
     chooseNative.type = 'button';
     chooseNative.className = 'btn';
-    chooseNative.textContent = 'Choose with native folder picker';
+    chooseNative.textContent = 'Browse for folder…';
     chooseNative.addEventListener('click', async () => {
       const result = await pickHostFolder();
       if (!result) {
@@ -1975,7 +2036,7 @@ function renderSetupComputerAccess(container) {
     const chooseFolder = document.createElement('button');
     chooseFolder.type = 'button';
     chooseFolder.className = 'btn';
-    chooseFolder.textContent = 'Choose folder…';
+    chooseFolder.textContent = 'Browse for folder…';
     chooseFolder.addEventListener('click', async () => {
       const result = await pickHostFolder();
       if (!result) {
@@ -2471,8 +2532,12 @@ function makeDiagnosticsSection() {
   }
 
   const world = (d.world && typeof d.world === 'object') ? d.world : {};
-  sec.appendChild(makeCtxRow('World',
-    world.mode === 'home_assistant' ? 'Home Assistant' : 'Simulated household'));
+  const worldLabel = world.mode === 'demo'
+    ? 'Simulated household'
+    : world.mode === 'home_assistant'
+      ? 'Home Assistant'
+      : 'Local HAVEN';
+  sec.appendChild(makeCtxRow('World', worldLabel));
 
   const dirRow = makeCtxRow('Data dir',
     typeof d.data_dir === 'string' && d.data_dir ? d.data_dir : '—');
