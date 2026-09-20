@@ -27,7 +27,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from threading import Thread
+from threading import Lock, Thread
 from typing import Callable
 from urllib.parse import quote
 
@@ -240,7 +240,11 @@ def _request_activation(data_dir: Path) -> bool:
             payload = json.loads(response_body)
         except (ValueError, TypeError):
             return False
-        return isinstance(payload, dict) and payload.get("ok") is True
+        return (
+            isinstance(payload, dict)
+            and payload.get("ok") is True
+            and payload.get("activated") is True
+        )
     except (OSError, ValueError):
         return False
     finally:
@@ -478,6 +482,7 @@ class DesktopShell:
         self.activation_token: str | None = None
         self.bootstrap_url: str | None = None
         self._edge_profile = None
+        self._window_lock = Lock()
         self._instance_lock: InstanceLock | None = None
         self._reserved_instance_lock: InstanceLock | None = None
 
@@ -544,19 +549,92 @@ class DesktopShell:
         if reservation is not None:
             reservation.release()
 
+    def _window_is_alive(self) -> bool:
+        process = self.process
+        if process is None:
+            return False
+        try:
+            return process.poll() is None
+        except Exception:
+            # A process-like test/host seam without `poll` is safer to treat
+            # as alive than to launch a second window against the same shell.
+            return True
+
+    def _discard_dead_window_locked(self) -> None:
+        """Drop a window process that the user already closed.
+
+        This runs only while the shell's lifecycle lock is held. The resident
+        server and installation lock remain alive; only the window resources
+        are discarded so the next activation can create a fresh one.
+        """
+
+        process = self.process
+        profile = self._edge_profile
+        if process is None or self._window_is_alive():
+            return
+        self.process = None
+        self._edge_profile = None
+        self.bootstrap_url = None
+        if profile is not None:
+            try:
+                profile.cleanup()
+            except Exception:
+                pass
+
+    def _open_window_locked(self) -> bool:
+        """Create the Edge app window without changing resident-core state."""
+
+        if self.server is None or self.bootstrap_token is None:
+            return False
+        if self._window_is_alive():
+            return True
+        self._discard_dead_window_locked()
+        edge = self._resolve_edge()
+        profile = tempfile.TemporaryDirectory(prefix="haven-desktop-edge-")
+        port = self.server.server_address[1]
+        bootstrap_url = (
+            f"http://127.0.0.1:{port}/__desktop_bootstrap?session="
+            f"{quote(self.bootstrap_token, safe='')}"
+        )
+        try:
+            process = self._process_factory(
+                [
+                    str(edge),
+                    f"--app={bootstrap_url}",
+                    f"--user-data-dir={profile.name}",
+                    "--new-window",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                ]
+            )
+        except Exception:
+            profile.cleanup()
+            raise
+        self._edge_profile = profile
+        self.process = process
+        self.bootstrap_url = bootstrap_url
+        return True
+
+    def _open_window(self) -> bool:
+        with self._window_lock:
+            return self._open_window_locked()
+
     def _activate_existing_window(self) -> bool:
         if self._window_activator is not None:
             try:
                 return bool(self._window_activator())
             except Exception:
                 return False
-        if self.background or self._edge_profile is None:
-            return False
-        process_ids = set(_edge_profile_process_ids(Path(self._edge_profile.name)))
-        process_id = getattr(self.process, "pid", None)
-        if isinstance(process_id, int) and process_id > 0:
-            process_ids.add(process_id)
-        return _activate_process_windows(process_ids)
+        with self._window_lock:
+            if not self._window_is_alive():
+                return self._open_window_locked()
+            if self._edge_profile is None:
+                return False
+            process_ids = set(_edge_profile_process_ids(Path(self._edge_profile.name)))
+            process_id = getattr(self.process, "pid", None)
+            if isinstance(process_id, int) and process_id > 0:
+                process_ids.add(process_id)
+            return _activate_process_windows(process_ids)
 
     def _publish_activation_record(self) -> None:
         if self.server is None or self.activation_token is None:
@@ -572,16 +650,9 @@ class DesktopShell:
             return self
         try:
             self._instance_lock = InstanceLock(self.data_dir).acquire()
-            edge = None if self.background else self._resolve_edge()
             self.session_token = secrets.token_urlsafe(32)
             self.bootstrap_token = secrets.token_urlsafe(32)
             self.activation_token = secrets.token_urlsafe(32)
-            # Edge otherwise hands `--app` off to an already-running browser
-            # profile and the child process exits immediately.  A per-launch
-            # profile keeps this desktop shell's lifetime tied to its window
-            # and avoids reusing the user's normal browser state.
-            if not self.background:
-                self._edge_profile = tempfile.TemporaryDirectory(prefix="haven-desktop-edge-")
             self.server, _ = self._server_factory(
                 self.port,
                 data_dir=self.data_dir,
@@ -604,20 +675,7 @@ class DesktopShell:
             port = self.server.server_address[1]
             self._publish_activation_record()
             if not self.background:
-                self.bootstrap_url = (
-                    f"http://127.0.0.1:{port}/__desktop_bootstrap?session="
-                    f"{quote(self.bootstrap_token, safe='')}"
-                )
-                self.process = self._process_factory(
-                    [
-                        str(edge),
-                        f"--app={self.bootstrap_url}",
-                        f"--user-data-dir={self._edge_profile.name}",
-                        "--new-window",
-                        "--no-first-run",
-                        "--no-default-browser-check",
-                    ]
-                )
+                self._open_window()
         except InstanceAlreadyRunning as exc:
             self._instance_lock = None
             activated = _request_activation(self.data_dir)
@@ -661,8 +719,15 @@ class DesktopShell:
 
     def close(self) -> None:
         _remove_activation_record(self.data_dir, token=self.activation_token)
-        process = self.process
-        self.process = None
+        with self._window_lock:
+            process = self.process
+            self.process = None
+            edge_profile = self._edge_profile
+            self._edge_profile = None
+            self.bootstrap_url = None
+            server = self.server
+            self.server = None
+
         if process is not None:
             try:
                 if process.poll() is None:
@@ -673,14 +738,9 @@ class DesktopShell:
                     process.kill()
                 except Exception:
                     pass
-
-        edge_profile = self._edge_profile
-        self._edge_profile = None
         if edge_profile is not None:
             _terminate_edge_profile(Path(edge_profile.name))
 
-        server = self.server
-        self.server = None
         if server is not None:
             try:
                 server.shutdown()

@@ -230,6 +230,12 @@ a {
 
 .center-head .muted { font-size: 12px; }
 
+.center-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -352,6 +358,39 @@ a {
 
 .person-status.present { color: var(--teal); }
 
+.authoring-subsection {
+  margin-top: 28px;
+}
+
+.authoring-subhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 7px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.authoring-subhead .micro { color: var(--text); }
+
+.authoring-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.authoring-actions .btn {
+  padding: 4px 9px;
+  font-size: 10.5px;
+}
+
+.authoring-inline-note {
+  margin-top: 8px;
+  font-size: 11.5px;
+}
+
 /* automation rows */
 .feed-stamp {
   flex: none;
@@ -393,6 +432,133 @@ a {
 }
 
 .auto-badge.revoked { opacity: 0.6; }
+
+.automation-row {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.automation-row.focused {
+  border-color: var(--teal-dim);
+  background: rgba(79, 209, 197, 0.05);
+}
+
+.automation-row .feed-text { min-width: 120px; }
+
+.automation-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.automation-actions .btn {
+  padding: 4px 9px;
+  font-size: 10.5px;
+}
+
+.authoring-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 8, 14, 0.62);
+  z-index: 44;
+}
+
+.authoring-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(84vh, 720px);
+  overflow-y: auto;
+  padding: 20px 22px;
+  background: var(--bg-raise);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  z-index: 45;
+}
+
+.authoring-panel[hidden],
+.authoring-scrim[hidden] { display: none; }
+
+.authoring-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.authoring-head h2 {
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.authoring-note {
+  margin-bottom: 14px;
+  font-size: 12px;
+}
+
+.authoring-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.authoring-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.authoring-field > label,
+.authoring-field > span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.authoring-field input,
+.authoring-field select,
+.authoring-field textarea {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+
+.authoring-field textarea {
+  min-height: 74px;
+  resize: vertical;
+}
+
+.authoring-weekdays {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.authoring-weekday {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+
+.authoring-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
 
 /* system view: quiet grouped sections in the rail CONTEXT idiom */
 .sys-section {
@@ -1280,6 +1446,16 @@ body[data-glow="listening"] .pill.pill-voice::before {
   color: var(--teal) !important;
   border-color: var(--teal-dim);
 }
+
+.composer-feedback {
+  margin: 7px 2px 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.composer-feedback.error { color: var(--amber); }
+.composer-feedback[hidden] { display: none; }
 
 /* mic waveform — pure CSS, toggled by class; hidden unless voice.mic */
 .mic-wave {

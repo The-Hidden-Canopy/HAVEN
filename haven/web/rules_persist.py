@@ -251,6 +251,8 @@ def rule_to_dict(rule: Rule) -> dict:
         "approved_by": rule.approved_by,
         "approved_by_role": rule.approved_by_role.value if rule.approved_by_role is not None else None,
         "approved_at": _datetime_to_str(rule.approved_at) if rule.approved_at is not None else None,
+        "revoked_by": rule.revoked_by,
+        "revoked_at": _datetime_to_str(rule.revoked_at) if rule.revoked_at is not None else None,
     }
 
 
@@ -273,6 +275,10 @@ def rule_from_dict(payload: Mapping) -> Rule:
     if approved_by is not None and not isinstance(approved_by, str):
         raise ValueError("rule 'approved_by' must be a string or null")
     approved_at = payload.get("approved_at")
+    revoked_by = payload.get("revoked_by")
+    if revoked_by is not None and not isinstance(revoked_by, str):
+        raise ValueError("rule 'revoked_by' must be a string or null")
+    revoked_at = payload.get("revoked_at")
     try:
         return Rule(
             rule_id=payload["rule_id"],
@@ -281,6 +287,8 @@ def rule_from_dict(payload: Mapping) -> Rule:
             approved_by=approved_by,
             approved_by_role=approved_by_role,
             approved_at=_datetime_from_str(approved_at, name="rule 'approved_at'") if approved_at is not None else None,
+            revoked_by=revoked_by,
+            revoked_at=_datetime_from_str(revoked_at, name="rule 'revoked_at'") if revoked_at is not None else None,
         )
     except (TypeError, ValueError) as exc:
         raise ValueError(f"invalid rule payload: {exc}") from exc

@@ -141,6 +141,76 @@ def test_second_shell_requests_activation_before_exiting():
             first.close()
 
 
+def test_background_activation_creates_a_window_and_reopens_after_close():
+    with tempfile.TemporaryDirectory() as tmp:
+        edge = Path(tmp) / "msedge.exe"
+        edge.write_bytes(b"test executable placeholder")
+        processes = []
+
+        def launch(args):
+            process = _FakeProcess(args)
+            processes.append(process)
+            return process
+
+        shell = DesktopShell(
+            data_dir=Path(tmp) / "data",
+            demo=True,
+            background=True,
+            port=0,
+            edge_path=edge,
+            process_factory=launch,
+        )
+        shell.start()
+        try:
+            assert shell.process is None
+            assert shell._activate_existing_window() is True
+            assert len(processes) == 1
+            first_process = processes[0]
+            assert shell.process is first_process
+            assert shell.bootstrap_url is not None
+
+            # The resident server remains alive after the app window closes.
+            first_process.returncode = 0
+            assert shell._activate_existing_window() is True
+            assert len(processes) == 2
+            assert shell.process is processes[1]
+            assert shell.process is not first_process
+        finally:
+            shell.close()
+
+
+def test_second_background_launch_activates_the_existing_resident_window():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp) / "data"
+        edge = Path(tmp) / "msedge.exe"
+        edge.write_bytes(b"test executable placeholder")
+        processes = []
+
+        def launch(args):
+            process = _FakeProcess(args)
+            processes.append(process)
+            return process
+
+        first = DesktopShell(
+            data_dir=data_dir,
+            demo=True,
+            background=True,
+            port=0,
+            edge_path=edge,
+            process_factory=launch,
+        )
+        second = DesktopShell(data_dir=data_dir, demo=True, background=True, port=0)
+        first.start()
+        try:
+            with pytest.raises(DesktopShellAlreadyRunning, match="activation requested"):
+                second.start()
+            assert len(processes) == 1
+            assert first.process is processes[0]
+        finally:
+            second.close()
+            first.close()
+
+
 def test_activation_record_does_not_store_plaintext_token_on_windows():
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp) / "data"
