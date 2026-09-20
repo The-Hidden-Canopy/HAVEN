@@ -153,11 +153,12 @@ does. What exists spans both, including:
   approval of the rule, not the scheduler's role;
 - a production composition root (`haven/web/application.py`) separate from
   the demo one: `build_application()` reads a household's persisted setup
-  and builds either the demo fixture (nothing configured yet, or an
-  explicit demo run) or the real installation -- a real, persisted
-  `household_id` (a minted UUID, never a shared literal), enrolled devices,
-  declared people, and persisted rules. A household that has connected any
-  provider never falls back to the demo fixture again, even if that
+  and builds the real installation on every normal boot, including a fresh
+  install with no provider configured yet. That fresh installation gets a
+  real, persisted `household_id` (a minted UUID, never a shared literal), an
+  empty world, enrolled devices when present, declared people, and persisted
+  rules. Only an explicit demo run builds the fixture. A household that has
+  connected any provider never falls back to the demo fixture again, even if that
   provider is one this composition root has no live adapter for yet (a
   community provider) or its connection details are temporarily unreadable
   -- it gets its own real installation with a world that honestly reports

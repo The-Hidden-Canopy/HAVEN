@@ -263,7 +263,7 @@ def test_declaring_a_person_without_a_role_defaults_to_member() -> None:
 def test_setup_state_persists_across_server_restarts() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = str(Path(tmp) / "data")
-        with _boot(data_dir) as (_, _, port):
+        with _boot(data_dir, demo=True) as (_, _, port):
             _post(port, "/api/setup/provider", {"kind": None, "skip": True})
             _post(port, "/api/setup/discovery/scan")
             status, body = _post(
@@ -277,7 +277,7 @@ def test_setup_state_persists_across_server_restarts() -> None:
             assert status == 200
             assert body["setup"]["completed"] is True
 
-        with _boot(data_dir) as (_, _, port):
+        with _boot(data_dir, demo=True) as (_, _, port):
             status, body = _get_json(port, "/api/setup")
             assert status == 200
             assert "config_error" not in body

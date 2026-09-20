@@ -16,7 +16,7 @@ FIXED_NOW = datetime(2026, 9, 16, 20, 0, tzinfo=UTC)
 
 @pytest.fixture()
 def server():
-    instance, director = make_server(0, clock=lambda: FIXED_NOW)
+    instance, director = make_server(0, clock=lambda: FIXED_NOW, demo=True)
     thread = threading.Thread(target=instance.serve_forever, daemon=True)
     thread.start()
     yield instance, director, instance.server_address[1]

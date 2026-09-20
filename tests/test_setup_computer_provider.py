@@ -5,6 +5,7 @@ allowed folders, scan -- the setup-wizard-facing half of
 
 from __future__ import annotations
 
+from dataclasses import replace
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -221,6 +222,36 @@ def test_rescanning_a_still_present_file_keeps_it_fresh():
         assert result["ok"] is True
         assert result["staled"] == 0
         assert all(not r.stale for r in store.list_all())
+
+
+def test_rescan_reconciles_legacy_unsafe_open_capability():
+    with tempfile.TemporaryDirectory() as tmp:
+        allowed = Path(tmp) / "Documents"
+        allowed.mkdir()
+        executable = allowed / "installer.exe"
+        executable.write_text("not an executable")
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+        store = ResourceStore(data_dir / "resources.db")
+        service = _service(data_dir, resource_store=store)
+        service.add_computer_provider_root(path=str(allowed))
+        service.set_computer_provider_enabled(enabled=True)
+        service.scan_computer_provider()
+
+        current = next(r for r in store.list_all() if r.title == "installer.exe")
+        assert "filesystem.open" not in current.capabilities
+
+        # Simulate a row written by an older HAVEN version, before unsafe
+        # file extensions were excluded from the open capability.
+        store.save(replace(current, capabilities=current.capabilities + ("filesystem.open",)))
+        assert "filesystem.open" in store.get(current.resource_id).capabilities
+
+        result = service.scan_computer_provider()
+
+        assert result["ok"] is True
+        refreshed = store.get(current.resource_id)
+        assert refreshed is not None
+        assert "filesystem.open" not in refreshed.capabilities
 
 
 def test_config_survives_a_fresh_setup_service_over_the_same_directory():

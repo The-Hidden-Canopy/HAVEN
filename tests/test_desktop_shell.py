@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 from haven.desktop.shell import (
     DesktopShell,
     DesktopShellAlreadyRunning,
+    _read_activation_record,
     find_edge_executable,
 )
 from haven.desktop.instance_lock import InstanceAlreadyRunning, InstanceLock
@@ -130,6 +132,25 @@ def test_second_shell_requests_activation_before_exiting():
         finally:
             second.close()
             first.close()
+
+
+def test_activation_record_does_not_store_plaintext_token_on_windows():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp) / "data"
+        shell = DesktopShell(data_dir=data_dir, demo=True, background=True, port=0)
+        shell.start()
+        try:
+            path = data_dir / ".haven-desktop-control.json"
+            raw = path.read_bytes()
+            assert _read_activation_record(path) == (
+                shell.server.server_address[1],
+                shell.activation_token,
+            )
+            if os.name == "nt":
+                assert shell.activation_token.encode("utf-8") not in raw
+                assert b"token_protected" in raw
+        finally:
+            shell.close()
 
 
 def test_background_shell_stays_resident_without_opening_edge():

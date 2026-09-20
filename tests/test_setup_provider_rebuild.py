@@ -73,9 +73,10 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
 
 def test_connecting_a_provider_rebuilds_the_live_director_without_a_restart() -> None:
     with tempfile.TemporaryDirectory() as tmp, _boot(Path(tmp)) as (server, port):
-        # Fresh install, no provider configured yet: the server boots demo.
-        assert server.director.house is not None
-        assert not isinstance(server.director.world, HomeAssistantWorldProvider)
+        # Fresh install, no provider configured yet: the server boots a real
+        # empty installation, not the simulated household.
+        assert server.director.house is None
+        assert isinstance(server.director.world, HomeAssistantWorldProvider)
         original_director = server.director
 
         with patch("haven.integrations.home_assistant.client.urlopen", side_effect=_fake_urlopen):
@@ -135,7 +136,7 @@ FAKE_HUE_PLUGIN = FakeHuePluginForRebuildTest()
 def test_installing_a_community_provider_package_rebuilds_the_live_director() -> None:
     ep = metadata.EntryPoint(name="philips_hue", value=f"{__name__}:FAKE_HUE_PLUGIN", group="haven.providers")
     with tempfile.TemporaryDirectory() as tmp, _boot(Path(tmp)) as (server, port):
-        assert server.director.house is not None
+        assert server.director.house is None
         original_director = server.director
 
         with patch.object(metadata, "entry_points", lambda *, group: (ep,) if group == "haven.providers" else ()):
@@ -189,8 +190,9 @@ def test_connecting_ha_then_installing_a_second_provider_keeps_both_active() -> 
         assert server.director.runtime.execution_providers.get("home_assistant") is not None
 
 
-def test_skipping_the_provider_after_connecting_rebuilds_back_to_demo() -> None:
+def test_skipping_the_provider_after_connecting_rebuilds_to_real_empty_world() -> None:
     with tempfile.TemporaryDirectory() as tmp, _boot(Path(tmp)) as (server, port):
+        original_household_id = server.director.household_id
         with patch("haven.integrations.home_assistant.client.urlopen", side_effect=_fake_urlopen):
             _post(
                 port,
@@ -205,8 +207,9 @@ def test_skipping_the_provider_after_connecting_rebuilds_back_to_demo() -> None:
         assert status == 200
         assert body["ok"] is True
         assert server.director is not real_director
-        assert server.director.house is not None
-        assert not isinstance(server.director.world, HomeAssistantWorldProvider)
+        assert server.director.house is None
+        assert isinstance(server.director.world, HomeAssistantWorldProvider)
+        assert server.director.household_id == original_household_id
 
 
 def test_skipping_after_connecting_deletes_the_stale_token_file() -> None:

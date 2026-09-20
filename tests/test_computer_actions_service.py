@@ -4,6 +4,7 @@ unreachable from anywhere in the running application."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -113,6 +114,37 @@ def test_open_action_uses_provider_command_and_remains_governed_in_read_only_mod
         assert len(entries) == 1
         assert entries[0].status is DecisionStatus.ALLOW
         assert entries[0].success is True
+
+
+def test_legacy_unsafe_open_capability_returns_provider_failure_detail():
+    with tempfile.TemporaryDirectory() as tmp:
+        allowed = Path(tmp) / "Documents"
+        allowed.mkdir()
+        source = allowed / "installer.exe"
+        source.write_text("not an executable")
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+        setup, actions, resources, _, _ = _harness(data_dir)
+        setup.add_computer_provider_root(path=str(allowed))
+        setup.set_computer_provider_enabled(enabled=True)
+        setup.scan_computer_provider()
+        current = next(r for r in resources.list_all() if r.title == "installer.exe")
+
+        # A persisted row from before capability reconciliation could still
+        # claim open. The provider remains authoritative at execution time,
+        # and its reason must reach the renderer instead of becoming a silent
+        # button reset.
+        resources.save(replace(current, capabilities=current.capabilities + ("filesystem.open",)))
+
+        result = actions.request_action(
+            action="filesystem.open",
+            resource_id=current.resource_id,
+            justification="user selected the installer from search",
+        )
+
+        assert result["ok"] is True
+        assert result["success"] is False
+        assert "filesystem.open is not available" in result["detail"]
 
 
 def test_reveal_action_rejects_a_path_that_does_not_match_the_named_resource():

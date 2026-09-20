@@ -56,7 +56,7 @@ def test_enabling_computer_access_takes_a_fresh_install_out_of_demo_mode():
         data_dir = str(Path(tmp) / "data")
 
         with _boot(data_dir) as (server, port):
-            assert server.director.house is not None  # fresh boot: demo
+            assert server.director.house is None  # fresh boot: real empty installation
 
             status, body = _post(port, "/api/setup/computer/roots", {"path": str(allowed)})
             assert status == 200 and body["ok"] is True

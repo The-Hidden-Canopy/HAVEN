@@ -1,1 +1,1 @@
-"""Local web surface for the HAVEN demo household."""
+"""Local web surface for HAVEN's real installation and explicit demo mode."""
