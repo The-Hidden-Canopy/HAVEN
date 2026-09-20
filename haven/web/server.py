@@ -747,6 +747,12 @@ class _Handler(BaseHTTPRequestHandler):
             if not isinstance(name, str) or not isinstance(role, str):
                 return None
             result = setup.declare_person(name=name, role=role)
+        elif proposal.entity_kind == "context" and proposal.operation == "create":
+            label = attributes.get("label")
+            entity_id = attributes.get("entity_id")
+            if not isinstance(label, str) or not isinstance(entity_id, str):
+                return None
+            result = setup.declare_context(label=label, entity_id=entity_id)
         elif proposal.entity_kind == "automation" and proposal.operation == "create":
             room = attributes.get("room")
             time_of_day = attributes.get("time_of_day")
@@ -842,8 +848,8 @@ class _Handler(BaseHTTPRequestHandler):
                 justification="resident clarified the automation from the HAVEN composer",
             )
         else:
-            # Context creation needs a provider entity id. Other person and
-            # automation operations are intentionally not guessed yet.
+            # Other person, context, and automation operations are
+            # intentionally not guessed yet.
             return None
 
         if not result.get("ok"):

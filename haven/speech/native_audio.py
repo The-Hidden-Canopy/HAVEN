@@ -24,11 +24,11 @@ backends (ALSA/PulseAudio, CoreAudio) are not built here -- the same
 documented gap `native/haven-bt/README.md` already carries for Bluetooth on
 those platforms.
 
-This binding has not been exercised against real audio hardware from this
-session -- there is no microphone or speaker attached to verify against.
-`scripts/smoke_mic_loopback.py` is a self-contained record-then-playback
-script for a human to run and confirm the capture/playback path actually
-works before anything in `haven/web` is wired to depend on it.
+The hardware boundary is covered by the opt-in
+`tests/test_speech_native_audio.py` tests and the explicit
+`scripts/smoke_mic_loopback.py` record-then-playback check. Native driver
+tests stay out of ordinary verification because a faulty or exclusive driver
+can terminate the host process rather than return a Python exception.
 """
 
 from __future__ import annotations

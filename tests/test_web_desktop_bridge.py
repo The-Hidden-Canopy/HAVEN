@@ -6,19 +6,26 @@ import http.client
 import json
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from haven.web.server import make_server
 
 
 def _post(port: int, path: str) -> tuple[int, dict]:
-    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    connection.request("POST", path, body=b"{}", headers={"Content-Type": "application/json"})
-    response = connection.getresponse()
-    body = json.loads(response.read())
-    status = response.status
-    connection.close()
-    return status, body
+    for attempt in range(3):
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            connection.request("POST", path, body=b"{}", headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            body = json.loads(response.read())
+            return response.status, body
+        except ConnectionAbortedError:
+            if attempt == 2:
+                raise
+            time.sleep(0.05)
+        finally:
+            connection.close()
 
 
 def _get(port: int, path: str) -> tuple[int, dict]:

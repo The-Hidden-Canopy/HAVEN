@@ -41,6 +41,20 @@ def test_parser_proposes_person_declaration() -> None:
     assert dict(proposal.attributes) == {"name": "Bryan", "role": "member"}
 
 
+def test_parser_proposes_an_explicit_context_declaration() -> None:
+    proposal = parse_authoring_intent(
+        "Add a context called Working late using input_boolean.working_late."
+    )
+
+    assert isinstance(proposal, MutationProposal)
+    assert proposal.entity_kind == "context"
+    assert proposal.operation == "create"
+    assert dict(proposal.attributes) == {
+        "label": "Working late",
+        "entity_id": "input_boolean.working_late",
+    }
+
+
 def test_parser_proposes_a_weekday_light_automation_without_approving_it() -> None:
     proposal = parse_authoring_intent("Every weekday at 7 turn off the office light.")
 
@@ -72,3 +86,4 @@ def test_parser_declines_ambiguous_or_unsupported_phrases() -> None:
     assert parse_authoring_intent("Remove the light.") is None
     assert parse_authoring_intent("Every weekday at 7 turn off the office fan.") is None
     assert parse_authoring_intent("Every weekday at 25 turn off the office light.") is None
+    assert parse_authoring_intent("Add a context called Working late.") is None

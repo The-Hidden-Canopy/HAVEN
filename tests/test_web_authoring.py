@@ -203,6 +203,24 @@ def test_composer_applies_declaration_proposals_through_authoring_service() -> N
             assert status == 200
             assert {row["person_id"] for row in people["people"]} == {"gerron", "bryan"}
 
+            context_text = "Add a context called Working late using input_boolean.working_late."
+            status, body = _request(port, "POST", "/api/chat", {"text": context_text})
+            assert status == 200
+            assert body["authoring"] == {
+                "entity_kind": "context",
+                "operation": "create",
+                "source_text": context_text,
+            }
+            status, setup = _request(port, "GET", "/api/setup")
+            assert status == 200
+            assert setup["setup"]["household"]["contexts"] == [
+                {
+                    "context_id": "working_late",
+                    "label": "Working late",
+                    "entity_id": "input_boolean.working_late",
+                }
+            ]
+
             status, body = _request(port, "POST", "/api/chat", {"text": "Remove the shop room."})
             assert status == 200
             # The enrolled device still legitimately projects an inferred

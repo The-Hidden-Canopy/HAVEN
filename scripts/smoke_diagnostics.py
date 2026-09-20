@@ -1,11 +1,14 @@
 """Live smoke: diagnostics + backup/restore lifecycle."""
 import json
+import sys
 import threading
 import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from haven.web.server import make_server
 

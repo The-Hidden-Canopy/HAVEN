@@ -7,12 +7,15 @@ never assert anything about audio *content* -- what a microphone actually
 picks up is a fact about the room at test time, not about this code, the
 same reason the Bluetooth WinRT tests assert nothing about scan results.
 
-Skipped entirely off Windows, or on a Windows host with no input/output
-device (a CI runner, most likely).
+Skipped unless explicitly enabled with `HAVEN_RUN_NATIVE_AUDIO_TESTS=1`, or
+when the host has no input/output device. Native drivers can terminate the
+host process instead of returning a Python exception, so ordinary verification
+must remain deterministic.
 """
 
 from __future__ import annotations
 
+import os
 import platform
 import struct
 import time
@@ -31,9 +34,14 @@ def _audio_available() -> bool:
     return winmm.waveInGetNumDevs() > 0 and winmm.waveOutGetNumDevs() > 0
 
 
-pytestmark = pytest.mark.skipif(
-    not _audio_available(), reason="no Windows audio input/output device on this host"
+_HARDWARE_SKIP = pytest.mark.skipif(
+    os.environ.get("HAVEN_RUN_NATIVE_AUDIO_TESTS") != "1",
+    reason="native audio hardware tests are opt-in; set HAVEN_RUN_NATIVE_AUDIO_TESTS=1",
 )
+if os.environ.get("HAVEN_RUN_NATIVE_AUDIO_TESTS") == "1":
+    _HARDWARE_SKIP = pytest.mark.skipif(
+        not _audio_available(), reason="no Windows audio input/output device on this host"
+    )
 
 
 def test_pcm_format_matches_the_pinned_wire_contract() -> None:
@@ -45,6 +53,7 @@ def test_pcm_format_matches_the_pinned_wire_contract() -> None:
     assert fmt.nAvgBytesPerSec == SAMPLE_RATE_HZ * 2
 
 
+@_HARDWARE_SKIP
 def test_microphone_capture_yields_exact_frame_counts() -> None:
     mic = WinMMMicrophoneSource()
     mic.start()
@@ -58,6 +67,7 @@ def test_microphone_capture_yields_exact_frame_counts() -> None:
         assert len(frame) == FRAME_BYTES
 
 
+@_HARDWARE_SKIP
 def test_microphone_stop_then_read_returns_end_of_stream() -> None:
     mic = WinMMMicrophoneSource()
     mic.start()
@@ -66,6 +76,7 @@ def test_microphone_stop_then_read_returns_end_of_stream() -> None:
     assert mic.read_frame() == b""
 
 
+@_HARDWARE_SKIP
 def test_microphone_can_restart_after_stop() -> None:
     mic = WinMMMicrophoneSource()
     mic.start()
@@ -83,6 +94,7 @@ def _silence(seconds: float) -> bytes:
     return b"\x00\x00" * int(SAMPLE_RATE_HZ * seconds)
 
 
+@_HARDWARE_SKIP
 def test_speaker_play_completes_for_a_short_clip() -> None:
     sink = WinMMSpeakerSink()
     started = time.monotonic()
@@ -93,6 +105,7 @@ def test_speaker_play_completes_for_a_short_clip() -> None:
     assert elapsed < 3.0
 
 
+@_HARDWARE_SKIP
 def test_speaker_stop_truncates_playback_promptly() -> None:
     sink = WinMMSpeakerSink()
     long_clip = _silence(4.0)
@@ -112,6 +125,7 @@ def test_speaker_stop_truncates_playback_promptly() -> None:
     assert elapsed < 2.0, f"stop() did not truncate a 4s clip promptly (took {elapsed:.2f}s)"
 
 
+@_HARDWARE_SKIP
 def test_speaker_stop_before_play_is_a_harmless_flag() -> None:
     sink = WinMMSpeakerSink()
     sink.stop()  # nothing playing yet -- must not raise
