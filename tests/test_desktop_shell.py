@@ -17,6 +17,13 @@ from haven.desktop.shell import (
 from haven.desktop.instance_lock import InstanceAlreadyRunning, InstanceLock
 
 
+def test_repository_windows_launcher_uses_desktop_as_the_primary_host():
+    launcher = (Path(__file__).parents[1] / "run-haven.bat").read_text(encoding="utf-8")
+
+    assert "%PY% -m haven.desktop %*" in launcher
+    assert "%PY% -m haven.web.server" not in launcher
+
+
 class _FakeProcess:
     def __init__(self, args):
         self.args = args
