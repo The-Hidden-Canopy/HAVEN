@@ -5,6 +5,7 @@ plus the SSE stream.
 import http.client
 import json
 import threading
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -43,13 +44,20 @@ def _get_json(port: int, path: str) -> tuple[int, dict]:
 
 
 def _post(port: int, path: str, payload: dict | None = None) -> tuple[int, dict]:
-    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     body = json.dumps(payload) if payload is not None else ""
-    connection.request("POST", path, body=body, headers={"Content-Type": "application/json"})
-    response = connection.getresponse()
-    raw = response.read()
-    connection.close()
-    return response.status, json.loads(raw) if raw else {}
+    for attempt in range(3):
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            connection.request("POST", path, body=body, headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            raw = response.read()
+            return response.status, json.loads(raw) if raw else {}
+        except ConnectionAbortedError:
+            if attempt == 2:
+                raise
+            time.sleep(0.05)
+        finally:
+            connection.close()
 
 
 def _read_event(response: http.client.HTTPResponse) -> tuple[str | None, str]:

@@ -185,30 +185,29 @@ def test_http_chat_rejects_unrecognized_shapes_naming_them(stub, response) -> No
         handle.chat([{"role": "user", "content": "hello"}])
 
 
-def test_http_chat_non_json_body_raises_backend_connection_error() -> None:
-    class _RawHandler(_Handler):
-        def do_POST(self):
-            self.server.requests.append({"path": self.path, "body": None})
-            data = b"<html>not json</html>"
-            self.send_response(200)
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
+def test_http_chat_non_json_body_raises_backend_connection_error(monkeypatch) -> None:
+    class _RawResponse:
+        def __enter__(self):
+            return self
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _RawHandler)
-    server.requests = []
-    server.responses = dict(_DEFAULT_RESPONSES)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        descriptor = _endpoint_descriptor(f"http://127.0.0.1:{server.server_address[1]}")
-        handle = HttpModelBackend().load(descriptor, None)
-        with pytest.raises(BackendConnectionError, match="non-JSON"):
-            handle.chat([{"role": "user", "content": "hello"}])
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def read(self):
+            return b"<html>not json</html>"
+
+    def _urlopen(_request, timeout):
+        assert timeout > 0
+        return _RawResponse()
+
+    # Keep this assertion about response decoding, not Windows loopback
+    # lifetime. The surrounding HTTP tests already exercise the real socket
+    # server; a fake response makes the malformed-body boundary deterministic.
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+    descriptor = _endpoint_descriptor("http://127.0.0.1:1")
+    handle = HttpModelBackend().load(descriptor, None)
+    with pytest.raises(BackendConnectionError, match="non-JSON"):
+        handle.chat([{"role": "user", "content": "hello"}])
 
 
 def test_http_transcribe_and_embed_wrap_payloads_as_inference_results(stub) -> None:
