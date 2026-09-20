@@ -606,6 +606,11 @@ and run:
 python -m haven.desktop
 ```
 
+The repository launcher (`run-haven.bat`) uses this desktop entry point too.
+Double-clicking it or running it from PowerShell opens HAVEN in its own Edge
+app window. Pass `--demo` only when you explicitly want the simulated
+household.
+
 This starts HAVEN on an ephemeral loopback port and opens the existing
 renderer in an Edge app window. The desktop launch gets a fresh per-launch
 session cookie; the local API is not usable without that cookie. The shell
@@ -630,28 +635,17 @@ directory concurrently:
 python -m haven.desktop --background --port 8080
 ```
 
-The local web surface renders a simulated household against the real
-authority engine — no network, credentials, or model required:
+For renderer/API development without the desktop shell, run the local web
+surface explicitly:
 
 ```powershell
 python -m haven.web.server --port 8080
 ```
 
 Then open `http://127.0.0.1:8080/`. The server binds loopback only and has
-no authentication in this slice; do not expose it beyond the machine it runs
-on. On start, the demo scenario runs: the simulated garage door has been open
-eighteen minutes with no motion, HAVEN's rule reaches the engine, and the
-interface enters its permission state (pulsing HAVEN mark, haloed request
-card). Approving mints a real confirmation token and closes the door through
-the runtime; denying returns the surface to idle. `POST /api/demo/reset`
-replays the scenario; `POST /api/demo/camera-down` / `camera-up` drive the
-critical path — with the driveway camera's evidence unavailable the engine
-refuses to act and the surface shows "HAVEN can't see clearly" until the
-camera returns. `POST /api/voice/wake` and `POST /api/voice/utterance`
-exercise the voice session without a microphone (the Speak button and
-utterance field in the HAVEN rail are the STT stand-in). The small
-preview-state buttons in the corner force each glow state locally for
-design tuning.
+no desktop session window; use `--demo` explicitly if you need the simulated
+household and its scenario controls. A normal web-server launch builds the
+real local HAVEN installation, just without the native desktop shell.
 
 ## Run the tests
 
