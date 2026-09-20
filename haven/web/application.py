@@ -309,6 +309,7 @@ def build_application(
         intelligence_provider=intelligence_provider,
         ha_states_source=ha_states_source,
         person_names={person.person_id: person.name for person in declarations.people},
+        room_names={room.room_id: room.name for room in declarations.rooms},
         rules_persistence=rules_persistence,
         resident=resident,
         owner=owner,

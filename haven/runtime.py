@@ -33,7 +33,7 @@ from haven.core.domain import (
     TransitionKind,
     WorldSnapshot,
 )
-from haven.core.store import HavenStore, RuleApproval, RuleClarification, RuleDecision
+from haven.core.store import HavenStore, RuleApproval, RuleClarification, RuleDecision, RuleRevocation
 from haven.core.time import require_aware_utc
 from haven.execution import ExecutionAdapter, ExecutionProviderRegistry, UnknownExecutionProvider
 from haven.integrations.home_assistant.adapter import HomeAssistantAdapter
@@ -72,6 +72,13 @@ class RuleApprovalResult:
 
 @dataclass(frozen=True)
 class RuleClarificationResult:
+    rule: Rule
+    decision: AuthorityDecision
+    event: DomainEvent
+
+
+@dataclass(frozen=True)
+class RuleRevocationResult:
     rule: Rule
     decision: AuthorityDecision
     event: DomainEvent
@@ -149,7 +156,7 @@ class HavenRuntime:
                 "a household member or higher role is required to clarify a rule",
                 required_role=RoleTier.MEMBER,
             )
-        elif not justification.strip():
+        elif not isinstance(justification, str) or not justification.strip():
             decision = _decision(
                 DecisionStatus.DENY,
                 DecisionCode.MISSING_JUSTIFICATION,
@@ -232,7 +239,7 @@ class HavenRuntime:
                 "only a household owner can approve an autonomous rule",
                 required_role=RoleTier.OWNER,
             )
-        elif not justification.strip():
+        elif not isinstance(justification, str) or not justification.strip():
             decision = _decision(
                 DecisionStatus.DENY,
                 DecisionCode.MISSING_JUSTIFICATION,
@@ -286,6 +293,85 @@ class HavenRuntime:
             now=now,
         )
         return RuleApprovalResult(rule=self.store.get_rule(rule_id), decision=decision, event=event)
+
+    def revoke_rule(
+        self,
+        rule_id: str,
+        *,
+        principal: Principal,
+        justification: str,
+        now: datetime,
+    ) -> RuleRevocationResult:
+        """Revoke an automation through authority and an append-only event."""
+
+        now = require_aware_utc(now, name="revocation time")
+        rule = self.store.get_rule(rule_id)
+        if principal.household_id != rule.draft.household_id:
+            decision = _decision(
+                DecisionStatus.DENY,
+                DecisionCode.CROSS_HOUSEHOLD,
+                "the revoking principal must belong to the rule household",
+            )
+        elif principal.role_tier < RoleTier.OWNER:
+            decision = _decision(
+                DecisionStatus.DENY,
+                DecisionCode.WRONG_ROLE_TIER,
+                "only a household owner can revoke an autonomous rule",
+                required_role=RoleTier.OWNER,
+            )
+        elif not isinstance(justification, str) or not justification.strip():
+            decision = _decision(
+                DecisionStatus.DENY,
+                DecisionCode.MISSING_JUSTIFICATION,
+                "rule revocation requires a non-empty justification",
+            )
+        elif rule.status == RuleStatus.REVOKED:
+            decision = _decision(
+                DecisionStatus.DENY,
+                DecisionCode.INVALID_STATE_TRANSITION,
+                "a revoked rule cannot be revoked again",
+            )
+        else:
+            decision = _decision(
+                DecisionStatus.ALLOW,
+                DecisionCode.ALLOWED,
+                "owner revocation is valid for this scoped rule",
+            )
+
+        if decision.status != DecisionStatus.ALLOW:
+            event = self.store.execute_transition(
+                Transition(
+                    kind=TransitionKind.RECORD_RULE_DECISION,
+                    household_id=self.store.household_id,
+                    actor_id=principal.actor_id,
+                    payload=RuleDecision(
+                        rule_id=rule_id,
+                        decision=decision,
+                        justification=justification,
+                        blocked_event_type=EventType.RULE_REVOCATION_BLOCKED,
+                    ),
+                    correlation_id=rule_id,
+                ),
+                now=now,
+            )
+            return RuleRevocationResult(rule=self.store.get_rule(rule_id), decision=decision, event=event)
+
+        event = self.store.execute_transition(
+            Transition(
+                kind=TransitionKind.REVOKE_RULE,
+                household_id=self.store.household_id,
+                actor_id=principal.actor_id,
+                payload=RuleRevocation(
+                    rule_id=rule_id,
+                    revoked_by=principal.actor_id,
+                    revoked_by_role=principal.role_tier,
+                    justification=justification,
+                ),
+                correlation_id=rule_id,
+            ),
+            now=now,
+        )
+        return RuleRevocationResult(rule=self.store.get_rule(rule_id), decision=decision, event=event)
 
     def run_rule(
         self,
@@ -730,4 +816,10 @@ class HavenRuntime:
         )
 
 
-__all__ = ["AmbiguousTargetError", "HavenRuntime", "RuleApprovalResult", "RuleClarificationResult"]
+__all__ = [
+    "AmbiguousTargetError",
+    "HavenRuntime",
+    "RuleApprovalResult",
+    "RuleClarificationResult",
+    "RuleRevocationResult",
+]

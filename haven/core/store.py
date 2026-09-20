@@ -63,6 +63,14 @@ class RuleClarification:
 
 
 @dataclass(frozen=True)
+class RuleRevocation:
+    rule_id: str
+    revoked_by: str
+    revoked_by_role: RoleTier
+    justification: str
+
+
+@dataclass(frozen=True)
 class RuleDecision:
     rule_id: str
     decision: AuthorityDecision
@@ -325,6 +333,36 @@ class HavenStore:
                 ),
             )
 
+        if transition.kind == TransitionKind.REVOKE_RULE:
+            revocation = transition.payload
+            if not isinstance(revocation, RuleRevocation):
+                raise TypeError("REVOKE_RULE requires a RuleRevocation")
+            rule = self.get_rule(revocation.rule_id)
+            if rule.status == RuleStatus.REVOKED:
+                raise InvalidTransition("a revoked rule cannot be revoked again")
+            if revocation.revoked_by != transition.actor_id:
+                raise InvalidTransition("revocation actor does not match the transition actor")
+            if revocation.revoked_by_role != RoleTier.OWNER:
+                raise InvalidTransition("only an owner can revoke a household rule")
+            if not isinstance(revocation.justification, str) or not revocation.justification.strip():
+                raise InvalidTransition("rule revocation requires a non-empty justification")
+            revoked = replace(
+                rule,
+                status=RuleStatus.REVOKED,
+                revoked_by=revocation.revoked_by,
+                revoked_at=now,
+            )
+            rules = tuple(revoked if item.rule_id == rule.rule_id else item for item in state.rules)
+            return (
+                replace(state, rules=rules),
+                EventType.RULE_REVOKED,
+                _payload(
+                    rule_id=rule.rule_id,
+                    revoked_by=revocation.revoked_by,
+                    justification=revocation.justification,
+                ),
+            )
+
         if transition.kind == TransitionKind.AUTHORIZE_ACTION:
             action = transition.payload
             if not isinstance(action, ActionRecord):
@@ -422,6 +460,7 @@ class HavenStore:
             if decision.blocked_event_type not in {
                 EventType.RULE_APPROVAL_BLOCKED,
                 EventType.RULE_CLARIFICATION_BLOCKED,
+                EventType.RULE_REVOCATION_BLOCKED,
             }:
                 raise InvalidTransition("rule decision event type is not a blocked rule event")
             self.get_rule(decision.rule_id)
@@ -439,4 +478,11 @@ class HavenStore:
         raise InvalidTransition(f"unsupported transition: {transition.kind}")
 
 
-__all__ = ["HavenState", "HavenStore", "RuleApproval", "RuleClarification", "RuleDecision"]
+__all__ = [
+    "HavenState",
+    "HavenStore",
+    "RuleApproval",
+    "RuleClarification",
+    "RuleDecision",
+    "RuleRevocation",
+]

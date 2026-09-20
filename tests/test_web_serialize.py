@@ -268,8 +268,15 @@ def test_rule_to_dict_resolves_room_and_names_the_capability() -> None:
         "summary": "close the garage",
         "action": "close",
         "target": "garage_door · Garage",
+        "target_device_id": "garage_door",
+        "capability": "close",
+        "parameters": {},
+        "schedule": {"time_of_day": "20:00:00", "weekdays": []},
         "status": "approved",
         "approved_at": NOW.isoformat(),
+        "approved_by": "gerron",
+        "revoked_at": None,
+        "revoked_by": None,
     }
 
     without_room = serialize.rule_to_dict(rule)

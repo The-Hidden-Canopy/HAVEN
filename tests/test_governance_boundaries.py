@@ -61,6 +61,61 @@ def test_cross_household_approval_is_blocked_and_audited() -> None:
     assert store.events[-1].event_type == EventType.RULE_APPROVAL_BLOCKED
 
 
+def test_rule_revocation_preserves_scope_role_justification_and_transition_guards() -> None:
+    runtime, store, _, resident, owner, rule = _approved_fixture()
+
+    foreign_owner = _principal(actor_id="foreign-owner", household_id="household-b", role=RoleTier.OWNER)
+    foreign = runtime.revoke_rule(
+        rule.rule_id,
+        principal=foreign_owner,
+        justification="Attempted cross-household revocation.",
+        now=BASE_TIME + timedelta(minutes=2),
+    )
+    assert foreign.decision.code is DecisionCode.CROSS_HOUSEHOLD
+    assert store.get_rule(rule.rule_id).status is RuleStatus.APPROVED
+    assert store.events[-1].event_type is EventType.RULE_REVOCATION_BLOCKED
+
+    wrong_role = runtime.revoke_rule(
+        rule.rule_id,
+        principal=resident,
+        justification="A member tries to revoke the schedule.",
+        now=BASE_TIME + timedelta(minutes=3),
+    )
+    assert wrong_role.decision.code is DecisionCode.WRONG_ROLE_TIER
+    assert store.get_rule(rule.rule_id).status is RuleStatus.APPROVED
+    assert store.events[-1].event_type is EventType.RULE_REVOCATION_BLOCKED
+
+    missing = runtime.revoke_rule(
+        rule.rule_id,
+        principal=owner,
+        justification="   ",
+        now=BASE_TIME + timedelta(minutes=4),
+    )
+    assert missing.decision.code is DecisionCode.MISSING_JUSTIFICATION
+    assert store.get_rule(rule.rule_id).status is RuleStatus.APPROVED
+    assert store.events[-1].event_type is EventType.RULE_REVOCATION_BLOCKED
+
+    allowed = runtime.revoke_rule(
+        rule.rule_id,
+        principal=owner,
+        justification="Owner no longer wants this schedule.",
+        now=BASE_TIME + timedelta(minutes=5),
+    )
+    assert allowed.decision.status is DecisionStatus.ALLOW
+    assert allowed.rule.status is RuleStatus.REVOKED
+    assert store.events[-1].event_type is EventType.RULE_REVOKED
+
+    repeated = runtime.revoke_rule(
+        rule.rule_id,
+        principal=owner,
+        justification="Attempt to revoke it again.",
+        now=BASE_TIME + timedelta(minutes=6),
+    )
+    assert repeated.decision.code is DecisionCode.INVALID_STATE_TRANSITION
+    assert store.get_rule(rule.rule_id).status is RuleStatus.REVOKED
+    assert store.events[-1].event_type is EventType.RULE_REVOCATION_BLOCKED
+
+
 def test_cross_household_action_does_not_join_foreign_evidence() -> None:
     runtime, store, adapter, _, _, rule = _approved_fixture()
     foreign_member = _principal(actor_id="foreign-member", household_id="household-b", role=RoleTier.MEMBER)

@@ -22,7 +22,9 @@ from ..models import ModelManager, inspect_folder
 from ..models.jobs import DownloadJobManager, job_to_dict
 from ..models.storage import default_models_root
 from .application import build_application
+from ..intelligence.intents import MutationProposal
 from .haven_application import Clock, HavenApplication
+from .authoring_intent import parse_authoring_intent
 from .diagnostics import BackupManager, SystemDiagnostics
 from .models_api import (
     assign_payload,
@@ -63,6 +65,7 @@ _JOB_CANCEL_PATH = re.compile(r"^/api/models/jobs/([^/]+)/cancel$")
 _CHAIN_PATH = re.compile(r"^/api/actions/([^/]+)/chain$")
 _KNOWLEDGE_CLAIM_PATH = re.compile(r"^/api/knowledge/claims/([^/]+)$")
 _KNOWLEDGE_CLAIM_ACTION_PATH = re.compile(r"^/api/knowledge/claims/([^/]+)/(correct|stale|forget)$")
+_AUTHORING_AUTOMATION_ACTION_PATH = re.compile(r"^/api/automations/([^/]+)/(approve|revoke)$")
 
 # Pinned static content types (mimetypes is platform-dependent).
 _STATIC_CONTENT_TYPES = {
@@ -452,6 +455,17 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_knowledge_claims(parse_qs(urlsplit(self.path).query))
         elif path == "/api/computer/actions/history":
             self._send_json(200, self.computer_actions.history())
+        elif path == "/api/rooms":
+            self._send_json(200, {"ok": True, "rooms": self.director.state()["rooms"]})
+        elif path == "/api/people":
+            self._send_json(200, self._people_payload())
+        elif path == "/api/contexts":
+            household = self.setup_service.status()["setup"]["household"]
+            self._send_json(200, {"ok": True, "contexts": household.get("contexts", [])})
+        elif path == "/api/automations":
+            self._send_json(200, {"ok": True, "automations": self.director.state()["automations"]})
+        elif path == "/api/automations/options":
+            self._send_json(200, {"ok": True, "options": self.director.automation_options()})
         else:
             match = _KNOWLEDGE_CLAIM_PATH.match(path)
             if match:
@@ -484,8 +498,41 @@ class _Handler(BaseHTTPRequestHandler):
             body = self._read_json()
             if body is None:
                 return
-            state = self.director.chat(str(body.get("text", "")), body.get("focus"))
+            text = str(body.get("text", ""))
+            mutation = self._apply_authoring_chat(
+                text,
+                body.get("focus"),
+                body.get("automation_id"),
+            )
+            if mutation is not None:
+                self._send_json(200 if mutation.get("ok") else 400, mutation)
+                return
+            state = self.director.chat(text, body.get("focus"))
             self._send_json(200, {"ok": True, "state": state})
+            return
+        if path == "/api/rooms" or path == "/api/people" or path == "/api/contexts" or path == "/api/automations":
+            body = self._read_json()
+            if body is None:
+                return
+            self._handle_authoring_post(path, body)
+            return
+        automation_action = _AUTHORING_AUTOMATION_ACTION_PATH.match(path)
+        if automation_action:
+            body = self._read_json(optional=True)
+            if body is None:
+                return
+            rule_id, action = automation_action.groups()
+            if action == "approve":
+                result = self.director.approve_automation(
+                    rule_id,
+                    justification=body.get("justification", "owner approved automation from HAVEN"),
+                )
+            else:
+                result = self.director.revoke_automation(
+                    rule_id,
+                    justification=body.get("justification", "owner revoked automation from HAVEN"),
+                )
+            self._send_setup_result(result)
             return
         match = _DEVICE_COMMAND_PATH.match(path)
         if match:
@@ -619,6 +666,307 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "result": result})
             return
         self._send_json(404, {"error": "not found"})
+
+    def do_PATCH(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if not self._authorize_session():
+            return
+        body = self._read_json()
+        if body is None:
+            return
+        self._handle_authoring_patch(path, body)
+
+    def do_DELETE(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if not self._authorize_session():
+            return
+        body = self._read_json(optional=True)
+        if body is None:
+            return
+        self._handle_authoring_delete(path, body)
+
+    def _people_payload(self) -> dict:
+        household = self.setup_service.status()["setup"]["household"]
+        present = {person["id"]: person for person in self.director.state().get("people", [])}
+        people = []
+        for declared in household.get("people", []):
+            row = dict(declared)
+            live = present.get(row.get("person_id"))
+            row["present"] = live is not None
+            row["room"] = live.get("room") if live is not None else None
+            people.append(row)
+        return {"ok": True, "people": people}
+
+    def _apply_authoring_chat(
+        self,
+        text: str,
+        focus: str | None,
+        automation_id: str | None = None,
+    ) -> dict | None:
+        """Apply one conservative mutation proposal through authoring services.
+
+        The parser only constructs a frozen proposal.  This adapter is the
+        sole side-effecting step: it resolves human-facing names against the
+        current declaration store and delegates every write to
+        ``SetupService``.  A phrase it cannot resolve returns ``None`` so the
+        ordinary governed intelligence/chat path remains unchanged.
+        """
+
+        proposal = parse_authoring_intent(
+            text,
+            focus=focus if isinstance(focus, str) else None,
+            automation_focus=automation_id if isinstance(automation_id, str) else None,
+        )
+        if not isinstance(proposal, MutationProposal):
+            return None
+        attributes = dict(proposal.attributes)
+        setup = self.setup_service
+
+        if proposal.entity_kind == "room":
+            name = attributes.get("name")
+            if not isinstance(name, str):
+                return None
+            if proposal.operation == "create":
+                result = setup.add_room(name=name)
+            else:
+                target_name = proposal.target_id or name
+                room_id = setup.room_id_for_name(target_name)
+                if room_id is None:
+                    return {
+                        "ok": False,
+                        "error": f"I could not find a declared room named {target_name!r}",
+                        "state": self.director.state(),
+                    }
+                if proposal.operation == "rename":
+                    result = setup.rename_room(room_id=room_id, name=name)
+                else:
+                    result = setup.remove_room(room_id=room_id)
+        elif proposal.entity_kind == "person" and proposal.operation == "create":
+            name = attributes.get("name")
+            role = attributes.get("role", "member")
+            if not isinstance(name, str) or not isinstance(role, str):
+                return None
+            result = setup.declare_person(name=name, role=role)
+        elif proposal.entity_kind == "automation" and proposal.operation == "create":
+            room = attributes.get("room")
+            time_of_day = attributes.get("time_of_day")
+            weekdays = attributes.get("weekdays", ())
+            action = attributes.get("action")
+            if (
+                not isinstance(room, str)
+                or not isinstance(time_of_day, str)
+                or not isinstance(weekdays, (tuple, list))
+                or action != "light.turn_off"
+            ):
+                return None
+            device_ids = self.director.registry.find(role="light", room=room)
+            if not device_ids:
+                return {
+                    "ok": False,
+                    "error": f"I could not find a light in the {room}",
+                    "state": self.director.state(),
+                }
+            if len(device_ids) > 1:
+                return {
+                    "ok": False,
+                    "error": f"I found more than one light in the {room}; use the automation form to choose one",
+                    "state": self.director.state(),
+                }
+            manifest = self.director.registry.get(device_ids[0])
+            capability = next(
+                (item for item in manifest.capabilities if item.service == action and item.writable),
+                None,
+            )
+            if capability is None:
+                return {
+                    "ok": False,
+                    "error": f"the light in the {room} does not expose a writable power-off capability",
+                    "state": self.director.state(),
+                }
+            result = self.director.create_automation(
+                source_text=proposal.source_text,
+                time_of_day=time_of_day,
+                weekdays=list(weekdays),
+                target_device_id=manifest.device_id,
+                capability=capability.name,
+                service=capability.service,
+                interpretation=proposal.source_text,
+            )
+        elif proposal.entity_kind == "automation" and proposal.operation == "update":
+            remove_weekday = attributes.get("remove_weekday")
+            if proposal.target_id is None or not isinstance(remove_weekday, int):
+                return None
+            try:
+                rule = self.director.store.get_rule(proposal.target_id)
+            except KeyError:
+                return {
+                    "ok": False,
+                    "error": "I could not find the focused automation",
+                    "state": self.director.state(),
+                }
+            schedule = rule.draft.schedule_trigger
+            if schedule is None:
+                return {
+                    "ok": False,
+                    "error": "the focused automation has no time schedule to edit",
+                    "state": self.director.state(),
+                }
+            if getattr(rule.status, "value", None) != "proposed":
+                return {
+                    "ok": False,
+                    "error": "approved automations are immutable; revoke it and create a new proposal",
+                    "state": self.director.state(),
+                }
+            days = set(schedule.weekdays)
+            if not days:
+                days = set(range(7))
+            if remove_weekday not in days:
+                return {
+                    "ok": False,
+                    "error": "that automation already skips the requested day",
+                    "state": self.director.state(),
+                }
+            days.remove(remove_weekday)
+            if not days:
+                return {
+                    "ok": False,
+                    "error": "that change would leave the automation with no scheduled weekdays",
+                    "state": self.director.state(),
+                }
+            result = self.director.update_automation(
+                proposal.target_id,
+                source_text=proposal.source_text,
+                time_of_day=schedule.time_of_day.isoformat(),
+                weekdays=sorted(days),
+                interpretation=f"{rule.draft.interpretation} (except weekday {remove_weekday})",
+                justification="resident clarified the automation from the HAVEN composer",
+            )
+        else:
+            # Context creation needs a provider entity id. Other person and
+            # automation operations are intentionally not guessed yet.
+            return None
+
+        if not result.get("ok"):
+            return {
+                "ok": False,
+                "error": result.get("error", "HAVEN could not apply that change"),
+                "state": self.director.state(),
+            }
+        payload = {
+            "ok": True,
+            "authoring": {
+                "entity_kind": proposal.entity_kind,
+                "operation": proposal.operation,
+                "source_text": proposal.source_text,
+            },
+            "state": self.director.state(),
+        }
+        if isinstance(result.get("automation"), dict):
+            payload["automation"] = result["automation"]
+        return payload
+
+    def _handle_authoring_post(self, path: str, body: dict) -> None:
+        setup = self.setup_service
+        if path == "/api/rooms":
+            result = setup.add_room(name=body.get("name"))
+        elif path == "/api/people":
+            role = body.get("role")
+            result = setup.declare_person(
+                name=body.get("name"),
+                entity_id=body.get("entity_id"),
+                room_id=body.get("room_id"),
+                role=role if isinstance(role, str) and role.strip() else "member",
+            )
+        elif path == "/api/contexts":
+            result = setup.declare_context(label=body.get("label"), entity_id=body.get("entity_id"))
+        elif path == "/api/automations":
+            weekdays = body.get("weekdays", [])
+            result = self.director.create_automation(
+                source_text=body.get("source_text"),
+                time_of_day=body.get("time_of_day"),
+                weekdays=weekdays if isinstance(weekdays, list) else [],
+                target_device_id=body.get("target_device_id"),
+                capability=body.get("capability"),
+                service=body.get("service"),
+                interpretation=body.get("interpretation"),
+                parameters=body.get("parameters") if isinstance(body.get("parameters"), dict) else None,
+            )
+        else:
+            self._send_json(404, {"error": "not found"})
+            return
+        self._send_setup_result(result)
+
+    def _handle_authoring_patch(self, path: str, body: dict) -> None:
+        parts = path.strip("/").split("/")
+        if len(parts) != 3 or parts[0] != "api":
+            self._send_json(404, {"error": "not found"})
+            return
+        collection, item_id = parts[1], unquote(parts[2])
+        if collection == "rooms":
+            result = self.setup_service.rename_room(room_id=item_id, name=body.get("name"))
+        elif collection == "people":
+            result = self.setup_service.update_person(
+                person_id=item_id,
+                name=body.get("name"),
+                role=body.get("role"),
+            )
+        elif collection == "contexts":
+            result = self.setup_service.update_context(
+                context_id=item_id,
+                label=body.get("label"),
+                entity_id=body.get("entity_id"),
+            )
+        elif collection == "automations":
+            if isinstance(body.get("enabled"), bool):
+                rule = next((item for item in self.director.store.state.rules if item.rule_id == item_id), None)
+                if rule is None:
+                    self._send_json(404, {"ok": False, "error": "unknown automation"})
+                    return
+                if getattr(rule.status, "value", None) != "approved":
+                    self._send_json(400, {"ok": False, "error": "only approved automations can be enabled or disabled"})
+                    return
+                result = {
+                    "ok": True,
+                    "scheduler": self.director.set_scheduler_enabled(item_id, body["enabled"]),
+                    "state": self.director.state(),
+                }
+            else:
+                result = self.director.update_automation(
+                    item_id,
+                    source_text=body.get("source_text"),
+                    time_of_day=body.get("time_of_day"),
+                    weekdays=body.get("weekdays", []),
+                    interpretation=body.get("interpretation"),
+                    parameters=body.get("parameters") if isinstance(body.get("parameters"), dict) else None,
+                    justification=body.get("justification", "edited automation in HAVEN"),
+                )
+        else:
+            self._send_json(404, {"error": "not found"})
+            return
+        self._send_setup_result(result)
+
+    def _handle_authoring_delete(self, path: str, body: dict) -> None:
+        parts = path.strip("/").split("/")
+        if len(parts) != 3 or parts[0] != "api":
+            self._send_json(404, {"error": "not found"})
+            return
+        collection, item_id = parts[1], unquote(parts[2])
+        if collection == "rooms":
+            result = self.setup_service.remove_room(room_id=item_id)
+        elif collection == "people":
+            result = self.setup_service.remove_person(person_id=item_id)
+        elif collection == "contexts":
+            result = self.setup_service.remove_context(context_id=item_id)
+        elif collection == "automations":
+            justification = body.get("justification")
+            if not isinstance(justification, str) or not justification.strip():
+                self._send_json(400, {"ok": False, "error": "automation deletion requires a justification"})
+                return
+            result = self.director.revoke_automation(item_id, justification=justification)
+        else:
+            self._send_json(404, {"error": "not found"})
+            return
+        self._send_setup_result(result)
 
     def _handle_setup_post(self, path: str) -> None:
         setup = self.server.setup

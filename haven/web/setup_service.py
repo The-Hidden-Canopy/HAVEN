@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from ..core.domain import RuleStatus
 from ..devices import CapabilityDescriptor, ControlClass, DeviceManifest
 from ..discovery.enrollment import enroll_device
 from ..discovery.models import DiscoveredDevice
@@ -101,6 +102,23 @@ class DeclaredPresenceSource:
         object.__setattr__(self, "room_id", _require_text(self.room_id, name="room_id"))
 
 
+@dataclass(frozen=True)
+class DeclaredRoom:
+    """A room the household explicitly says exists.
+
+    Rooms are declarations, not provider evidence. A declared room remains
+    visible before it contains a device or a presence observation, and a
+    provider may later contribute evidence for the same stable ``room_id``.
+    """
+
+    room_id: str
+    name: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "room_id", _require_text(self.room_id, name="room_id"))
+        object.__setattr__(self, "name", _require_text(self.name, name="name"))
+
+
 _DECLARED_ROLES = ("owner", "member")
 
 
@@ -146,12 +164,14 @@ class DeclaredContext:
 
 @dataclass(frozen=True)
 class HouseholdDeclarations:
-    """Who lives here and what context entities mean, as the household declared."""
+    """Rooms, people, and context meanings, as the household declared."""
 
+    rooms: tuple[DeclaredRoom, ...] = ()
     people: tuple[DeclaredPerson, ...] = ()
     contexts: tuple[DeclaredContext, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "rooms", tuple(self.rooms))
         object.__setattr__(self, "people", tuple(self.people))
         object.__setattr__(self, "contexts", tuple(self.contexts))
 
@@ -170,6 +190,10 @@ def _derived_declared_id(text: str) -> str:
 
 def _household_payload(declarations: HouseholdDeclarations) -> dict:
     return {
+        "rooms": [
+            {"room_id": room.room_id, "name": room.name}
+            for room in declarations.rooms
+        ],
         "people": [
             {
                 "person_id": person.person_id,
@@ -214,10 +238,19 @@ def load_household_declarations(path: Path) -> HouseholdDeclarations:
     version = payload.get("version")
     if version != _HOUSEHOLD_VERSION:
         raise SetupConfigError(f"unsupported household declarations version: {version!r}")
+    raw_rooms = payload.get("rooms", [])
     raw_people = payload.get("people", [])
     raw_contexts = payload.get("contexts", [])
-    if not isinstance(raw_people, list) or not isinstance(raw_contexts, list):
-        raise SetupConfigError("household declarations 'people' and 'contexts' must be lists")
+    if not isinstance(raw_rooms, list) or not isinstance(raw_people, list) or not isinstance(raw_contexts, list):
+        raise SetupConfigError("household declarations 'rooms', 'people', and 'contexts' must be lists")
+    rooms: list[DeclaredRoom] = []
+    for entry in raw_rooms:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            rooms.append(DeclaredRoom(room_id=entry["room_id"], name=entry["name"]))
+        except (KeyError, ValueError):
+            continue
     people: list[DeclaredPerson] = []
     for entry in raw_people:
         if not isinstance(entry, dict):
@@ -253,7 +286,7 @@ def load_household_declarations(path: Path) -> HouseholdDeclarations:
             )
         except (KeyError, ValueError):
             continue
-    return HouseholdDeclarations(people=tuple(people), contexts=tuple(contexts))
+    return HouseholdDeclarations(rooms=tuple(rooms), people=tuple(people), contexts=tuple(contexts))
 
 # Household members supply capabilities at enrollment time, the same way an
 # owner supplies a justification to approve a rule: a scan suggestion is not
@@ -1070,6 +1103,173 @@ class SetupService:
             )
         return {"ok": True, "scanned": len(records), "staled": staled, "claims_staled": claims_staled}
 
+    def add_room(self, *, name: str) -> dict:
+        """Declare a room through the same service used by onboarding.
+
+        A room declaration is local household configuration, not provider
+        evidence. It is therefore valid before any device is connected and
+        survives a provider being unavailable.
+        """
+
+        try:
+            name = _require_text(name, name="name")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        room_id = _derived_declared_id(name)
+        if not room_id:
+            return {"ok": False, "error": "name must contain at least one letter or digit"}
+        rooms = list(self.household.rooms)
+        for room in rooms:
+            if room.room_id != room_id:
+                continue
+            if room.name != name:
+                return {"ok": False, "error": f"room already declared with a different name: {room_id}"}
+            return self.status()
+        rooms.append(DeclaredRoom(room_id=room_id, name=name))
+        self.household = replace(self.household, rooms=tuple(rooms))
+        error = self._persist_household()
+        if error is not None:
+            return {"ok": False, "error": error}
+        self._trigger_rebuild()
+        return self.status()
+
+    def room_id_for_name(self, name: str | None) -> str | None:
+        """Resolve a declared room by stable id or display name.
+
+        This is a read-only lookup used by proposal adapters.  It keeps
+        natural-language authoring from deriving an id independently of the
+        declaration service, while leaving the actual mutation in
+        ``rename_room``/``remove_room``.
+        """
+
+        if not isinstance(name, str) or not name.strip():
+            return None
+        candidate = name.strip().casefold()
+        for room in self.household.rooms:
+            if room.room_id.casefold() == candidate or room.name.casefold() == candidate:
+                return room.room_id
+        # Conversation commonly uses the noun "room" after a display name
+        # ("remove the shop room") even when the declaration itself is just
+        # "Shop".  Prefer exact matches above so a deliberately named
+        # "Shop Room" remains addressable, then accept this unambiguous
+        # conversational suffix.
+        if candidate.endswith(" room"):
+            short_candidate = candidate[:-len(" room")].rstrip()
+            for room in self.household.rooms:
+                if room.room_id.casefold() == short_candidate or room.name.casefold() == short_candidate:
+                    return room.room_id
+        return None
+
+    def rename_room(self, *, room_id: str, name: str) -> dict:
+        try:
+            room_id = _require_text(room_id, name="room_id")
+            name = _require_text(name, name="name")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        rooms = list(self.household.rooms)
+        for index, room in enumerate(rooms):
+            if room.room_id != room_id:
+                continue
+            if room.name == name:
+                return self.status()
+            rooms[index] = replace(room, name=name)
+            self.household = replace(self.household, rooms=tuple(rooms))
+            error = self._persist_household()
+            if error is not None:
+                return {"ok": False, "error": error}
+            self._trigger_rebuild()
+            return self.status()
+        return {"ok": False, "error": f"unknown room: {room_id}"}
+
+    def remove_room(self, *, room_id: str) -> dict:
+        try:
+            room_id = _require_text(room_id, name="room_id")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        remaining = tuple(room for room in self.household.rooms if room.room_id != room_id)
+        if len(remaining) == len(self.household.rooms):
+            return {"ok": False, "error": f"unknown room: {room_id}"}
+        self.household = replace(self.household, rooms=remaining)
+        error = self._persist_household()
+        if error is not None:
+            return {"ok": False, "error": error}
+        self._trigger_rebuild()
+        return self.status()
+
+    def update_person(
+        self, *, person_id: str, name: str | None = None, role: str | None = None
+    ) -> dict:
+        """Edit a declared person without changing their stable person_id."""
+
+        try:
+            person_id = _require_text(person_id, name="person_id")
+            if name is not None:
+                name = _require_text(name, name="name")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if role is not None and role not in _DECLARED_ROLES:
+            return {"ok": False, "error": f"role must be one of {_DECLARED_ROLES}, got {role!r}"}
+        people = list(self.household.people)
+        for index, person in enumerate(people):
+            if person.person_id != person_id:
+                continue
+            if (
+                person.role == "owner"
+                and role == "member"
+                and not any(other.role == "owner" for other in people if other.person_id != person_id)
+                and self._has_approved_automations()
+            ):
+                return {
+                    "ok": False,
+                    "error": "revoke approved automations before demoting the last household owner",
+                }
+            updated = replace(
+                person,
+                name=person.name if name is None else name,
+                role=person.role if role is None else role,
+            )
+            if updated == person:
+                return self.status()
+            people[index] = updated
+            self.household = replace(self.household, people=tuple(people))
+            error = self._persist_household()
+            if error is not None:
+                return {"ok": False, "error": error}
+            self._trigger_rebuild()
+            return self.status()
+        return {"ok": False, "error": f"unknown person: {person_id}"}
+
+    def update_context(
+        self, *, context_id: str, label: str | None = None, entity_id: str | None = None
+    ) -> dict:
+        try:
+            context_id = _require_text(context_id, name="context_id")
+            if label is not None:
+                label = _require_text(label, name="label")
+            if entity_id is not None:
+                entity_id = _require_text(entity_id, name="entity_id")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        contexts = list(self.household.contexts)
+        for index, context in enumerate(contexts):
+            if context.context_id != context_id:
+                continue
+            updated = replace(
+                context,
+                label=context.label if label is None else label,
+                entity_id=context.entity_id if entity_id is None else entity_id,
+            )
+            if updated == context:
+                return self.status()
+            contexts[index] = updated
+            self.household = replace(self.household, contexts=tuple(contexts))
+            error = self._persist_household()
+            if error is not None:
+                return {"ok": False, "error": error}
+            self._trigger_rebuild()
+            return self.status()
+        return {"ok": False, "error": f"unknown context: {context_id}"}
+
     def declare_person(
         self, *, name: str, entity_id: str | None = None, room_id: str | None = None, role: str = "member"
     ) -> dict:
@@ -1143,6 +1343,18 @@ class SetupService:
             person_id = _require_text(person_id, name="person_id")
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+        found = next((person for person in self.household.people if person.person_id == person_id), None)
+        if found is None:
+            return {"ok": False, "error": f"unknown person: {person_id}"}
+        if (
+            found.role == "owner"
+            and not any(other.role == "owner" for other in self.household.people if other.person_id != person_id)
+            and self._has_approved_automations()
+        ):
+            return {
+                "ok": False,
+                "error": "revoke approved automations before removing the last household owner",
+            }
         remaining = tuple(person for person in self.household.people if person.person_id != person_id)
         if len(remaining) == len(self.household.people):
             return {"ok": False, "error": f"unknown person: {person_id}"}
@@ -1152,6 +1364,13 @@ class SetupService:
             return {"ok": False, "error": error}
         self._trigger_rebuild()
         return self.status()
+
+    def _has_approved_automations(self) -> bool:
+        """Keep approved authority from outliving the last household owner."""
+
+        store = getattr(self._director, "store", None)
+        rules = getattr(getattr(store, "state", None), "rules", ())
+        return any(rule.status is RuleStatus.APPROVED for rule in rules)
 
     def declare_context(self, *, label: str, entity_id: str) -> dict:
         """Declare what one entity means: its "on" activates the context.
@@ -1321,6 +1540,7 @@ __all__ = [
     "DeclaredContext",
     "DeclaredPerson",
     "DeclaredPresenceSource",
+    "DeclaredRoom",
     "HouseholdDeclarations",
     "SetupCandidate",
     "SetupService",

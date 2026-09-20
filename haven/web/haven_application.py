@@ -24,8 +24,8 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
@@ -38,7 +38,9 @@ from haven.core.domain import (
     Principal,
     Rule,
     RuleDraft,
+    RuleStatus,
     RoleTier,
+    ScheduleTrigger,
 )
 from haven.core.store import HavenStore
 from haven.core.world import WorldProvider
@@ -309,6 +311,7 @@ class HavenApplication:
         intelligence_provider=None,
         ha_states_source=None,
         person_names: Mapping[str, str] | None = None,
+        room_names: Mapping[str, str] | None = None,
         rules_persistence: RulesPersistence | None = None,
         resident: Principal | None = None,
         owner: Principal | None = None,
@@ -381,6 +384,10 @@ class HavenApplication:
         # Declared person names, when a setup layer declares who lives here:
         # the declared name wins over the title-cased person_id derivation.
         self._person_names = dict(person_names or {})
+        # Declared room names are the same kind of household-owned meaning:
+        # provider observations may add rooms, but cannot erase a room the
+        # user explicitly declared or force its display name back to an id.
+        self._room_names = dict(room_names or {})
         self._scheduler_tick_seconds = scheduler_tick_seconds
         self._scheduler_thread: threading.Thread | None = None
         self._scheduler_stop: threading.Event | None = None
@@ -799,6 +806,245 @@ class HavenApplication:
     def has_rule(self, rule_id: str) -> bool:
         return any(rule.rule_id == rule_id for rule in self.store.state.rules)
 
+    def automation_options(self) -> list[dict[str, Any]]:
+        """Return manifest-backed writable controls for the authoring UI."""
+
+        options: list[dict[str, Any]] = []
+        for manifest in self.registry.all_devices():
+            for capability in manifest.capabilities:
+                if not capability.writable or not capability.service:
+                    continue
+                options.append(
+                    {
+                        "device_id": manifest.device_id,
+                        "device_type": manifest.device_type,
+                        "room": manifest.room,
+                        "capability": capability.name,
+                        "service": capability.service,
+                        "control_class": capability.control_class.value,
+                    }
+                )
+        return options
+
+    def create_automation(
+        self,
+        *,
+        source_text: str,
+        time_of_day: str,
+        weekdays: list[int] | tuple[int, ...] = (),
+        target_device_id: str,
+        capability: str | None = None,
+        service: str | None = None,
+        interpretation: str | None = None,
+        parameters: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create a proposed automation from a structured UI declaration.
+
+        This is deliberately proposal-only. The caller must separately run
+        `approve_automation`, which crosses the existing owner authority and
+        transition/event path before the scheduler can execute the rule.
+        """
+
+        if not self.has_declared_owner:
+            return {"ok": False, "error": "no household owner declared yet"}
+        if not isinstance(source_text, str) or not source_text.strip():
+            return {"ok": False, "error": "a non-empty 'source_text' is required"}
+        if not isinstance(target_device_id, str) or not target_device_id.strip():
+            return {"ok": False, "error": "a non-empty 'target_device_id' is required"}
+        try:
+            parsed_time = dt_time.fromisoformat(str(time_of_day).strip())
+        except (TypeError, ValueError) as exc:
+            return {"ok": False, "error": "time_of_day must be an HH:MM or HH:MM:SS value"}
+        try:
+            days = frozenset(weekdays)
+            if any(isinstance(day, bool) or not isinstance(day, int) or not 0 <= day <= 6 for day in days):
+                raise ValueError
+            schedule = ScheduleTrigger(time_of_day=parsed_time, weekdays=days)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "weekdays must contain integers from 0 (Monday) through 6 (Sunday)"}
+        manifest = self.registry.get(target_device_id.strip()) if self.registry.is_registered(target_device_id.strip()) else None
+        if manifest is None:
+            return {"ok": False, "error": "unknown target device"}
+        if capability is None and service is not None:
+            capability_descriptor = next(
+                (item for item in manifest.capabilities if item.service == service and item.writable), None
+            )
+            if capability_descriptor is None:
+                return {"ok": False, "error": "target device does not expose that writable service"}
+            capability = capability_descriptor.name
+        if not isinstance(capability, str) or not capability.strip():
+            return {"ok": False, "error": "a writable device capability is required"}
+        try:
+            capability_descriptor = manifest.capability(capability.strip())
+        except KeyError:
+            return {"ok": False, "error": "unknown target device capability"}
+        if not capability_descriptor.writable or not capability_descriptor.service:
+            return {"ok": False, "error": "the selected capability is not writable"}
+        if parameters is not None and not isinstance(parameters, Mapping):
+            return {"ok": False, "error": "parameters must be an object"}
+        if interpretation is not None and not isinstance(interpretation, str):
+            return {"ok": False, "error": "interpretation must be a string or null"}
+        normalized_parameters = parameters or {}
+        try:
+            action_parameters = tuple(normalized_parameters.items())
+            draft = RuleDraft(
+                draft_id=_new_id("draft"),
+                household_id=self.household_id,
+                proposed_by=self.resident.actor_id,
+                source_text=source_text.strip(),
+                interpretation=(interpretation or source_text).strip(),
+                action_kind=ActionKind.UNSCOPED_EXECUTION,
+                schedule_trigger=schedule,
+                target_device_id=target_device_id.strip(),
+                capability=capability_descriptor.name,
+                parameters=action_parameters,
+            )
+            rule = self.runtime.propose_draft(draft, principal=self.resident, now=self._clock())
+        except (TypeError, ValueError, KeyError) as exc:
+            return {"ok": False, "error": str(exc)}
+        self._persist_rules()
+        self._publish_state()
+        return {
+            "ok": True,
+            "automation": serialize.rule_to_dict(rule, device_room=manifest.room),
+            "state": self.state(),
+        }
+
+    def update_automation(
+        self,
+        rule_id: str,
+        *,
+        source_text: str,
+        time_of_day: str,
+        weekdays: list[int] | tuple[int, ...] = (),
+        interpretation: str | None = None,
+        parameters: Mapping[str, Any] | None = None,
+        justification: str,
+    ) -> dict[str, Any]:
+        """Clarify a proposed automation without bypassing the rule ledger.
+
+        A proposed rule is the editable authoring form. Once an owner has
+        approved it, its meaning is immutable: the user must revoke it and
+        create a new proposal. This keeps the approval attached to exactly
+        the draft the owner reviewed.
+        """
+
+        if not self.has_declared_owner:
+            return {"ok": False, "error": "no household owner declared yet"}
+        if not isinstance(justification, str) or not justification.strip():
+            return {"ok": False, "error": "automation editing requires a non-empty justification"}
+        if not isinstance(source_text, str) or not source_text.strip():
+            return {"ok": False, "error": "a non-empty 'source_text' is required"}
+        try:
+            rule = self.store.get_rule(rule_id)
+        except KeyError:
+            return {"ok": False, "error": "unknown automation"}
+        if rule.status is not RuleStatus.PROPOSED:
+            return {"ok": False, "error": "only proposed automations can be edited; revoke and add a new one"}
+        try:
+            parsed_time = dt_time.fromisoformat(str(time_of_day).strip())
+            days = frozenset(weekdays)
+            if any(isinstance(day, bool) or not isinstance(day, int) or not 0 <= day <= 6 for day in days):
+                raise ValueError
+            schedule = ScheduleTrigger(time_of_day=parsed_time, weekdays=days)
+            normalized_parameters = rule.draft.parameters if parameters is None else tuple(parameters.items())
+            if not isinstance(interpretation, (str, type(None))):
+                raise ValueError("interpretation must be a string or null")
+            draft = replace(
+                rule.draft,
+                draft_id=_new_id("draft"),
+                source_text=source_text.strip(),
+                interpretation=(interpretation or source_text).strip(),
+                schedule_trigger=schedule,
+                parameters=normalized_parameters,
+            )
+            result = self.runtime.clarify_rule(
+                rule_id,
+                draft,
+                principal=self.resident,
+                justification=justification,
+                now=self._clock(),
+            )
+        except (TypeError, ValueError, KeyError) as exc:
+            return {"ok": False, "error": str(exc)}
+        self._persist_rules()
+        self._publish_state()
+        return {
+            "ok": result.decision.status is DecisionStatus.ALLOW,
+            "decision": {
+                "status": result.decision.status.value,
+                "code": result.decision.code.value,
+                "explanation": result.decision.explanation,
+            },
+            "automation": serialize.rule_to_dict(
+                result.rule,
+                device_room=self._device_room(result.rule.draft.target_device_id)
+                if result.rule.draft.target_device_id is not None
+                else None,
+            ),
+            "state": self.state(),
+        }
+
+    def approve_automation(self, rule_id: str, *, justification: str) -> dict[str, Any]:
+        if not self.has_declared_owner:
+            return {"ok": False, "error": "no household owner declared yet"}
+        try:
+            result = self.runtime.approve_rule(
+                rule_id,
+                principal=self.owner,
+                justification=justification,
+                now=self._clock(),
+            )
+        except KeyError:
+            return {"ok": False, "error": "unknown automation"}
+        self._persist_rules()
+        self._publish_state()
+        return {
+            "ok": result.decision.status is DecisionStatus.ALLOW,
+            "decision": {
+                "status": result.decision.status.value,
+                "code": result.decision.code.value,
+                "explanation": result.decision.explanation,
+            },
+            "automation": serialize.rule_to_dict(
+                result.rule,
+                device_room=self._device_room(result.rule.draft.target_device_id)
+                if result.rule.draft.target_device_id is not None
+                else None,
+            ),
+            "state": self.state(),
+        }
+
+    def revoke_automation(self, rule_id: str, *, justification: str) -> dict[str, Any]:
+        if not self.has_declared_owner:
+            return {"ok": False, "error": "no household owner declared yet"}
+        try:
+            result = self.runtime.revoke_rule(
+                rule_id,
+                principal=self.owner,
+                justification=justification,
+                now=self._clock(),
+            )
+        except KeyError:
+            return {"ok": False, "error": "unknown automation"}
+        self._persist_rules()
+        self._publish_state()
+        return {
+            "ok": result.decision.status is DecisionStatus.ALLOW,
+            "decision": {
+                "status": result.decision.status.value,
+                "code": result.decision.code.value,
+                "explanation": result.decision.explanation,
+            },
+            "automation": serialize.rule_to_dict(
+                result.rule,
+                device_room=self._device_room(result.rule.draft.target_device_id)
+                if result.rule.draft.target_device_id is not None
+                else None,
+            ),
+            "state": self.state(),
+        }
+
     def chat(self, text: str, focus: str | None = None) -> dict[str, Any]:
         self._say("user", text)
         self._chat_intent(text, focus=focus)
@@ -1160,7 +1406,13 @@ class HavenApplication:
         now = self._clock()
         world = self.world.observe(now)
         present = {item.person_id: item.room_id for item in world.presence if item.present}
-        rooms = []
+        rooms = [
+            {"id": room_id, "devices": [], "people": [], "camera": None}
+            for room_id in self._room_names
+        ]
+        for room_id in present.values():
+            if not any(existing["id"] == room_id for existing in rooms):
+                rooms.append({"id": room_id, "devices": [], "people": [], "camera": None})
         for manifest in self.registry.all_devices():
             room_id = manifest.room or "unassigned"
             room = next((existing for existing in rooms if existing["id"] == room_id), None)
@@ -1185,7 +1437,7 @@ class HavenApplication:
         rooms_payload = [
             serialize.room_to_dict(
                 room_id=room["id"],
-                name=room["id"].replace("_", " ").title(),
+                name=self._room_names.get(room["id"], room["id"].replace("_", " ").title()),
                 devices=room["devices"],
                 people=room["people"],
                 camera=room["camera"],

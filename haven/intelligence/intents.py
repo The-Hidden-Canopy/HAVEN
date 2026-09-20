@@ -91,6 +91,50 @@ class ActionProposal(IntentForm):
         object.__setattr__(self, "source_text", _require_text(self.source_text, name="source_text"))
 
 
+@dataclass(frozen=True)
+class MutationProposal(IntentForm):
+    """A proposed change to HAVEN's declared context.
+
+    This is deliberately a proposal, not a command.  Parsing language into
+    one of these objects has no side effects; a composition/API layer must
+    validate the target and apply it through the appropriate authoring
+    service.  Keeping the boundary explicit prevents a model or parser from
+    writing household configuration directly.
+
+    The first public mutation surface covers declarations that are already
+    owned by ``SetupService``: rooms, people, and contexts.  It also carries
+    explicitly parsed automation authoring attributes; the application layer
+    resolves their device target and creates a proposed ``RuleDraft``. The
+    open attribute tuple leaves room for richer entity-specific fields
+    without turning this union into a second persistence schema.
+    """
+
+    entity_kind: str
+    operation: str
+    attributes: tuple[tuple[str, Any], ...]
+    source_text: str
+    target_id: str | None = None
+
+    _ENTITY_KINDS = frozenset({"room", "person", "context", "automation"})
+    _OPERATIONS = frozenset({"create", "rename", "update", "delete"})
+
+    def __post_init__(self) -> None:
+        entity_kind = _require_text(self.entity_kind, name="entity_kind").casefold()
+        operation = _require_text(self.operation, name="operation").casefold()
+        if entity_kind not in self._ENTITY_KINDS:
+            raise ValueError(f"unsupported mutation entity kind: {entity_kind}")
+        if operation not in self._OPERATIONS:
+            raise ValueError(f"unsupported mutation operation: {operation}")
+        if operation == "create" and self.target_id is not None:
+            raise ValueError("a create mutation cannot have a target_id")
+        if operation != "create" and self.target_id is not None:
+            object.__setattr__(self, "target_id", _require_text(self.target_id, name="target_id"))
+        object.__setattr__(self, "entity_kind", entity_kind)
+        object.__setattr__(self, "operation", operation)
+        object.__setattr__(self, "attributes", _normalize_parameters(self.attributes))
+        object.__setattr__(self, "source_text", _require_text(self.source_text, name="source_text"))
+
+
 # A rule proposal reuses the existing draft directly -- no wrapper.
 RuleProposal = RuleDraft
 
@@ -126,7 +170,7 @@ class ConversationMessage(IntentForm):
         object.__setattr__(self, "text", _require_text(self.text, name="message text"))
 
 
-Intent = QueryRequest | ActionProposal | RuleProposal | ClarificationRequest | ConversationMessage
+Intent = QueryRequest | ActionProposal | MutationProposal | RuleProposal | ClarificationRequest | ConversationMessage
 
 
 __all__ = [
@@ -135,6 +179,7 @@ __all__ = [
     "ConversationMessage",
     "Intent",
     "IntentForm",
+    "MutationProposal",
     "QueryRequest",
     "RuleProposal",
 ]

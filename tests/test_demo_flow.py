@@ -482,7 +482,10 @@ def test_activity_and_memory_surface_the_store() -> None:
 def _automation_rows(state: dict) -> dict[str, dict]:
     rows = state["automations"]
     assert all(
-        set(row) == {"rule_id", "summary", "action", "target", "status", "approved_at"} for row in rows
+        set(row) == {
+            "rule_id", "summary", "action", "target", "target_device_id", "capability",
+            "parameters", "schedule", "status", "approved_at", "approved_by", "revoked_at", "revoked_by",
+        } for row in rows
     )
     return {row["rule_id"]: row for row in rows}
 

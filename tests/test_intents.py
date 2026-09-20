@@ -17,6 +17,7 @@ from haven.intelligence.intents import (
     ClarificationRequest,
     ConversationMessage,
     Intent,
+    MutationProposal,
     QueryRequest,
     RuleProposal,
 )
@@ -100,6 +101,41 @@ def test_action_proposal_rejects_invalid_fields(overrides) -> None:
         _proposal(**overrides)
 
 
+def test_mutation_proposal_is_frozen_and_side_effect_free() -> None:
+    proposal = MutationProposal(
+        entity_kind="room",
+        operation="create",
+        attributes=(("name", "Office"),),
+        source_text="Add an office.",
+    )
+    assert proposal.entity_kind == "room"
+    assert proposal.attributes == (("name", "Office"),)
+    assert isinstance(proposal, IntentForm)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        proposal.operation = "delete"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"entity_kind": "device"},
+        {"operation": "execute"},
+        {"entity_kind": "room", "operation": "create", "target_id": "office"},
+        {"entity_kind": "room", "operation": "rename", "target_id": " "},
+    ],
+)
+def test_mutation_proposal_rejects_invalid_fields(overrides) -> None:
+    values = {
+        "entity_kind": "room",
+        "operation": "create",
+        "attributes": (("name", "Office"),),
+        "source_text": "Add an office.",
+    }
+    values.update(overrides)
+    with pytest.raises(ValueError):
+        MutationProposal(**values)
+
+
 def test_rule_proposal_is_the_rule_draft_itself() -> None:
     draft = _rule_draft()
     assert RuleProposal is RuleDraft
@@ -152,6 +188,7 @@ def test_intent_alias_covers_every_form() -> None:
     assert set(typing.get_args(Intent)) == {
         QueryRequest,
         ActionProposal,
+        MutationProposal,
         RuleDraft,
         ClarificationRequest,
         ConversationMessage,

@@ -141,6 +141,7 @@ class TransitionKind(str, Enum):
     PROPOSE_RULE = "propose_rule"
     CLARIFY_RULE = "clarify_rule"
     APPROVE_RULE = "approve_rule"
+    REVOKE_RULE = "revoke_rule"
     AUTHORIZE_ACTION = "authorize_action"
     RECORD_EXECUTION = "record_execution"
     RECORD_BLOCK = "record_block"
@@ -185,8 +186,10 @@ class EventType(str, Enum):
     RULE_PROPOSED = "rule_proposed"
     RULE_CLARIFIED = "rule_clarified"
     RULE_APPROVED = "rule_approved"
+    RULE_REVOKED = "rule_revoked"
     RULE_APPROVAL_BLOCKED = "rule_approval_blocked"
     RULE_CLARIFICATION_BLOCKED = "rule_clarification_blocked"
+    RULE_REVOCATION_BLOCKED = "rule_revocation_blocked"
     ACTION_AUTHORIZED = "action_authorized"
     ACTION_EXECUTED = "action_executed"
     ACTION_BLOCKED = "action_blocked"
@@ -524,6 +527,8 @@ class Rule:
     approved_by: str | None = None
     approved_by_role: RoleTier | None = None
     approved_at: datetime | None = None
+    revoked_by: str | None = None
+    revoked_at: datetime | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.rule_id, name="rule_id")
@@ -534,6 +539,13 @@ class Rule:
                 raise ValueError("an approved rule requires owner approval and a timestamp")
         if self.approved_at is not None:
             object.__setattr__(self, "approved_at", require_aware_utc(self.approved_at, name="approved_at"))
+        if self.status == RuleStatus.REVOKED:
+            if not self.revoked_by or self.revoked_at is None:
+                raise ValueError("a revoked rule requires a revoking actor and timestamp")
+        if self.revoked_by is not None:
+            object.__setattr__(self, "revoked_by", _require_text(self.revoked_by, name="revoked_by"))
+        if self.revoked_at is not None:
+            object.__setattr__(self, "revoked_at", require_aware_utc(self.revoked_at, name="revoked_at"))
 
 
 @dataclass(frozen=True)
