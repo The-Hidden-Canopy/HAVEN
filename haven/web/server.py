@@ -15,6 +15,7 @@ import time
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Lock
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..models import ModelManager, inspect_folder
@@ -86,11 +87,24 @@ class HavenWebServer(ThreadingHTTPServer):
         demo: bool = False,
         ha_client=None,
         session_token: str | None = None,
+        bootstrap_token: str | None = None,
+        activation_token: str | None = None,
+        on_activate=None,
         folder_picker=None,
+        before_data_dir_changed=None,
         on_data_dir_changed=None,
+        on_data_dir_change_failed=None,
     ) -> None:
         self.static_root = static_root
         self._session_token = session_token
+        # The bootstrap token travels in the Edge command line, while the
+        # session token is only ever accepted as an HttpOnly cookie.  Keep a
+        # compatibility fallback for direct callers that still provide the
+        # old single token, but the desktop shell always supplies both.
+        self._bootstrap_token = session_token if bootstrap_token is None else bootstrap_token
+        self._bootstrap_lock = Lock()
+        self._activation_token = activation_token
+        self._activation_handler = on_activate
         self.folder_picker = folder_picker
         env_root = os.environ.get(_MODELS_ROOT_ENV)
         if env_root:
@@ -147,7 +161,9 @@ class HavenWebServer(ThreadingHTTPServer):
             director=self.director,
             clock=clock,
             on_rebuild=self.rebuild_director,
+            before_data_dir_changed=before_data_dir_changed,
             on_data_dir_changed=on_data_dir_changed,
+            on_data_dir_change_failed=on_data_dir_change_failed,
             include_demo_candidates=self._director_demo,
             resource_store=self.resources,
             knowledge_service=self.knowledge,
@@ -344,20 +360,51 @@ class _Handler(BaseHTTPRequestHandler):
         return False
 
     def _handle_desktop_bootstrap(self) -> None:
-        expected = self.server._session_token
         supplied = parse_qs(urlsplit(self.path).query).get("session", [""])[0]
-        if expected is None or not hmac.compare_digest(supplied, expected):
+        with self.server._bootstrap_lock:
+            expected = self.server._bootstrap_token
+            if expected is None or not hmac.compare_digest(supplied, expected):
+                self._send_json(404, {"error": "not found"})
+                return
+            # A bootstrap URL is intentionally a one-shot capability.  Clear
+            # it before writing the response so concurrent requests cannot
+            # both obtain a valid desktop session.
+            self.server._bootstrap_token = None
+        session = self.server._session_token
+        if session is None:
             self._send_json(404, {"error": "not found"})
             return
         self.send_response(303)
         self.send_header(
             "Set-Cookie",
-            f"haven_session={expected}; HttpOnly; SameSite=Strict; Path=/",
+            f"haven_session={session}; HttpOnly; SameSite=Strict; Path=/",
         )
         self.send_header("Location", "/")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", "0")
         self.end_headers()
+
+    def _handle_desktop_activate(self) -> None:
+        body = self._read_json()
+        if body is None:
+            return
+        expected = self.server._activation_token
+        supplied = body.get("token")
+        if (
+            expected is None
+            or not isinstance(supplied, str)
+            or not hmac.compare_digest(supplied, expected)
+        ):
+            self._send_json(404, {"error": "not found"})
+            return
+        handler = self.server._activation_handler
+        activated = False
+        if handler is not None:
+            try:
+                activated = bool(handler())
+            except Exception:
+                activated = False
+        self._send_json(200, {"ok": True, "activated": activated})
 
     def _pick_folder(self) -> None:
         picker = self.server.folder_picker
@@ -430,6 +477,9 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
+        if path == "/__desktop_activate":
+            self._handle_desktop_activate()
+            return
         if not self._authorize_session():
             return
         if path == "/api/chat":
@@ -1133,14 +1183,24 @@ def make_server(
     demo: bool = False,
     ha_client=None,
     session_token: str | None = None,
+    bootstrap_token: str | None = None,
+    activation_token: str | None = None,
+    on_activate=None,
     folder_picker=None,
+    before_data_dir_changed=None,
     on_data_dir_changed=None,
+    on_data_dir_change_failed=None,
 ) -> tuple[HavenWebServer, HavenApplication]:
     root = Path(static_root) if static_root is not None else Path(__file__).parent / "static"
     server = HavenWebServer(
         ("127.0.0.1", port), root, clock=clock, models_root=models_root, data_dir=data_dir,
         demo=demo, ha_client=ha_client, session_token=session_token, folder_picker=folder_picker,
+        bootstrap_token=bootstrap_token,
+        activation_token=activation_token,
+        on_activate=on_activate,
+        before_data_dir_changed=before_data_dir_changed,
         on_data_dir_changed=on_data_dir_changed,
+        on_data_dir_change_failed=on_data_dir_change_failed,
     )
     return server, server.director
 

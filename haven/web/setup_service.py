@@ -477,7 +477,9 @@ class SetupService:
         clock: Callable[[], datetime] | None = None,
         ha_states_source=None,
         on_rebuild: Callable[[], None] | None = None,
+        before_data_dir_changed: Callable[[Path], None] | None = None,
         on_data_dir_changed: Callable[[Path], None] | None = None,
+        on_data_dir_change_failed: Callable[[], None] | None = None,
         include_demo_candidates: bool = False,
         resource_store=None,
         knowledge_service=None,
@@ -500,7 +502,9 @@ class SetupService:
         self._on_rebuild = on_rebuild
         # DesktopShell uses this to move its held instance lock along with
         # the installation when onboarding changes the data root.
+        self._before_data_dir_changed = before_data_dir_changed
         self._on_data_dir_changed = on_data_dir_changed
+        self._on_data_dir_change_failed = on_data_dir_change_failed
         # False by default: a real household's first-run scan should never
         # show `ble:bulb-a1f2`/`mdns:therm-living`/`wifi:plug-heater` as if
         # they were real nearby devices -- those are the demo trial's own
@@ -623,7 +627,30 @@ class SetupService:
         # haven.json so every path derived from store.path.parent is in the
         # new root immediately.
         current_dir = self._config_dir()
-        if resolved != current_dir.resolve():
+        moving = resolved != current_dir.resolve()
+        reserved = False
+        if moving and self._before_data_dir_changed is not None:
+            try:
+                # The desktop host reserves the target instance lock here,
+                # before any installation file is moved.  A competing HAVEN
+                # process therefore rejects the choice without partially
+                # relocating this installation.
+                self._before_data_dir_changed(resolved)
+                reserved = True
+            except Exception as exc:
+                return {"ok": False, "error": f"could not reserve data dir {resolved}: {exc}"}
+
+        def abort_reserved_change() -> None:
+            if not reserved or self._on_data_dir_change_failed is None:
+                return
+            try:
+                self._on_data_dir_change_failed()
+            except Exception:
+                # The original setup error is the actionable result; a
+                # best-effort reservation cleanup must not replace it.
+                pass
+
+        if moving:
             names = installation_file_names(current_dir) + ("backups",)
             for name in names:
                 source = current_dir / name
@@ -632,11 +659,13 @@ class SetupService:
                 try:
                     os.replace(source, resolved / name)
                 except OSError as exc:
+                    abort_reserved_change()
                     return {"ok": False, "error": f"could not move {name} to {resolved}: {exc}"}
             self._store.path = resolved / "haven.json"
         self._config = replace(self._config, data_dir=str(resolved))
         error = self._save()
         if error is not None:
+            abort_reserved_change()
             return {"ok": False, "error": error}
         # The server's own resource/ontology stores (and search service
         # built over them) are not part of `self._director` -- they live on
@@ -644,7 +673,11 @@ class SetupService:
         # miss them. `_trigger_rebuild` covers both: `rebuild_director`
         # already rebuilds the resource/ontology stores from the current
         # data dir every time it runs.
-        self._trigger_rebuild()
+        try:
+            self._trigger_rebuild()
+        except Exception as exc:
+            abort_reserved_change()
+            return {"ok": False, "error": f"could not rebuild HAVEN for data dir {resolved}: {exc}"}
         if self._on_data_dir_changed is not None:
             self._on_data_dir_changed(resolved)
         return self.status()

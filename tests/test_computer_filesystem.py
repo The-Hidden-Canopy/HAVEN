@@ -129,13 +129,35 @@ def test_read_only_provider_reports_read_capability_only():
     )
 
 
+def test_provider_defaults_to_read_only_when_constructed_directly():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "allowed"
+        root.mkdir()
+        target = root / "a.txt"
+        target.write_text("x")
+
+        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        records = {r.locator: r for r in provider.observe()}
+        result = provider.execute(_command("filesystem.create_folder", path=str(root / "new")))
+
+    assert records[str(target)].capabilities == (
+        "filesystem.read",
+        "filesystem.open",
+        "filesystem.reveal",
+    )
+    assert result.success is False
+    assert "read-only" in result.detail
+
+
 def test_writable_provider_declares_mutation_capabilities():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "allowed"
         root.mkdir()
         (root / "a.txt").write_text("x")
 
-        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        provider = FilesystemProvider(
+            allowed_roots=(root,), scope_id="project:haven", read_only=False, clock=lambda: NOW
+        )
         records = {r.locator: r for r in provider.observe()}
     file_caps = records[str(root / "a.txt")].capabilities
     folder_caps = records[str(root)].capabilities
@@ -254,7 +276,9 @@ def test_create_folder_outside_allowed_roots_is_rejected():
         root.mkdir()
         outside = Path(tmp) / "outside"
 
-        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        provider = FilesystemProvider(
+            allowed_roots=(root,), scope_id="project:haven", read_only=False, clock=lambda: NOW
+        )
         result = provider.execute(_command("filesystem.create_folder", path=str(outside)))
         assert result.success is False
         assert "outside every allowed root" in result.detail
@@ -266,7 +290,9 @@ def test_path_traversal_via_dotdot_is_rejected():
         root = Path(tmp) / "allowed"
         root.mkdir()
 
-        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        provider = FilesystemProvider(
+            allowed_roots=(root,), scope_id="project:haven", read_only=False, clock=lambda: NOW
+        )
         escape_target = str(root / ".." / "escaped")
         result = provider.execute(_command("filesystem.create_folder", path=escape_target))
         assert result.success is False
@@ -282,7 +308,9 @@ def test_move_destination_outside_allowed_roots_is_rejected_and_source_untouched
         source.write_text("keep me")
         destination = Path(tmp) / "outside.txt"
 
-        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        provider = FilesystemProvider(
+            allowed_roots=(root,), scope_id="project:haven", read_only=False, clock=lambda: NOW
+        )
         result = provider.execute(_command("filesystem.move", source=str(source), destination=str(destination)))
         assert result.success is False
         assert source.exists()
@@ -305,7 +333,9 @@ def test_unknown_service_fails_cleanly_not_an_exception():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "allowed"
         root.mkdir()
-        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        provider = FilesystemProvider(
+            allowed_roots=(root,), scope_id="project:haven", read_only=False, clock=lambda: NOW
+        )
         result = provider.execute(_command("filesystem.delete_everything"))
         assert result.success is False
         assert "unknown filesystem service" in result.detail
@@ -400,11 +430,45 @@ def test_provider_open_rejects_a_path_outside_the_root_before_native_callback():
         assert opened == []
 
 
+def test_provider_open_rejects_executable_files_and_does_not_invoke_native_callback():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "allowed"
+        root.mkdir()
+        executable = root / "installer.exe"
+        executable.write_bytes(b"MZ")
+        opened = []
+        provider = FilesystemProvider(
+            allowed_roots=(root,),
+            scope_id="project:haven",
+            clock=lambda: NOW,
+            open_path=opened.append,
+        )
+        records = {r.locator: r for r in provider.observe()}
+
+        result = provider.execute_provider(
+            ProviderCommand(
+                request_id="open-executable",
+                provider_id="local_filesystem",
+                capability="filesystem.open",
+                target_resource_id="file:installer",
+                parameters=(("path", str(executable)),),
+                requested_at=NOW,
+            )
+        )
+
+    assert "filesystem.open" not in records[str(executable)].capabilities
+    assert result.success is False
+    assert "filesystem.open is not available" in result.detail
+    assert opened == []
+
+
 def test_provider_command_with_the_wrong_provider_id_fails_closed():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "allowed"
         root.mkdir()
-        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        provider = FilesystemProvider(
+            allowed_roots=(root,), scope_id="project:haven", read_only=False, clock=lambda: NOW
+        )
         result = provider.execute_provider(
             ProviderCommand(
                 request_id="wrong-provider",
@@ -429,7 +493,9 @@ def test_create_folder_succeeds_and_verifies():
         root.mkdir()
         target = root / "archive"
 
-        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        provider = FilesystemProvider(
+            allowed_roots=(root,), scope_id="project:haven", read_only=False, clock=lambda: NOW
+        )
         result = provider.execute(_command("filesystem.create_folder", path=str(target)))
         assert result.success is True
         assert target.is_dir()
@@ -442,7 +508,9 @@ def test_create_folder_refuses_to_overwrite_an_existing_path():
         target = root / "archive"
         target.mkdir()
 
-        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        provider = FilesystemProvider(
+            allowed_roots=(root,), scope_id="project:haven", read_only=False, clock=lambda: NOW
+        )
         result = provider.execute(_command("filesystem.create_folder", path=str(target)))
         assert result.success is False
         assert "already exists" in result.detail
@@ -456,7 +524,9 @@ def test_copy_leaves_the_source_in_place():
         source.write_text("original")
         destination = root / "b.txt"
 
-        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        provider = FilesystemProvider(
+            allowed_roots=(root,), scope_id="project:haven", read_only=False, clock=lambda: NOW
+        )
         result = provider.execute(_command("filesystem.copy", source=str(source), destination=str(destination)))
         assert result.success is True
         assert source.read_text() == "original"
@@ -472,7 +542,9 @@ def test_copy_refuses_to_overwrite_an_existing_destination():
         destination = root / "b.txt"
         destination.write_text("do not touch me")
 
-        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        provider = FilesystemProvider(
+            allowed_roots=(root,), scope_id="project:haven", read_only=False, clock=lambda: NOW
+        )
         result = provider.execute(_command("filesystem.copy", source=str(source), destination=str(destination)))
         assert result.success is False
         assert destination.read_text() == "do not touch me"
@@ -487,7 +559,9 @@ def test_move_relocates_the_file_and_source_is_gone():
         destination = root / "sub" / "a.txt"
         (root / "sub").mkdir()
 
-        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        provider = FilesystemProvider(
+            allowed_roots=(root,), scope_id="project:haven", read_only=False, clock=lambda: NOW
+        )
         result = provider.execute(_command("filesystem.move", source=str(source), destination=str(destination)))
         assert result.success is True
         assert not source.exists()
@@ -501,7 +575,9 @@ def test_rename_changes_only_the_final_path_component():
         source = root / "draft.txt"
         source.write_text("v1")
 
-        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        provider = FilesystemProvider(
+            allowed_roots=(root,), scope_id="project:haven", read_only=False, clock=lambda: NOW
+        )
         result = provider.execute(_command("filesystem.rename", source=str(source), new_name="final.txt"))
         assert result.success is True
         assert not source.exists()
@@ -516,7 +592,9 @@ def test_rename_refuses_to_overwrite_an_existing_sibling():
         source.write_text("v1")
         (root / "final.txt").write_text("already here")
 
-        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        provider = FilesystemProvider(
+            allowed_roots=(root,), scope_id="project:haven", read_only=False, clock=lambda: NOW
+        )
         result = provider.execute(_command("filesystem.rename", source=str(source), new_name="final.txt"))
         assert result.success is False
         assert source.exists()
@@ -527,7 +605,9 @@ def test_move_of_a_nonexistent_source_fails_cleanly():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "allowed"
         root.mkdir()
-        provider = FilesystemProvider(allowed_roots=(root,), scope_id="project:haven", clock=lambda: NOW)
+        provider = FilesystemProvider(
+            allowed_roots=(root,), scope_id="project:haven", read_only=False, clock=lambda: NOW
+        )
         result = provider.execute(
             _command("filesystem.move", source=str(root / "ghost.txt"), destination=str(root / "elsewhere.txt"))
         )
