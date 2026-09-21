@@ -61,11 +61,12 @@ def test_search_with_no_resources_returns_no_hits():
 def test_search_finds_a_saved_resource_and_its_related_resource():
     with tempfile.TemporaryDirectory() as tmp:
         with _boot(str(Path(tmp) / "data")) as (instance, port):
+            scope_id = instance.director.household_id
             instance.resources.save(
                 ResourceRecord(
                     resource_id="doc:proposal-v7",
                     resource_type="document",
-                    scope_id="project:haven",
+                    scope_id=scope_id,
                     provider_id="local_computer",
                     title="NASA LIVEI proposal v7",
                     locator=None,
@@ -77,7 +78,7 @@ def test_search_finds_a_saved_resource_and_its_related_resource():
                 ResourceRecord(
                     resource_id="repo:haven",
                     resource_type="repository",
-                    scope_id="project:haven",
+                    scope_id=scope_id,
                     provider_id="local_computer",
                     title="haven",
                     locator=None,
@@ -91,7 +92,7 @@ def test_search_finds_a_saved_resource_and_its_related_resource():
                     subject="repo:haven",
                     predicate=predicates.BELONGS_TO,
                     object="doc:proposal-v7",
-                    scope_id="project:haven",
+                    scope_id=scope_id,
                     state=ClaimState.OBSERVED,
                     created_at=NOW,
                 )
@@ -115,11 +116,12 @@ def test_search_survives_a_restart():
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = str(Path(tmp) / "data")
         with _boot(data_dir) as (instance, _):
+            scope_id = instance.director.household_id
             instance.resources.save(
                 ResourceRecord(
                     resource_id="doc:a",
                     resource_type="document",
-                    scope_id="project:haven",
+                    scope_id=scope_id,
                     provider_id="local_computer",
                     title="nasa report",
                     locator=None,

@@ -9,6 +9,9 @@ build/
 
 # Compiled native-library artifacts are build output, not source.
 native/haven-bt/build/
+# WinUI/.NET desktop build output is generated locally and must not be committed.
+native/Haven.Desktop/bin/
+native/Haven.Desktop/obj/
 *.so
 *.dll
 *.dylib
