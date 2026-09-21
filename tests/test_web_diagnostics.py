@@ -357,11 +357,12 @@ def test_choose_data_dir_moves_and_rebinds_resources_and_ontology() -> None:
         with _boot(Path(old_dir)) as (server, _director, port):
             from haven.resources import ResourceRecord
 
+            scope_id = server.director.household_id
             server.resources.save(
                 ResourceRecord(
                     resource_id="file:before-move.txt",
                     resource_type="file",
-                    scope_id="project:haven",
+                    scope_id=scope_id,
                     provider_id="local_computer",
                     title="before-move.txt",
                     locator=None,

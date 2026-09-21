@@ -1,0 +1,84 @@
+<Window
+    x:Class="Haven.Desktop.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="HAVEN">
+    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid Padding="24,18" ColumnSpacing="18">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Image x:Name="LogoImage" Width="144" Height="48" Stretch="Uniform" />
+            <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="Local assistant for your computer, information, and connected world" Opacity="0.72" />
+            <TextBlock x:Name="ConnectionText" Grid.Column="2" VerticalAlignment="Center" Text="Connecting…" />
+        </Grid>
+
+        <NavigationView Grid.Row="1" IsBackButtonVisible="Collapsed" PaneDisplayMode="LeftCompact" SelectionChanged="OnNavigationChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="Today" Tag="today" />
+                <NavigationViewItem Content="Search" Tag="search" />
+                <NavigationViewItem Content="Memory" Tag="memory" />
+                <NavigationViewItem Content="Home" Tag="home" />
+                <NavigationViewItem Content="Models" Tag="models" />
+                <NavigationViewItem Content="Settings" Tag="settings" />
+            </NavigationView.MenuItems>
+
+            <ScrollViewer Padding="32,24">
+                <StackPanel MaxWidth="980" Spacing="20">
+                    <TextBlock x:Name="PageTitle" FontSize="32" FontWeight="SemiBold" Text="HAVEN" />
+                    <TextBlock x:Name="PageDescription" FontSize="16" Opacity="0.72" Text="One continuous assistant across your computer and connected world." TextWrapping="Wrap" />
+
+                    <StackPanel x:Name="SearchPanel" Spacing="12" Visibility="Collapsed">
+                        <TextBox x:Name="SearchBox" PlaceholderText="Ask HAVEN or find anything…" KeyDown="OnSearchKeyDown" />
+                        <Button Content="Find" Click="OnSearchClicked" HorizontalAlignment="Left" />
+                        <ListView x:Name="SearchResults" SelectionMode="None" />
+                    </StackPanel>
+
+                    <StackPanel x:Name="MemoryPanel" Spacing="16" Visibility="Collapsed">
+                        <StackPanel Spacing="4">
+                            <TextBlock FontSize="20" Text="What HAVEN knows" />
+                            <TextBlock Text="Inspect what was remembered, where it came from, and how certain it is." TextWrapping="Wrap" Opacity="0.72" />
+                        </StackPanel>
+                        <Grid ColumnSpacing="18">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="1.2*" />
+                            </Grid.ColumnDefinitions>
+                            <ListView x:Name="MemoryClaims" SelectionChanged="OnMemorySelectionChanged" MaxHeight="560" />
+                            <Border Grid.Column="1" Padding="18" CornerRadius="10" BorderThickness="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                                <StackPanel Spacing="12">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="470">
+                                        <TextBlock x:Name="MemoryDetailText" Text="Select a memory to inspect its evidence." TextWrapping="Wrap" />
+                                    </ScrollViewer>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button x:Name="MemoryCorrectButton" Content="Correct" Click="OnMemoryCorrectClicked" IsEnabled="False" />
+                                        <Button x:Name="MemoryStaleButton" Content="Mark stale" Click="OnMemoryStaleClicked" IsEnabled="False" />
+                                        <Button x:Name="MemoryForgetButton" Content="Forget" Click="OnMemoryForgetClicked" IsEnabled="False" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="MemoryActionStatus" TextWrapping="Wrap" Opacity="0.72" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel x:Name="HomePanel" Spacing="12">
+                        <TextBlock FontSize="20" Text="What do you want to do?" />
+                        <TextBox x:Name="ComposerBox" PlaceholderText="Ask HAVEN…" KeyDown="OnComposerKeyDown" />
+                        <Button Content="Ask HAVEN" Click="OnComposerClicked" HorizontalAlignment="Left" />
+                        <TextBlock x:Name="ResponseText" TextWrapping="Wrap" Opacity="0.86" />
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </NavigationView>
+    </Grid>
+</Window>

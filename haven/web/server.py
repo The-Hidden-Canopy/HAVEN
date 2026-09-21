@@ -19,6 +19,7 @@ from threading import Lock
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..models import ModelManager, inspect_folder
+from ..ipc import IpcDispatcher
 from ..models.jobs import DownloadJobManager, job_to_dict
 from ..models.storage import default_models_root
 from .application import build_application
@@ -221,6 +222,224 @@ class HavenWebServer(ThreadingHTTPServer):
             return {"host": "browser", "capabilities": []}
         return {"host": "desktop", "capabilities": ["folder_picker"]}
 
+    def rotate_bootstrap_token(self, token: str) -> None:
+        """Install the one-shot nonce for the next desktop window.
+
+        The resident server outlives individual Edge windows. A new window
+        therefore needs a new URL capability after the previous bootstrap was
+        consumed; the session cookie remains unchanged.
+        """
+
+        if not isinstance(token, str) or not token:
+            raise ValueError("desktop bootstrap token must be a non-empty string")
+        with self._bootstrap_lock:
+            self._bootstrap_token = token
+
+    def build_ipc_dispatcher(self) -> IpcDispatcher:
+        """Build the native-client adapter over existing governed services.
+
+        This is intentionally an adapter, not a second application runtime.
+        Mutating methods delegate to the same ``SetupService``,
+        ``HavenApplication`` and ``ComputerActionService`` instances used by
+        the debug web surface.  The native client receives only the current
+        local household scope until ``IdentityProvider`` membership policy is
+        implemented; arbitrary caller-supplied scopes are rejected here.
+        """
+
+        household_id = self.director.household_id
+
+        def _visible_scope_ids(params: dict) -> tuple[str, ...]:
+            requested = params.get("scope_ids", ())
+            if requested is None:
+                requested = ()
+            if not isinstance(requested, (list, tuple)) or any(
+                not isinstance(scope_id, str) or not scope_id.strip() for scope_id in requested
+            ):
+                raise ValueError("scope_ids must be a list of non-empty strings")
+            requested_ids = tuple(requested)
+            if requested_ids and set(requested_ids) != {household_id}:
+                raise ValueError("the native client may only query its authenticated household scope")
+            return (household_id,)
+
+        def _search(params: dict) -> dict:
+            text = params.get("text")
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("a non-empty 'text' query is required")
+            resource_types = params.get("resource_types", ())
+            if not isinstance(resource_types, (list, tuple)) or any(
+                not isinstance(value, str) or not value.strip() for value in resource_types
+            ):
+                raise ValueError("resource_types must be a list of non-empty strings")
+            limit = params.get("limit", 20)
+            if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+                raise ValueError("limit must be an integer between 1 and 200")
+            include_stale = params.get("include_stale", False)
+            if not isinstance(include_stale, bool):
+                raise ValueError("include_stale must be a boolean")
+            query = SearchQuery(
+                text=text,
+                scope_ids=_visible_scope_ids(params),
+                resource_types=tuple(resource_types),
+                limit=limit,
+                include_stale=include_stale,
+            )
+            hits = self.search.search(query)
+            return {
+                "hits": [
+                    {
+                        "resource_id": hit.resource_id,
+                        "score": hit.score,
+                        "reason": hit.reason,
+                        "matched_refs": list(hit.matched_refs),
+                        "resource": (
+                            resource_record_to_dict(resource)
+                            if (resource := self.resources.get(hit.resource_id)) is not None
+                            else None
+                        ),
+                    }
+                    for hit in hits
+                ]
+            }
+
+        def _knowledge_claims(params: dict) -> dict:
+            include_stale = params.get("include_stale", False)
+            if not isinstance(include_stale, bool):
+                raise ValueError("include_stale must be a boolean")
+            claims = self.knowledge.list_claims(
+                scope_id=_visible_scope_ids(params)[0],
+                include_stale=include_stale,
+            )
+            return {"claims": [claim_to_dict(claim) for claim in claims[:200]]}
+
+        def _knowledge_claim(params: dict) -> dict:
+            claim_id = params.get("claim_id")
+            if not isinstance(claim_id, str) or not claim_id.strip():
+                raise ValueError("a non-empty 'claim_id' is required")
+            claim = self.claims.get(claim_id.strip())
+            if claim is None or claim.scope_id != _visible_scope_ids(params)[0]:
+                # Keep the native surface fail-closed and avoid confirming
+                # whether a claim in another scope exists.
+                raise ValueError("unknown claim")
+            payload = claim_to_dict(claim)
+            payload["fingerprint"] = claim_fingerprint(claim)
+            payload["sources"] = [
+                {
+                    "ref": ref,
+                    "resource": (
+                        resource_record_to_dict(resource)
+                        if (resource := self.resources.get(ref)) is not None
+                        else None
+                    ),
+                }
+                for ref in claim.source_refs
+            ]
+            payload["contradictions"] = [
+                claim_to_dict(found) for found in self.claims.contradictions_of(claim.claim_id)
+            ]
+            payload["superseded_claims"] = [
+                claim_to_dict(found) for found in self.claims.supersedes_of(claim.claim_id)
+            ]
+            return {"claim": payload}
+
+        def _knowledge_owner_actor() -> str:
+            if not getattr(self.director, "has_declared_owner", False):
+                raise ValueError("a declared owner is required for knowledge changes")
+            principal = getattr(self.director, "owner", None)
+            actor = getattr(principal, "actor_id", None)
+            if not isinstance(actor, str) or not actor.strip() or actor == "no_owner_declared":
+                raise ValueError("a declared owner is required for knowledge changes")
+            return actor.strip()
+
+        def _knowledge_mutation_claim(params: dict):
+            claim_id = params.get("claim_id")
+            if not isinstance(claim_id, str) or not claim_id.strip():
+                raise ValueError("a non-empty 'claim_id' is required")
+            claim = self.claims.get(claim_id.strip())
+            if claim is None or claim.scope_id != _visible_scope_ids(params)[0]:
+                raise ValueError("unknown claim")
+            _knowledge_owner_actor()
+            return claim
+
+        def _knowledge_correct(params: dict) -> dict:
+            claim = _knowledge_mutation_claim(params)
+            proposition = params.get("proposition")
+            if not isinstance(proposition, str) or not proposition.strip():
+                raise ValueError("a non-empty 'proposition' is required")
+            result = self.knowledge.correct_claim(
+                claim.claim_id,
+                proposition=proposition,
+                actor=_knowledge_owner_actor(),
+            )
+            if result.claim is None:
+                raise ValueError(result.reason or "correction rejected")
+            return {"claim": claim_to_dict(result.claim)}
+
+        def _knowledge_stale(params: dict) -> dict:
+            claim = _knowledge_mutation_claim(params)
+            changed = self.knowledge.mark_claim_stale(claim.claim_id)
+            current = self.claims.get(claim.claim_id)
+            return {
+                "changed": changed,
+                "claim": claim_to_dict(current or claim),
+            }
+
+        def _knowledge_forget(params: dict) -> dict:
+            claim = _knowledge_mutation_claim(params)
+            self.knowledge.forget_claim(claim, forgotten_by=_knowledge_owner_actor())
+            current = self.claims.get(claim.claim_id)
+            return {"claim": claim_to_dict(current or claim)}
+
+        def _computer_action(params: dict) -> dict:
+            action = params.get("action")
+            parameters = params.get("parameters", {})
+            if parameters is not None and not isinstance(parameters, dict):
+                raise ValueError("parameters must be an object")
+            return self.computer_actions.request_action(
+                action=action,
+                resource_id=params.get("resource_id"),
+                parameters=parameters,
+                justification=params.get("justification"),
+            )
+
+        def _computer_confirm(params: dict) -> dict:
+            return self.computer_actions.confirm_action(request_id=params.get("request_id"))
+
+        def _computer_deny(params: dict) -> dict:
+            return self.computer_actions.deny_action(request_id=params.get("request_id"))
+
+        def _ask(params: dict) -> dict:
+            text = params.get("text")
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("a non-empty 'text' request is required")
+            focus = params.get("focus")
+            if focus is not None and not isinstance(focus, str):
+                raise ValueError("focus must be a string or null")
+            return self.director.chat(text, focus)
+
+        return IpcDispatcher(
+            {
+                "host.capabilities": lambda _params: {
+                    **self.host_capabilities(),
+                    "ipc_protocol": "haven-ipc-1",
+                    "transport": "windows_named_pipe",
+                },
+                "state.get": lambda _params: self.director.state(),
+                "setup.status": lambda _params: self.setup.status(),
+                "models.overview": lambda _params: overview_payload(self.models),
+                "search.query": _search,
+                "knowledge.claims": _knowledge_claims,
+                "knowledge.claim": _knowledge_claim,
+                "knowledge.claim.correct": _knowledge_correct,
+                "knowledge.claim.stale": _knowledge_stale,
+                "knowledge.claim.forget": _knowledge_forget,
+                "composer.ask": _ask,
+                "computer.action.request": _computer_action,
+                "computer.action.confirm": _computer_confirm,
+                "computer.action.deny": _computer_deny,
+                "computer.action.history": lambda _params: self.computer_actions.history(),
+            }
+        )
+
     def _build_director(self) -> HavenApplication:
         # Keep rebuilds on the same explicit mode: normal boot remains a real
         # installation even when every provider is currently unavailable.
@@ -359,6 +578,37 @@ class _Handler(BaseHTTPRequestHandler):
             return True
         self._send_json(401, {"ok": False, "error": "HAVEN desktop session required"})
         return False
+
+    def _visible_scope_ids(self, params: dict, *, key: str) -> tuple[str, ...] | None:
+        """Resolve the local visible-scope boundary for a web request.
+
+        The wider ``IdentityProvider.memberships()`` contract is not wired
+        yet, so a local HAVEN installation has exactly one visible scope: its
+        current household.  An omitted filter means that scope; a caller may
+        repeat it explicitly, but cannot turn a query parameter into an
+        authorization grant for another scope.
+        """
+
+        requested = params.get(key, [])
+        if not isinstance(requested, list) or any(
+            not isinstance(scope_id, str) or not scope_id.strip() for scope_id in requested
+        ):
+            self._send_json(400, {"ok": False, "error": f"{key} must contain non-empty scope ids"})
+            return None
+        visible = (self.director.household_id,)
+        if requested and set(requested) != set(visible):
+            self._send_json(
+                403,
+                {
+                    "ok": False,
+                    "error": "the requested scope is not visible to this HAVEN installation",
+                },
+            )
+            return None
+        return visible
+
+    def _claim_is_visible(self, claim) -> bool:
+        return claim.scope_id == self.director.household_id
 
     def _handle_desktop_bootstrap(self) -> None:
         supplied = parse_qs(urlsplit(self.path).query).get("session", [""])[0]
@@ -1284,7 +1534,9 @@ class _Handler(BaseHTTPRequestHandler):
         if not text:
             self._send_json(200, {"ok": False, "error": "a non-empty 'q' query parameter is required"})
             return
-        scope_ids = tuple(v for v in params.get("scope", []) if v)
+        scope_ids = self._visible_scope_ids(params, key="scope")
+        if scope_ids is None:
+            return
         resource_types = tuple(v for v in params.get("type", []) if v)
         try:
             limit = int(params.get("limit", ["20"])[0])
@@ -1351,7 +1603,10 @@ class _Handler(BaseHTTPRequestHandler):
         return payload
 
     def _send_knowledge_claims(self, params: dict) -> None:
-        scope_id = params.get("scope", [None])[0] or None
+        scope_ids = self._visible_scope_ids(params, key="scope")
+        if scope_ids is None:
+            return
+        scope_id = scope_ids[0]
         state_value = params.get("state", [None])[0] or None
         include_stale = params.get("include_stale", ["false"])[0].strip().lower() in ("1", "true", "yes")
         try:
@@ -1370,7 +1625,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _send_knowledge_claim(self, claim_id: str) -> None:
         claim = self.server.claims.get(claim_id)
-        if claim is None:
+        if claim is None or not self._claim_is_visible(claim):
             self._send_json(404, {"ok": False, "error": "unknown claim"})
             return
         self._send_json(200, {"ok": True, "claim": self._claim_payload(claim, detail=True)})
@@ -1385,7 +1640,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         claim_id, action = (unquote(value) for value in match.groups())
         claim = self.server.claims.get(claim_id)
-        if claim is None:
+        if claim is None or not self._claim_is_visible(claim):
             self._send_json(404, {"ok": False, "error": "unknown claim"})
             return
         # Never trust an actor id supplied in the request body. Knowledge

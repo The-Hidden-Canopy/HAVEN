@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import http.client
 import os
 import tempfile
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -25,8 +27,10 @@ def test_repository_windows_launcher_uses_desktop_as_the_primary_host():
 
 
 class _FakeProcess:
-    def __init__(self, args):
+    def __init__(self, args, **kwargs):
         self.args = args
+        self.kwargs = kwargs
+        self.stdin = _FakeStdin() if kwargs.get("stdin") is not None else None
         self.returncode = None
         self.terminated = False
 
@@ -45,14 +49,42 @@ class _FakeProcess:
         self.returncode = -9
 
 
+class _FakeStdin:
+    def __init__(self):
+        self.data = bytearray()
+        self.closed = False
+
+    def write(self, value):
+        self.data.extend(value)
+        return len(value)
+
+    def flush(self):
+        return None
+
+    def close(self):
+        self.closed = True
+
+
+def _bootstrap_status(url: str) -> int:
+    parsed = urlsplit(url)
+    connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=10)
+    try:
+        connection.request("GET", parsed.path + "?" + parsed.query)
+        response = connection.getresponse()
+        response.read()
+        return response.status
+    finally:
+        connection.close()
+
+
 def test_shell_starts_loopback_server_and_edge_app_mode_with_a_fresh_session():
     with tempfile.TemporaryDirectory() as tmp:
         edge = Path(tmp) / "msedge.exe"
         edge.write_bytes(b"test executable placeholder")
         processes = []
 
-        def launch(args):
-            process = _FakeProcess(args)
+        def launch(args, **kwargs):
+            process = _FakeProcess(args, **kwargs)
             processes.append(process)
             return process
 
@@ -175,6 +207,88 @@ def test_background_activation_creates_a_window_and_reopens_after_close():
             assert len(processes) == 2
             assert shell.process is processes[1]
             assert shell.process is not first_process
+        finally:
+            shell.close()
+
+
+def test_recreated_desktop_window_gets_a_fresh_http_bootstrap_nonce():
+    with tempfile.TemporaryDirectory() as tmp:
+        edge = Path(tmp) / "msedge.exe"
+        edge.write_bytes(b"test executable placeholder")
+        processes = []
+
+        def launch(args):
+            process = _FakeProcess(args)
+            processes.append(process)
+            return process
+
+        shell = DesktopShell(
+            data_dir=Path(tmp) / "data",
+            demo=True,
+            background=True,
+            port=0,
+            edge_path=edge,
+            process_factory=launch,
+        )
+        shell.start()
+        try:
+            assert shell._activate_existing_window() is True
+            first_url = shell.bootstrap_url
+            assert first_url is not None
+            assert _bootstrap_status(first_url) == 303
+            first_session = parse_qs(urlsplit(first_url).query)["session"][0]
+
+            processes[0].returncode = 0
+            assert shell._activate_existing_window() is True
+            second_url = shell.bootstrap_url
+            assert second_url is not None
+            second_session = parse_qs(urlsplit(second_url).query)["session"][0]
+            assert second_session != first_session
+
+            # The consumed first URL cannot be replayed, but the resident's
+            # newly issued URL authenticates the replacement window.
+            assert _bootstrap_status(first_url) == 404
+            assert _bootstrap_status(second_url) == 303
+        finally:
+            shell.close()
+
+
+def test_native_shell_starts_the_winui_client_with_named_pipe_credentials():
+    with tempfile.TemporaryDirectory() as tmp:
+        native = Path(tmp) / "Haven.Desktop.exe"
+        native.write_bytes(b"test native executable placeholder")
+        processes = []
+
+        def launch(args, **kwargs):
+            process = _FakeProcess(args, **kwargs)
+            processes.append(process)
+            return process
+
+        shell = DesktopShell(
+            data_dir=Path(tmp) / "data",
+            native=True,
+            native_path=native,
+            port=0,
+            process_factory=launch,
+        )
+        shell.start()
+        try:
+            assert shell.native_ipc is not None
+            assert shell.native_ipc.is_running
+            assert len(processes) == 1
+            args = processes[0].args
+            assert str(native) in args
+            assert "--pipe-name" in args
+            assert shell.native_ipc.pipe_name in args
+            assert "--ipc-token-stdin" in args
+            assert "--ipc-token" not in args
+            assert shell.native_ipc.auth_token not in args
+            assert "stdin" in processes[0].kwargs
+            assert processes[0].stdin.data == (shell.native_ipc.auth_token + "\n").encode("utf-8")
+            assert processes[0].stdin.closed is True
+            assert shell.server_thread is None
+            assert shell.server.socket.fileno() == -1
+            assert not any(argument.startswith("--app=") for argument in args)
         finally:
             shell.close()
 
