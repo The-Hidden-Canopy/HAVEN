@@ -1,16 +1,16 @@
-"""Windows desktop wrapper for the existing HAVEN local renderer.
+"""Windows desktop host for HAVEN's compatibility and native clients.
 
 This is intentionally a host, not a second UI implementation.  The shell:
 
-* starts the loopback-only HAVEN server on an ephemeral port;
-* gives that launch a fresh, HTTP-only session cookie;
-* opens the existing renderer in Edge app mode; and
-* owns shutdown when the app window exits.
+* starts the Python HAVEN service graph;
+* uses a local named pipe for the native WinUI client when ``--native`` is
+  selected; or
+* gives the compatibility renderer a fresh HTTP-only session cookie and opens
+  it in Edge app mode.
 
-Edge app mode is the zero-dependency first shell for this repository.  It
-uses the installed WebView-capable browser without making the project depend
-on a Python GUI framework or a native UI rewrite.  A later WebView2 host can
-replace only this module while keeping the server and renderer contracts.
+The native path does not expose the compatibility HTTP socket.  The Edge path
+remains available during the native UI parity migration without creating a
+second authority or provider runtime.
 """
 
 from __future__ import annotations
@@ -33,9 +33,11 @@ from urllib.parse import quote
 
 from haven.web.server import make_server
 from haven.web.setup_config import default_data_dir
+from haven.ipc.named_pipe import installation_id_for_data_dir, installation_pipe_name
 
 from .folder_picker import choose_folder
 from .instance_lock import InstanceAlreadyRunning, InstanceLock
+from .native_host import NativeIpcHost
 
 
 class DesktopShellError(RuntimeError):
@@ -394,6 +396,45 @@ def find_edge_executable() -> Path | None:
     return None
 
 
+def _native_process_ids(pipe_name: str) -> tuple[int, ...]:
+    """Find native client processes attached to one installation pipe."""
+
+    if os.name != "nt":
+        return ()
+    marker = pipe_name.replace("'", "''")
+    script = (
+        "$pipe = '" + marker + "'; "
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $_.Name -eq 'Haven.Desktop.exe' -and $_.CommandLine "
+        "-and $_.CommandLine.Contains($pipe) } | "
+        "Select-Object -ExpandProperty ProcessId"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ()
+    process_ids: list[int] = []
+    for line in result.stdout.splitlines():
+        try:
+            process_id = int(line.strip())
+        except ValueError:
+            continue
+        if process_id > 0:
+            process_ids.append(process_id)
+    return tuple(dict.fromkeys(process_ids))
+
+
+def _activate_native_existing_window(data_dir: Path) -> bool:
+    pipe_name = installation_pipe_name(installation_id_for_data_dir(data_dir))
+    return _activate_process_windows(set(_native_process_ids(pipe_name)))
+
+
 def _edge_profile_process_ids(profile: Path) -> tuple[int, ...]:
     """Find Edge processes belonging to one generated launch profile."""
 
@@ -450,7 +491,7 @@ def _terminate_edge_profile(profile: Path) -> None:
 
 
 class DesktopShell:
-    """Own one HAVEN server and, when requested, one app-mode browser."""
+    """Own one HAVEN service graph and one optional desktop client."""
 
     def __init__(
         self,
@@ -460,6 +501,8 @@ class DesktopShell:
         edge_path: str | Path | None = None,
         port: int = 0,
         background: bool = False,
+        native: bool = False,
+        native_path: str | Path | None = None,
         server_factory: Callable = make_server,
         process_factory: Callable = subprocess.Popen,
         folder_picker: Callable[[], str | None] = choose_folder,
@@ -470,11 +513,14 @@ class DesktopShell:
         self.edge_path = Path(edge_path) if edge_path is not None else None
         self.port = port
         self.background = background
+        self.native = native
+        self.native_path = Path(native_path) if native_path is not None else None
         self._server_factory = server_factory
         self._process_factory = process_factory
         self._folder_picker = folder_picker
         self._window_activator = window_activator
         self.server = None
+        self.native_ipc: NativeIpcHost | None = None
         self.server_thread: Thread | None = None
         self.process = None
         self.session_token: str | None = None
@@ -494,6 +540,30 @@ class DesktopShell:
                 "the existing WebUI remains available with python -m haven.web.server"
             )
         return edge
+
+    def _resolve_native(self) -> Path:
+        native = self.native_path
+        if native is None:
+            configured = os.environ.get("HAVEN_NATIVE_CLIENT")
+            if configured:
+                native = Path(configured)
+            else:
+                native = (
+                    Path(__file__).resolve().parents[2]
+                    / "native"
+                    / "Haven.Desktop"
+                    / "bin"
+                    / "x64"
+                    / "Debug"
+                    / "net8.0-windows10.0.19041.0"
+                    / "Haven.Desktop.exe"
+                )
+        if not native.is_file():
+            raise DesktopShellError(
+                "HAVEN Native Desktop is not built; build native/Haven.Desktop "
+                "or set HAVEN_NATIVE_CLIENT"
+            )
+        return native
 
     def _before_data_dir_changed(self, data_dir: Path) -> None:
         """Reserve a target installation lock before setup moves anything."""
@@ -584,12 +654,18 @@ class DesktopShell:
     def _open_window_locked(self) -> bool:
         """Create the Edge app window without changing resident-core state."""
 
-        if self.server is None or self.bootstrap_token is None:
+        if self.server is None:
             return False
         if self._window_is_alive():
             return True
         self._discard_dead_window_locked()
         edge = self._resolve_edge()
+        # Bootstrap URLs are one-shot capabilities. The resident server
+        # survives when an Edge window closes, so rotate the URL nonce before
+        # every new window while keeping the long-lived session cookie secret
+        # unchanged.
+        self.bootstrap_token = secrets.token_urlsafe(32)
+        self.server.rotate_bootstrap_token(self.bootstrap_token)
         profile = tempfile.TemporaryDirectory(prefix="haven-desktop-edge-")
         port = self.server.server_address[1]
         bootstrap_url = (
@@ -619,6 +695,38 @@ class DesktopShell:
         with self._window_lock:
             return self._open_window_locked()
 
+    def _open_native_window(self) -> bool:
+        if self.native_ipc is None:
+            return False
+        native = self._resolve_native()
+        if self._window_is_alive():
+            return True
+        self._discard_dead_window_locked()
+        # Do not put the IPC bearer token in the child command line.  On
+        # Windows, same-user processes can inspect command lines without
+        # needing the Core's named-pipe connection.  An inherited anonymous
+        # pipe carries the token once, then closes; the native client supports
+        # this handoff through `--ipc-token-stdin`.
+        process = self._process_factory(
+            [
+                str(native),
+                "--pipe-name",
+                self.native_ipc.pipe_name,
+                "--ipc-token-stdin",
+            ],
+            stdin=subprocess.PIPE,
+        )
+        self.process = process
+        token_stream = getattr(process, "stdin", None)
+        if token_stream is None:
+            raise DesktopShellError("native client did not expose an IPC token handoff pipe")
+        try:
+            token_stream.write((self.native_ipc.auth_token + "\n").encode("utf-8"))
+            token_stream.flush()
+        finally:
+            token_stream.close()
+        return True
+
     def _activate_existing_window(self) -> bool:
         if self._window_activator is not None:
             try:
@@ -627,7 +735,12 @@ class DesktopShell:
                 return False
         with self._window_lock:
             if not self._window_is_alive():
-                return self._open_window_locked()
+                return self._open_native_window() if self.native else self._open_window_locked()
+            if self.native:
+                # The native client owns its own activation/focus bridge. The
+                # resident process is already alive, so activation is safely
+                # treated as handled until that bridge is added.
+                return True
             if self._edge_profile is None:
                 return False
             process_ids = set(_edge_profile_process_ids(Path(self._edge_profile.name)))
@@ -666,19 +779,35 @@ class DesktopShell:
                 on_data_dir_changed=self._on_data_dir_changed,
                 on_data_dir_change_failed=self._on_data_dir_change_failed,
             )
-            self.server_thread = Thread(
-                target=self.server.serve_forever,
-                name="haven-desktop-server",
-                daemon=True,
-            )
-            self.server_thread.start()
-            port = self.server.server_address[1]
-            self._publish_activation_record()
-            if not self.background:
+            if self.native:
+                self.native_ipc = NativeIpcHost(server=self.server, data_dir=self.data_dir).start()
+            if self.native:
+                # Native mode talks to the same service graph through the
+                # named pipe.  Do not leave the compatibility HTTP socket
+                # listening just because the transitional composition object
+                # is still a HavenWebServer instance.
+                self.server.server_close()
+            else:
+                self.server_thread = Thread(
+                    target=self.server.serve_forever,
+                    name="haven-desktop-server",
+                    daemon=True,
+                )
+                self.server_thread.start()
+                self._publish_activation_record()
+            if self.native:
+                if not self.background:
+                    with self._window_lock:
+                        self._open_native_window()
+            elif not self.background:
                 self._open_window()
         except InstanceAlreadyRunning as exc:
             self._instance_lock = None
-            activated = _request_activation(self.data_dir)
+            activated = (
+                _activate_native_existing_window(self.data_dir)
+                if self.native
+                else _request_activation(self.data_dir)
+            )
             detail = "; activation requested" if activated else ""
             raise DesktopShellAlreadyRunning(f"{exc}{detail}") from exc
         except Exception as exc:
@@ -690,6 +819,15 @@ class DesktopShell:
 
     def wait(self) -> int:
         if self.background:
+            if self.native:
+                if self.native_ipc is None:
+                    raise DesktopShellError("HAVEN Native Desktop is not running")
+                try:
+                    while self.native_ipc.is_running:
+                        time.sleep(1)
+                    return 0
+                finally:
+                    self.close()
             if self.server is None or self.server_thread is None:
                 raise DesktopShellError("HAVEN Desktop is not running")
             try:
@@ -742,12 +880,16 @@ class DesktopShell:
             _terminate_edge_profile(Path(edge_profile.name))
 
         if server is not None:
-            try:
-                server.shutdown()
-            except Exception:
-                pass
+            native_ipc = self.native_ipc
+            self.native_ipc = None
+            if native_ipc is not None:
+                native_ipc.stop()
             thread = self.server_thread
             if thread is not None:
+                try:
+                    server.shutdown()
+                except Exception:
+                    pass
                 thread.join(timeout=5)
             try:
                 server.server_close()
@@ -786,6 +928,16 @@ def main(argv: list[str] | None = None) -> int:
         help="run the resident local host without opening a window",
     )
     parser.add_argument(
+        "--native",
+        action="store_true",
+        help="use the compiled WinUI client instead of the compatibility Edge host",
+    )
+    parser.add_argument(
+        "--native-path",
+        default=None,
+        help="path to Haven.Desktop.exe (defaults to the repository Debug build)",
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=None,
@@ -793,7 +945,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     port = args.port if args.port is not None else (8080 if args.background else 0)
-    shell = DesktopShell(data_dir=args.data_dir, demo=args.demo, port=port, background=args.background)
+    shell = DesktopShell(
+        data_dir=args.data_dir,
+        demo=args.demo,
+        port=port,
+        background=args.background,
+        native=args.native,
+        native_path=args.native_path,
+    )
     try:
         return shell.run()
     except KeyboardInterrupt:
