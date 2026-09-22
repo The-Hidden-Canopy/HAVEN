@@ -84,6 +84,12 @@
             <span class="nav-label">Models</span>
           </a>
         </li>
+        <li data-view="plugins">
+          <a href="#">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2.5h2v2.2a1.3 1.3 0 0 0 2 0V2.5h2v3h1.5v2h-3a1.3 1.3 0 0 0 0 2h3v2h-2v2.2a1.3 1.3 0 0 1-2 0V11.5h-2v2.2a1.3 1.3 0 0 1-2 0V11.5H2.5v-2h2.2a1.3 1.3 0 0 0 0-2H2.5v-2H5z"/></svg>
+            <span class="nav-label">Plugins</span>
+          </a>
+        </li>
       </ul>
     </nav>
 
@@ -220,6 +226,19 @@
         </div>
 
         <div id="models-list"></div>
+      </section>
+
+      <section class="view view-plugins" aria-label="Plugins">
+        <div class="center-head">
+          <h1>PLUGINS</h1>
+          <div class="center-head-actions">
+            <span id="plugins-count" class="muted">&mdash;</span>
+            <button id="plugins-refresh" type="button" class="btn btn-sm">Refresh catalog</button>
+          </div>
+        </div>
+        <p class="model-note">A plugin never runs inside HAVEN and never sees live household state. Enabling one only lets the Hub relay this household's exported receipts to it &mdash; nothing else. See <a href="https://github.com/The-Hidden-Canopy/HAVEN/blob/main/docs/plugin-boundary.md" target="_blank" rel="noopener noreferrer">the plugin boundary contract</a>.</p>
+        <p id="plugins-catalog-error" class="model-error" hidden></p>
+        <div id="plugins-list"></div>
       </section>
 
       <section class="view view-placeholder" aria-label="Placeholder">

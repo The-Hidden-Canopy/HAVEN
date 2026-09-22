@@ -700,18 +700,32 @@ itself -- that seam is the whole point of `haven/models` and
 ## Relationship to the adjacent stack
 
 HAVEN is intentionally independent of the existing repositories at this
-stage. A future integration should exchange versioned, provenance-preserving
-artifacts rather than import private internals across project boundaries:
+stage. A plugin -- Ghost Teacher, TraceGlass, or a future third party --
+never runs inside HAVEN and never talks to a household's HAVEN instance
+directly. It reads versioned, provenance-preserving receipts a household
+explicitly exported, and only through the Hub's signed plugin catalog. See
+[`docs/plugin-boundary.md`](docs/plugin-boundary.md) for the full contract,
+including why this is a different relationship from the in-process
+`provider` contract in `docs/authoring-providers.md`.
 
 - Ghost Teacher can generate adversarial household situations and evaluate an
-  intelligence provider or planner against them.
-- HAVEN can provide real-world-shaped authority and consequence traces without
-  granting Ghost Teacher execution authority.
+  intelligence provider or planner against them, using exported evaluation
+  signals -- never live household state, never execution authority.
 - TraceGlass can reconstruct a HAVEN receipt as an
-  available-evidence -> belief -> candidate-action -> executed-action ->
-  consequence chain.
+  available-information -> inferred-belief -> candidate-action ->
+  executed-action -> consequence chain, from the export, never from a live
+  connection to a household.
 
-Those are integration directions, not claims that any live connection exists.
+The Hub-side plugin catalog exists, and so does the household side of
+*consuming* it: `haven/plugins` fetches and Ed25519-verifies the catalog,
+independently re-checks the boundary policy against a compromised or
+misconfigured Hub, and records local opt-in/opt-out through a Settings ->
+Plugins web view and `python -m haven.plugins`. What does not exist yet is
+the actual data path: the receipt-export side and the Hub-side relay from
+an export to a subscribed plugin. Enabling a plugin today records a
+household's choice; it does not yet cause any data to move. See
+`haven/plugins/catalog_client.py` and `docs/plugin-boundary.md` for the
+exact contract that relay must satisfy when it exists.
 
 ## License and ownership
 

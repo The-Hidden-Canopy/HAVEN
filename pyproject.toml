@@ -15,6 +15,11 @@ haven-desktop = "haven.desktop.shell:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# Only the plugin marketplace's catalog signature verification needs this.
+# Without it, haven.plugins still imports and runs; catalog fetches fail
+# closed with CatalogFetchError(code="verification_unavailable") instead
+# of trusting an unverified catalog. See haven/plugins/catalog_client.py.
+plugins = ["cryptography>=42"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
