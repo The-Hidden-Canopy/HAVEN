@@ -34,6 +34,12 @@ from .models_api import (
     overview_payload,
     scan_payload,
 )
+from ..plugins import PluginManager, PluginRegistry
+from .plugins_api import (
+    current_payload as plugins_current_payload,
+    marketplace_payload as plugins_marketplace_payload,
+    refresh_payload as plugins_refresh_payload,
+)
 from .receipts_api import action_chain, event_action_id
 from .service_manager import StartupManager
 from .folder_picker import choose_folder
@@ -63,6 +69,8 @@ _DEVICE_COMMAND_PATH = re.compile(r"^/api/devices/([^/]+)/command$")
 _SCHEDULER_ENABLED_PATH = re.compile(r"^/api/scheduler/rules/([^/]+)/enabled$")
 _JOB_DETAIL_PATH = re.compile(r"^/api/models/jobs/([^/]+)$")
 _JOB_CANCEL_PATH = re.compile(r"^/api/models/jobs/([^/]+)/cancel$")
+_PLUGIN_ENABLE_PATH = re.compile(r"^/api/plugins/([^/]+)/enable$")
+_PLUGIN_DISABLE_PATH = re.compile(r"^/api/plugins/([^/]+)/disable$")
 _CHAIN_PATH = re.compile(r"^/api/actions/([^/]+)/chain$")
 _KNOWLEDGE_CLAIM_PATH = re.compile(r"^/api/knowledge/claims/([^/]+)$")
 _KNOWLEDGE_CLAIM_ACTION_PATH = re.compile(r"^/api/knowledge/claims/([^/]+)/(correct|stale|forget)$")
@@ -144,6 +152,13 @@ class HavenWebServer(ThreadingHTTPServer):
         # lock, callbacks fired outside it).
         self.models = ModelManager(resolved_models_root)
         self.model_jobs = DownloadJobManager(self.models)
+        # The plugin marketplace is a separate concept from a model: it never
+        # runs in-process and never receives live household state (see
+        # docs/plugin-boundary.md). Enablement is local, file-backed state,
+        # same pattern as the model registry; the catalog itself is fetched
+        # from the Hub on demand, never at boot, so a network hiccup can
+        # never block startup.
+        self.plugins = PluginManager(PluginRegistry(Path(resolved_data_dir) / "plugins.json"), clock=clock)
         # The application factory always builds the real installation on a
         # normal boot. Only an explicit --demo constructor flag creates the
         # simulated household; a fresh install is a real, empty HAVEN world.
@@ -541,6 +556,10 @@ class _Handler(BaseHTTPRequestHandler):
         return self.server.model_jobs
 
     @property
+    def plugins(self) -> PluginManager:
+        return self.server.plugins
+
+    @property
     def setup_service(self) -> SetupService:
         return self.server.setup
 
@@ -689,6 +708,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, overview_payload(self.models))
         elif path == "/api/models/jobs":
             self._send_json(200, {"ok": True, "jobs": [job_to_dict(job) for job in self.model_jobs.list()]})
+        elif path == "/api/plugins":
+            self._send_json(200, plugins_current_payload(self.plugins))
         elif path == "/api/setup":
             self._send_json(200, self.setup_service.status())
         elif path == "/api/setup/providers/packages":
@@ -877,6 +898,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/models" or path.startswith("/api/models/"):
             self._handle_models_post(path)
+            return
+        if path.startswith("/api/plugins/"):
+            self._handle_plugins_post(path)
             return
         if path == "/api/setup" or path.startswith("/api/setup/"):
             self._handle_setup_post(path)
@@ -1407,6 +1431,29 @@ class _Handler(BaseHTTPRequestHandler):
         # Successful mutations all answer with the fresh models+roots payload;
         # the record itself is persisted state, the lists are the refetch.
         return models_payload(self.models)
+
+    def _handle_plugins_post(self, path: str) -> None:
+        if path == "/api/plugins/refresh":
+            try:
+                self._send_json(200, plugins_refresh_payload(self.plugins))
+            except Exception as exc:
+                self._send_json(200, {"ok": False, "error": str(exc)})
+            return
+        match = _PLUGIN_ENABLE_PATH.match(path) or _PLUGIN_DISABLE_PATH.match(path)
+        if not match:
+            self._send_json(404, {"error": "not found"})
+            return
+        plugin_id = unquote(match.group(1))
+        action = self.plugins.enable if _PLUGIN_ENABLE_PATH.match(path) else self.plugins.disable
+        try:
+            view = action(plugin_id)
+        except Exception as exc:
+            # UnknownPluginError (unlisted id) and InvalidPluginIdError (bad
+            # shape) both land here: an operational failure the UI shows
+            # inline, never a traceback.
+            self._send_json(200, {"ok": False, "error": str(exc)})
+            return
+        self._send_json(200, plugins_marketplace_payload(view))
 
     def _require_field(self, body: dict, name: str) -> str | None:
         value = body.get(name)

@@ -30,6 +30,10 @@ const els = {
   systemBody: $('#system-body'),
   modelsCount: $('#models-count'),
   modelsList: $('#models-list'),
+  pluginsCount: $('#plugins-count'),
+  pluginsList: $('#plugins-list'),
+  pluginsRefresh: $('#plugins-refresh'),
+  pluginsCatalogError: $('#plugins-catalog-error'),
   runtimesStrip: $('#runtimes-strip'),
   jobsSection: $('#jobs-section'),
   jobsList: $('#jobs-list'),
@@ -4227,6 +4231,120 @@ async function startModelDownload(url, errEl) {
   return true;
 }
 
+/* ---------- plugins ----------
+   A plugin never runs inside HAVEN and never receives live household
+   state (docs/plugin-boundary.md). This panel only shows what the Hub's
+   signed catalog says exists and lets the household opt a plugin in or
+   out — GET /api/plugins never touches the network, POST
+   /api/plugins/refresh does. */
+
+const pluginsState = { plugins: [], catalogVersion: null, catalogError: null };
+
+async function refreshPlugins({ forceCatalogFetch = false } = {}) {
+  try {
+    const resp = forceCatalogFetch
+      ? await postJSON('/api/plugins/refresh', {})
+      : await (await fetch('/api/plugins')).json();
+    if (resp && resp.ok) {
+      pluginsState.plugins = Array.isArray(resp.plugins) ? resp.plugins : [];
+      pluginsState.catalogVersion = resp.catalog_version || null;
+      pluginsState.catalogError = resp.catalog_error || null;
+    }
+  } catch {
+    // Network hiccup — the last-known state stays on screen below.
+  }
+  renderPlugins();
+}
+
+function renderPlugins() {
+  const plugins = pluginsState.plugins;
+  els.pluginsCount.textContent = plugins.length + (plugins.length === 1 ? ' plugin' : ' plugins');
+
+  if (pluginsState.catalogError) {
+    els.pluginsCatalogError.textContent = 'Catalog unavailable (' + pluginsState.catalogError + '); showing the last known list.';
+    els.pluginsCatalogError.hidden = false;
+  } else {
+    els.pluginsCatalogError.hidden = true;
+  }
+
+  els.pluginsList.textContent = '';
+  if (!plugins.length) {
+    const empty = document.createElement('p');
+    empty.className = 'sys-unavailable muted';
+    empty.textContent = 'No plugins in the catalog yet. Try "Refresh catalog".';
+    els.pluginsList.appendChild(empty);
+    return;
+  }
+  for (const plugin of plugins) els.pluginsList.appendChild(makePluginRow(plugin));
+}
+
+function makePluginRow(plugin) {
+  const row = document.createElement('div');
+  row.className = 'model-row';
+
+  const main = document.createElement('div');
+  main.className = 'model-main';
+
+  const name = document.createElement('span');
+  name.className = 'model-id';
+  name.textContent = plugin.display_name || plugin.plugin_id;
+  main.appendChild(name);
+
+  const meta = document.createElement('span');
+  meta.className = 'model-meta';
+  meta.textContent = [plugin.publisher, String(plugin.capability || '').replace(/_/g, ' ')]
+    .filter(Boolean)
+    .join(' · ');
+  main.appendChild(meta);
+
+  if (plugin.description) {
+    const desc = document.createElement('span');
+    desc.className = 'model-extras';
+    desc.textContent = plugin.description;
+    main.appendChild(desc);
+  }
+
+  const boundary = document.createElement('span');
+  boundary.className = 'model-extras';
+  boundary.textContent = 'Data boundary: ' + String(plugin.data_boundary || '').replace(/_/g, ' ');
+  main.appendChild(boundary);
+
+  row.appendChild(main);
+
+  const badges = document.createElement('div');
+  badges.className = 'model-badges';
+  badges.appendChild(modelBadge(plugin.enabled ? 'ENABLED' : 'DISABLED', plugin.enabled ? 'src-local' : 'state-dim'));
+  row.appendChild(badges);
+
+  const actions = document.createElement('div');
+  actions.className = 'model-actions';
+  const toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.className = 'btn';
+  toggleBtn.textContent = plugin.enabled ? 'Disable' : 'Enable';
+  toggleBtn.addEventListener('click', async () => {
+    const action = plugin.enabled ? 'disable' : 'enable';
+    const resp = await postJSON('/api/plugins/' + encodeURIComponent(plugin.plugin_id) + '/' + action, {});
+    if (!resp) return;
+    if (!resp.ok) {
+      els.pluginsCatalogError.textContent = typeof resp.error === 'string' ? resp.error : 'Request failed';
+      els.pluginsCatalogError.hidden = false;
+      return;
+    }
+    pluginsState.plugins = Array.isArray(resp.plugins) ? resp.plugins : pluginsState.plugins;
+    pluginsState.catalogError = resp.catalog_error || null;
+    renderPlugins();
+  });
+  actions.appendChild(toggleBtn);
+
+  const actCol = document.createElement('div');
+  actCol.className = 'model-act';
+  actCol.appendChild(actions);
+  row.appendChild(actCol);
+
+  return row;
+}
+
 /* ---------- nav views ---------- */
 
 function switchView(view, label) {
@@ -4236,6 +4354,7 @@ function switchView(view, label) {
   if (view === 'memory') refreshKnowledge();
   if (view === 'people') refreshAuthoringDirectories();
   if (view === 'models') refreshModels();
+  if (view === 'plugins') refreshPlugins({ forceCatalogFetch: true });
   if (view === 'system') refreshSystemDetails();
   if (view === 'placeholder') {
     els.placeholderNote.textContent = (label || 'This view') + ' is not in this slice.';
@@ -4558,6 +4677,8 @@ function wireEvents() {
     const resp = await postJSON('/api/demo/reset', {});
     if (resp && resp.state) renderState(resp.state);
   });
+
+  els.pluginsRefresh.addEventListener('click', () => refreshPlugins({ forceCatalogFetch: true }));
 
   els.demoCamDown.addEventListener('click', async () => {
     const resp = await postJSON('/api/demo/camera-down', {});
