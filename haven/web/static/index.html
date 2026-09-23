@@ -230,13 +230,13 @@
 
       <section class="view view-plugins" aria-label="Plugins">
         <div class="center-head">
-          <h1>PLUGINS</h1>
+          <h1>PLUGINS <span class="model-badge state-dim">COMING SOON</span></h1>
           <div class="center-head-actions">
             <span id="plugins-count" class="muted">&mdash;</span>
             <button id="plugins-refresh" type="button" class="btn btn-sm">Refresh catalog</button>
           </div>
         </div>
-        <p class="model-note">A plugin never runs inside HAVEN and never sees live household state. Enabling one only lets the Hub relay this household's exported receipts to it &mdash; nothing else. See <a href="https://github.com/The-Hidden-Canopy/HAVEN/blob/main/docs/plugin-boundary.md" target="_blank" rel="noopener noreferrer">the plugin boundary contract</a>.</p>
+        <p class="model-note">The plugin marketplace is a preview: you can browse the Hub's catalog and record which plugins you'd want, but no data moves yet. A plugin never runs inside HAVEN and never sees live household state &mdash; when the export/relay path ships, enabling a plugin will only let the Hub relay this household's exported receipts to it, nothing else. See <a href="https://github.com/The-Hidden-Canopy/HAVEN/blob/main/docs/plugin-boundary.md" target="_blank" rel="noopener noreferrer">the plugin boundary contract</a>.</p>
         <p id="plugins-catalog-error" class="model-error" hidden></p>
         <div id="plugins-list"></div>
       </section>
