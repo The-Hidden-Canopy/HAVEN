@@ -75,6 +75,101 @@ public sealed class HavenCoreClient : IAsyncDisposable
     public Task<JsonElement> AskAsync(string text, CancellationToken cancellationToken = default) =>
         RequestResultAsync("composer.ask", new { text }, cancellationToken);
 
+    public Task<JsonElement> GetSetupStatusAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("setup.status", new { }, cancellationToken);
+
+    public Task<JsonElement> ChooseSetupDataDirAsync(string path, CancellationToken cancellationToken = default) =>
+        RequestResultAsync("setup.data_dir", new { path }, cancellationToken);
+
+    public Task<JsonElement> ConnectSetupProviderAsync(
+        string baseUrl,
+        string token,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "setup.provider.connect",
+            new { kind = "home_assistant", base_url = baseUrl, token },
+            cancellationToken);
+
+    public Task<JsonElement> SkipSetupProviderAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("setup.provider.connect", new { skip = true }, cancellationToken);
+
+    public Task<JsonElement> ScanSetupDiscoveryAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("setup.discovery.scan", new { }, cancellationToken);
+
+    public Task<JsonElement> EnrollSetupCandidateAsync(
+        string candidateId,
+        string deviceType,
+        string? room = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "setup.enroll",
+            new { candidate_id = candidateId, device_type = deviceType, room },
+            cancellationToken);
+
+    public Task<JsonElement> AddSetupPersonAsync(
+        string name,
+        string role = "member",
+        string? entityId = null,
+        string? roomId = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "setup.household.people.add",
+            new { name, role, entity_id = entityId, room_id = roomId },
+            cancellationToken);
+
+    public Task<JsonElement> RemoveSetupPersonAsync(
+        string personId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("setup.household.people.remove", new { person_id = personId }, cancellationToken);
+
+    public Task<JsonElement> AddSetupContextAsync(
+        string label,
+        string entityId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "setup.household.contexts.add",
+            new { label, entity_id = entityId },
+            cancellationToken);
+
+    public Task<JsonElement> RemoveSetupContextAsync(
+        string contextId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "setup.household.contexts.remove",
+            new { context_id = contextId },
+            cancellationToken);
+
+    public Task<JsonElement> SetSetupPreferencesAsync(
+        bool voice,
+        bool intelligence,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("setup.preferences", new { voice, intelligence }, cancellationToken);
+
+    public Task<JsonElement> SetSetupComputerAsync(
+        bool enabled,
+        bool? readOnly = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("setup.computer", new { enabled, read_only = readOnly }, cancellationToken);
+
+    public Task<JsonElement> AddSetupComputerRootAsync(
+        string path,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("setup.computer.roots.add", new { path }, cancellationToken);
+
+    public Task<JsonElement> RemoveSetupComputerRootAsync(
+        string path,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("setup.computer.roots.remove", new { path }, cancellationToken);
+
+    public Task<JsonElement> ScanSetupComputerAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("setup.computer.scan", new { }, cancellationToken);
+
+    public Task<JsonElement> CompleteSetupAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("setup.complete", new { }, cancellationToken);
+
+    public Task<JsonElement> ReopenSetupAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("setup.reopen", new { }, cancellationToken);
+
     private async Task<JsonElement> RequestResultAsync(
         string method,
         object parameters,
