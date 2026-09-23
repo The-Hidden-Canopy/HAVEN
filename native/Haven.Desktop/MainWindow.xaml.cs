@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text;
+using Haven.Desktop.Setup;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -49,10 +50,94 @@ public sealed partial class MainWindow : Window
             ConnectionText.Text = "Connected";
             var state = await _client.GetStateAsync();
             ResponseText.Text = state.GetRawText();
+            await EnsureSetupAsync();
         }
         catch (Exception ex)
         {
             ConnectionText.Text = "Core unavailable";
+            ResponseText.Text = ex.Message;
+        }
+    }
+
+    private async Task EnsureSetupAsync()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var status = await _client.GetSetupStatusAsync();
+            if (!IsSetupComplete(status))
+            {
+                ShowSetupWizard();
+                await SetupWizard.LoadAsync();
+            }
+            else
+            {
+                ReopenSetupButton.Visibility = Visibility.Visible;
+            }
+        }
+        catch (Exception ex)
+        {
+            // Setup status is best-effort: the main window stays usable without it.
+            ResponseText.Text = ex.Message;
+        }
+    }
+
+    private static bool IsSetupComplete(JsonElement status) =>
+        status.ValueKind == JsonValueKind.Object
+        && status.TryGetProperty("setup", out var setup)
+        && setup.TryGetProperty("completed", out var completed)
+        && completed.ValueKind == JsonValueKind.True;
+
+    private void ShowSetupWizard()
+    {
+        SetupWizard.Initialize(_client!, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        SetupOverlay.Visibility = Visibility.Visible;
+    }
+
+    private async void OnSetupCompleted(object sender, EventArgs args)
+    {
+        SetupOverlay.Visibility = Visibility.Collapsed;
+        ReopenSetupButton.Visibility = Visibility.Visible;
+        if (_client is not null)
+        {
+            try
+            {
+                var state = await _client.GetStateAsync();
+                ResponseText.Text = state.GetRawText();
+            }
+            catch (Exception ex)
+            {
+                ResponseText.Text = ex.Message;
+            }
+        }
+    }
+
+    private async void OnReopenSetupClicked(object sender, RoutedEventArgs args)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var envelope = await _client.ReopenSetupAsync();
+            if (envelope.ValueKind == JsonValueKind.Object
+                && envelope.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                ResponseText.Text = envelope.TryGetProperty("error", out var error)
+                    ? error.GetString()
+                    : "HAVEN Core refused to reopen setup.";
+                return;
+            }
+            ShowSetupWizard();
+            await SetupWizard.LoadAsync();
+        }
+        catch (Exception ex)
+        {
             ResponseText.Text = ex.Message;
         }
     }

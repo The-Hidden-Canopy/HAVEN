@@ -4,6 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:setup="using:Haven.Desktop.Setup"
     mc:Ignorable="d"
     Title="HAVEN">
     <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
@@ -20,7 +21,10 @@
             </Grid.ColumnDefinitions>
             <Image x:Name="LogoImage" Width="144" Height="48" Stretch="Uniform" />
             <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="Local assistant for your computer, information, and connected world" Opacity="0.72" />
-            <TextBlock x:Name="ConnectionText" Grid.Column="2" VerticalAlignment="Center" Text="Connecting…" />
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <TextBlock x:Name="ConnectionText" VerticalAlignment="Center" Text="Connecting…" />
+                <Button x:Name="ReopenSetupButton" Content="Setup" Click="OnReopenSetupClicked" Visibility="Collapsed" />
+            </StackPanel>
         </Grid>
 
         <NavigationView Grid.Row="1" IsBackButtonVisible="Collapsed" PaneDisplayMode="LeftCompact" SelectionChanged="OnNavigationChanged">
@@ -80,5 +84,9 @@
                 </StackPanel>
             </ScrollViewer>
         </NavigationView>
+
+        <Grid x:Name="SetupOverlay" Grid.RowSpan="2" Visibility="Collapsed">
+            <setup:SetupWizardView x:Name="SetupWizard" SetupCompleted="OnSetupCompleted" />
+        </Grid>
     </Grid>
 </Window>
