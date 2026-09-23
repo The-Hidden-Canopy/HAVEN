@@ -124,3 +124,27 @@ def test_correction_supersedes_without_rewriting_the_old_claim():
         assert correction.claim.evidence_refs == (first.claim.claim_id, "user:gerron")
         assert store.get(first.claim.claim_id).state is ClaimState.STALE
         assert correction.claim.state is ClaimState.REPORTED
+
+
+def test_cross_scope_claim_relationship_is_rejected_without_mutating_foreign_claim():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ClaimStore(Path(tmp) / "claims.db")
+        admission = ClaimAdmissionService(store)
+        foreign_claim = Claim(
+            claim_id="claim:foreign",
+            scope_id="secret-project",
+            proposition="A secret proposition",
+            state=ClaimState.REPORTED,
+            source_refs=("file:secret",),
+            evidence_refs=("file:secret#line:1",),
+            created_at=NOW,
+            provenance=ClaimProvenance.DOCUMENT_STATED,
+        )
+        store.save(foreign_claim)
+
+        result = admission.admit(_candidate("cross-scope", contradicts=(foreign_claim.claim_id,)))
+
+        assert result.status is AdmissionStatus.REJECTED
+        assert "one scope" in result.reason
+        assert store.get(foreign_claim.claim_id).state is ClaimState.REPORTED
+        assert store.list_by_scope("project:haven") == ()

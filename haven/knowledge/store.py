@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 from .claims import Claim, ClaimProvenance, ClaimState, is_stale
+from .audit import KnowledgeAuditEvent, audit_event_from_dict, audit_event_to_dict
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS claims (
@@ -49,6 +50,17 @@ CREATE TABLE IF NOT EXISTS forgotten_claims (
     forgotten_at TEXT NOT NULL,
     forgotten_by TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS knowledge_audit (
+    event_id TEXT PRIMARY KEY,
+    scope_id TEXT NOT NULL,
+    claim_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS knowledge_audit_scope ON knowledge_audit(scope_id);
+CREATE INDEX IF NOT EXISTS knowledge_audit_claim ON knowledge_audit(claim_id);
 """
 
 
@@ -196,27 +208,58 @@ class ClaimStore:
                 ((claim_id, ref) for ref in claim.evidence_refs),
             )
 
-    def save(self, claim: Claim) -> None:
+    @staticmethod
+    def _get_on_connection(conn: sqlite3.Connection, claim_id: str) -> Claim | None:
+        row = conn.execute("SELECT data FROM claims WHERE claim_id = ?", (claim_id,)).fetchone()
+        if row is None:
+            return None
+        try:
+            return claim_from_dict(json.loads(row[0]))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return None
+
+    @staticmethod
+    def _save_on_connection(conn: sqlite3.Connection, claim: Claim) -> None:
         fingerprint = claim_fingerprint(claim)
+        conn.execute(
+            "INSERT INTO claims(claim_id, scope_id, fingerprint, data) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(claim_id) DO UPDATE SET scope_id = excluded.scope_id, "
+            "fingerprint = excluded.fingerprint, data = excluded.data",
+            (claim.claim_id, claim.scope_id, fingerprint, json.dumps(claim_to_dict(claim))),
+        )
+        conn.execute("DELETE FROM claim_sources WHERE claim_id = ?", (claim.claim_id,))
+        conn.execute("DELETE FROM claim_evidence WHERE claim_id = ?", (claim.claim_id,))
+        conn.executemany(
+            "INSERT INTO claim_sources(claim_id, source_ref) VALUES (?, ?)",
+            ((claim.claim_id, ref) for ref in claim.source_refs),
+        )
+        conn.executemany(
+            "INSERT INTO claim_evidence(claim_id, evidence_ref) VALUES (?, ?)",
+            ((claim.claim_id, ref) for ref in claim.evidence_refs),
+        )
+
+    @staticmethod
+    def _append_audit_on_connection(conn: sqlite3.Connection, event: KnowledgeAuditEvent) -> None:
+        conn.execute(
+            "INSERT INTO knowledge_audit "
+            "(event_id, scope_id, claim_id, action, actor_id, occurred_at, data) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                event.event_id,
+                event.scope_id,
+                event.claim_id,
+                event.action.value,
+                event.actor_id,
+                _datetime_to_str(event.occurred_at),
+                json.dumps(audit_event_to_dict(event)),
+            ),
+        )
+
+    def save(self, claim: Claim) -> None:
         with self._lock:
             conn = self._connect()
             try:
-                conn.execute(
-                    "INSERT INTO claims(claim_id, scope_id, fingerprint, data) VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT(claim_id) DO UPDATE SET scope_id = excluded.scope_id, "
-                    "fingerprint = excluded.fingerprint, data = excluded.data",
-                    (claim.claim_id, claim.scope_id, fingerprint, json.dumps(claim_to_dict(claim))),
-                )
-                conn.execute("DELETE FROM claim_sources WHERE claim_id = ?", (claim.claim_id,))
-                conn.execute("DELETE FROM claim_evidence WHERE claim_id = ?", (claim.claim_id,))
-                conn.executemany(
-                    "INSERT INTO claim_sources(claim_id, source_ref) VALUES (?, ?)",
-                    ((claim.claim_id, ref) for ref in claim.source_refs),
-                )
-                conn.executemany(
-                    "INSERT INTO claim_evidence(claim_id, evidence_ref) VALUES (?, ?)",
-                    ((claim.claim_id, ref) for ref in claim.evidence_refs),
-                )
+                self._save_on_connection(conn, claim)
                 conn.commit()
             finally:
                 conn.close()
@@ -356,6 +399,143 @@ class ClaimStore:
             return ()
         return tuple(found for cid in claim.supersedes if (found := self.get(cid)) is not None)
 
+    def append_audit(self, event: KnowledgeAuditEvent) -> None:
+        """Append one knowledge mutation record; existing rows are immutable."""
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                self._append_audit_on_connection(conn, event)
+                conn.commit()
+            finally:
+                conn.close()
+
+    def commit_admission(
+        self,
+        claim: Claim,
+        *,
+        supersedes: Iterable[str] = (),
+        contradicts: Iterable[str] = (),
+        audit: KnowledgeAuditEvent | None = None,
+    ) -> None:
+        """Commit an admitted claim and its relationship side effects atomically."""
+
+        if audit is not None and (
+            audit.claim_id != claim.claim_id or audit.scope_id != claim.scope_id
+        ):
+            raise ValueError("knowledge audit event does not match the admitted claim")
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                for claim_id in contradicts:
+                    prior = self._get_on_connection(conn, claim_id)
+                    if prior is not None and prior.scope_id != claim.scope_id:
+                        raise ValueError("claim relationships must remain within one scope")
+                    if prior is not None and prior.state is not ClaimState.DISPUTED:
+                        self._save_on_connection(conn, replace(prior, state=ClaimState.DISPUTED))
+                for claim_id in supersedes:
+                    prior = self._get_on_connection(conn, claim_id)
+                    if prior is not None and prior.scope_id != claim.scope_id:
+                        raise ValueError("claim relationships must remain within one scope")
+                    if prior is not None and prior.state is not ClaimState.STALE:
+                        self._save_on_connection(conn, replace(prior, state=ClaimState.STALE))
+                self._save_on_connection(conn, claim)
+                if audit is not None:
+                    self._append_audit_on_connection(conn, audit)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+    def mark_stale_with_audit(self, claim_id: str, event: KnowledgeAuditEvent) -> bool:
+        """Mark one claim stale and append its audit event in one transaction."""
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                claim = self._get_on_connection(conn, claim_id)
+                if claim is None or claim.state is ClaimState.STALE:
+                    return False
+                if event.claim_id != claim.claim_id or event.scope_id != claim.scope_id:
+                    raise ValueError("knowledge audit event does not match the claim")
+                self._save_on_connection(conn, replace(claim, state=ClaimState.STALE))
+                self._append_audit_on_connection(conn, event)
+                conn.commit()
+                return True
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+    def forget_with_audit(
+        self,
+        claim: Claim,
+        *,
+        forgotten_at: datetime,
+        forgotten_by: str,
+        event: KnowledgeAuditEvent,
+    ) -> None:
+        """Persist a forget tombstone, stale claim, and audit row atomically."""
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                current = self._get_on_connection(conn, claim.claim_id)
+                if current is None:
+                    raise ValueError("unknown claim")
+                if event.claim_id != current.claim_id or event.scope_id != current.scope_id:
+                    raise ValueError("knowledge audit event does not match the claim")
+                conn.execute(
+                    "INSERT OR REPLACE INTO forgotten_claims(fingerprint, forgotten_at, forgotten_by) "
+                    "VALUES (?, ?, ?)",
+                    (claim_fingerprint(current), _datetime_to_str(forgotten_at), forgotten_by),
+                )
+                self._save_on_connection(conn, replace(current, state=ClaimState.STALE))
+                self._append_audit_on_connection(conn, event)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+    def list_audit(
+        self, *, scope_id: str | None = None, claim_id: str | None = None
+    ) -> tuple[KnowledgeAuditEvent, ...]:
+        """Read mutation history without exposing rows from another scope."""
+
+        conditions: list[str] = []
+        values: list[str] = []
+        if scope_id is not None:
+            conditions.append("scope_id = ?")
+            values.append(scope_id)
+        if claim_id is not None:
+            conditions.append("claim_id = ?")
+            values.append(claim_id)
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT data FROM knowledge_audit"
+                    + where
+                    + " ORDER BY rowid",
+                    tuple(values),
+                ).fetchall()
+            finally:
+                conn.close()
+        events: list[KnowledgeAuditEvent] = []
+        for (raw,) in rows:
+            try:
+                events.append(audit_event_from_dict(json.loads(raw)))
+            except (ValueError, TypeError, json.JSONDecodeError):
+                continue
+        return tuple(events)
+
     def count_by_state(self, *, scope_id: str | None = None) -> dict[str, int]:
         counts = {state.value: 0 for state in ClaimState}
         for claim in self.list_all():
@@ -366,6 +546,7 @@ class ClaimStore:
 
 __all__ = [
     "ClaimStore",
+    "KnowledgeAuditEvent",
     "claim_fingerprint",
     "claim_from_dict",
     "claim_to_dict",

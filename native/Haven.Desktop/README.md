@@ -12,20 +12,20 @@ native process command line. Manual client launches may use the equivalent
 
 In native mode the compatibility HTTP socket is closed after the Python
 service graph is composed; the native client communicates only through the
-local named pipe. Browser mode continues to expose the existing loopback WebUI
-when explicitly launched without `--native`.
+local named pipe. Browser mode continues to expose the existing loopback WebUI,
+but only when explicitly requested with `--web`/`--debug-web`.
 
-The Python desktop launcher can start this client with `--native`:
+The Python desktop launcher starts this client by default:
 
 ```powershell
-python -m haven.desktop --native
+python -m haven.desktop
 ```
 
-Without that flag, the compatibility Edge/WebUI host remains available while
-the native surface grows toward feature parity. The native client currently
-proves the Core connection, state read, life search, read-only memory/evidence
-inspection, and composer request paths; it does not yet replace every setup,
-home, and settings view.
+Pass `--web` (or `--debug-web`) to fall back to the compatibility Edge/WebUI
+host while the native surface grows toward feature parity. The native client
+currently proves the Core connection, state read, life search, read-only
+memory/evidence inspection, and composer request paths; it does not yet
+replace every setup, home, and settings view.
 
 ## Build prerequisites
 

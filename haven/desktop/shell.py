@@ -3,10 +3,9 @@
 This is intentionally a host, not a second UI implementation.  The shell:
 
 * starts the Python HAVEN service graph;
-* uses a local named pipe for the native WinUI client when ``--native`` is
-  selected; or
-* gives the compatibility renderer a fresh HTTP-only session cookie and opens
-  it in Edge app mode.
+* uses a local named pipe for the native WinUI client by default; or
+* when ``--web``/``--debug-web`` is passed, gives the compatibility renderer
+  a fresh HTTP-only session cookie and opens it in Edge app mode instead.
 
 The native path does not expose the compatibility HTTP socket.  The Edge path
 remains available during the native UI parity migration without creating a
@@ -536,8 +535,8 @@ class DesktopShell:
         edge = self.edge_path or find_edge_executable()
         if edge is None or not edge.is_file():
             raise DesktopShellError(
-                "HAVEN Desktop needs Microsoft Edge (or set HAVEN_EDGE_PATH); "
-                "the existing WebUI remains available with python -m haven.web.server"
+                "HAVEN Desktop needs Microsoft Edge (or set HAVEN_EDGE_PATH) to "
+                "run the --web/--debug-web compatibility surface"
             )
         return edge
 
@@ -560,8 +559,9 @@ class DesktopShell:
                 )
         if not native.is_file():
             raise DesktopShellError(
-                "HAVEN Native Desktop is not built; build native/Haven.Desktop "
-                "or set HAVEN_NATIVE_CLIENT"
+                "HAVEN Native Desktop is not built; build native/Haven.Desktop, "
+                "set HAVEN_NATIVE_CLIENT, or pass --web/--debug-web for the "
+                "compatibility Edge host in the meantime"
             )
         return native
 
@@ -919,7 +919,7 @@ class DesktopShell:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run HAVEN in a native desktop window.")
+    parser = argparse.ArgumentParser(description="Run HAVEN's native desktop host.")
     parser.add_argument("--data-dir", default=None, help="HAVEN data directory")
     parser.add_argument("--demo", action="store_true", help="force the explicit demo household")
     parser.add_argument(
@@ -928,9 +928,14 @@ def main(argv: list[str] | None = None) -> int:
         help="run the resident local host without opening a window",
     )
     parser.add_argument(
-        "--native",
+        "--web",
+        "--debug-web",
+        dest="web",
         action="store_true",
-        help="use the compiled WinUI client instead of the compatibility Edge host",
+        help=(
+            "use the compatibility Edge/WebUI host instead of the native WinUI "
+            "client (development/debug surface only)"
+        ),
     )
     parser.add_argument(
         "--native-path",
@@ -945,12 +950,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     port = args.port if args.port is not None else (8080 if args.background else 0)
+    if args.web:
+        print(
+            "HAVEN Desktop: starting the --web/--debug-web compatibility "
+            "surface (development/debug only; the native WinUI client is "
+            "the production experience)",
+            file=sys.stderr,
+        )
     shell = DesktopShell(
         data_dir=args.data_dir,
         demo=args.demo,
         port=port,
         background=args.background,
-        native=args.native,
+        native=not args.web,
         native_path=args.native_path,
     )
     try:

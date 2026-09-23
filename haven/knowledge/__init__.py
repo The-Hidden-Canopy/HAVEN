@@ -6,6 +6,7 @@ resources to deterministic extraction and admission.
 """
 
 from .admission import AdmissionResult, AdmissionStatus, ClaimAdmissionPolicy, ClaimAdmissionService
+from .audit import KnowledgeAuditAction, KnowledgeAuditEvent
 from .candidates import CandidateClaim
 from .claims import Claim, ClaimProvenance, ClaimState, is_stale
 from .service import KnowledgeIngestResult, KnowledgeService
@@ -21,6 +22,8 @@ __all__ = [
     "ClaimProvenance",
     "ClaimState",
     "ClaimStore",
+    "KnowledgeAuditAction",
+    "KnowledgeAuditEvent",
     "KnowledgeIngestResult",
     "KnowledgeService",
     "is_stale",

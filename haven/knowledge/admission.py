@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, replace
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 
 from .candidates import CandidateClaim
+from .audit import KnowledgeAuditEvent
 from .claims import Claim, ClaimProvenance, ClaimState
 from .store import ClaimStore
 
@@ -50,7 +52,12 @@ class ClaimAdmissionService:
     def store(self) -> ClaimStore:
         return self._store
 
-    def admit(self, candidate: CandidateClaim) -> AdmissionResult:
+    def admit(
+        self,
+        candidate: CandidateClaim,
+        *,
+        audit_factory: Callable[[Claim], KnowledgeAuditEvent] | None = None,
+    ) -> AdmissionResult:
         reason = self._policy.validate(candidate)
         if reason is not None:
             return AdmissionResult(AdmissionStatus.REJECTED, reason=reason)
@@ -59,6 +66,13 @@ class ClaimAdmissionService:
         existing = self._store.find_by_fingerprint(candidate.fingerprint)
         if existing is not None:
             return AdmissionResult(AdmissionStatus.DUPLICATE, claim=existing, reason="already admitted")
+        for related_id in (*candidate.supersedes, *candidate.contradicts):
+            related = self._store.get(related_id)
+            if related is not None and related.scope_id != candidate.scope_id:
+                return AdmissionResult(
+                    AdmissionStatus.REJECTED,
+                    reason="claim relationships must remain within one scope",
+                )
 
         state = {
             ClaimProvenance.DIRECT_OBSERVATION: ClaimState.OBSERVED,
@@ -70,12 +84,6 @@ class ClaimAdmissionService:
             state = ClaimState.CORROBORATED
         if candidate.contradicts:
             state = ClaimState.DISPUTED
-            for claim_id in candidate.contradicts:
-                prior = self._store.get(claim_id)
-                if prior is not None and prior.state is not ClaimState.DISPUTED:
-                    self._store.save(replace(prior, state=ClaimState.DISPUTED))
-        for claim_id in candidate.supersedes:
-            self._store.mark_stale(claim_id)
 
         digest = hashlib.sha256(
             f"{candidate.candidate_id}\x1e{candidate.fingerprint}".encode("utf-8")
@@ -93,7 +101,13 @@ class ClaimAdmissionService:
             supersedes=candidate.supersedes,
             contradicts=candidate.contradicts,
         )
-        self._store.save(claim)
+        audit = audit_factory(claim) if audit_factory is not None else None
+        self._store.commit_admission(
+            claim,
+            supersedes=candidate.supersedes,
+            contradicts=candidate.contradicts,
+            audit=audit,
+        )
         return AdmissionResult(AdmissionStatus.ADMITTED, claim=claim)
 
     def correct(
@@ -103,6 +117,7 @@ class ClaimAdmissionService:
         proposition: str,
         actor: str,
         now: datetime | None = None,
+        audit_factory: Callable[[Claim], KnowledgeAuditEvent] | None = None,
     ) -> AdmissionResult:
         if not isinstance(actor, str) or not actor.strip():
             return AdmissionResult(AdmissionStatus.REJECTED, reason="a correction actor is required")
@@ -123,7 +138,7 @@ class ClaimAdmissionService:
             extracted_at=now,
             supersedes=(prior.claim_id,),
         )
-        return self.admit(candidate)
+        return self.admit(candidate, audit_factory=audit_factory)
 
 
 __all__ = [
