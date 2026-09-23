@@ -314,6 +314,7 @@ public sealed partial class MainWindow : Window
         AppendClaimGroup(text, "EVIDENCE", claim, "evidence_refs");
         AppendClaimGroup(text, "SUPERSEDES", claim, "supersedes");
         AppendClaimGroup(text, "CONTRADICTIONS", claim, "contradicts");
+        AppendAuditHistory(text, claim);
         return text.ToString().TrimEnd();
     }
 
@@ -329,6 +330,24 @@ public sealed partial class MainWindow : Window
         foreach (var value in values.EnumerateArray())
         {
             text.AppendLine($"• {value.GetString()}");
+        }
+    }
+
+    private static void AppendAuditHistory(StringBuilder text, JsonElement claim)
+    {
+        text.AppendLine();
+        text.AppendLine("AUDIT HISTORY");
+        if (!claim.TryGetProperty("audit", out var events) || events.GetArrayLength() == 0)
+        {
+            text.AppendLine("No user changes recorded");
+            return;
+        }
+        foreach (var audit in events.EnumerateArray())
+        {
+            var action = audit.GetProperty("action").GetString() ?? "unknown";
+            var actor = audit.GetProperty("actor_id").GetString() ?? "unknown actor";
+            var at = audit.GetProperty("occurred_at").GetString() ?? "unknown time";
+            text.AppendLine($"• {action} by {actor} at {at}");
         }
     }
 

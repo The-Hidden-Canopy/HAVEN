@@ -187,5 +187,104 @@ def test_native_memory_mutations_are_owner_bound_and_preserve_correction_lineage
             )
             assert forgotten["ok"] is True
             assert server.claims.get(replacement["claim_id"]).state is ClaimState.STALE
+            audit = server.claims.list_audit(scope_id=household_id)
+            assert [event.action.value for event in audit] == ["correct", "mark_stale", "forget"]
+            assert {event.actor_id for event in audit} == {"gerron"}
+        finally:
+            server.server_close()
+
+
+def test_native_setup_household_authoring_round_trips_through_the_same_service():
+    with tempfile.TemporaryDirectory() as tmp:
+        server, _ = make_server(0, data_dir=Path(tmp) / "data", clock=lambda: NOW)
+        try:
+            dispatcher = server.build_ipc_dispatcher()
+
+            added = dispatcher(
+                request_message(
+                    "req-add-person",
+                    "setup.household.people.add",
+                    {"name": "Gerron Smith", "role": "owner"},
+                )
+            )
+            assert added["ok"] is True
+            assert added["result"]["ok"] is True
+            person_id = next(
+                person["person_id"]
+                for person in added["result"]["setup"]["household"]["people"]
+                if person["name"] == "Gerron Smith"
+            )
+
+            removed = dispatcher(
+                request_message("req-remove-person", "setup.household.people.remove", {"person_id": person_id})
+            )
+            assert removed["ok"] is True
+            assert removed["result"]["ok"] is True
+            assert person_id not in {
+                person["person_id"] for person in removed["result"]["setup"]["household"]["people"]
+            }
+
+            added_context = dispatcher(
+                request_message(
+                    "req-add-context",
+                    "setup.household.contexts.add",
+                    {"label": "Away", "entity_id": "input_boolean.away"},
+                )
+            )
+            assert added_context["ok"] is True
+            assert added_context["result"]["ok"] is True
+            context_id = next(
+                context["context_id"]
+                for context in added_context["result"]["setup"]["household"]["contexts"]
+                if context["label"] == "Away"
+            )
+
+            removed_context = dispatcher(
+                request_message(
+                    "req-remove-context", "setup.household.contexts.remove", {"context_id": context_id}
+                )
+            )
+            assert removed_context["ok"] is True
+            assert removed_context["result"]["ok"] is True
+        finally:
+            server.server_close()
+
+
+def test_native_setup_preferences_and_lifecycle_delegate_to_setup_service():
+    with tempfile.TemporaryDirectory() as tmp:
+        server, _ = make_server(0, data_dir=Path(tmp) / "data", clock=lambda: NOW)
+        try:
+            dispatcher = server.build_ipc_dispatcher()
+
+            preferences = dispatcher(
+                request_message(
+                    "req-preferences", "setup.preferences", {"voice": False, "intelligence": True}
+                )
+            )
+            assert preferences["ok"] is True
+            assert preferences["result"]["ok"] is True
+
+            packages = dispatcher(request_message("req-packages", "setup.providers.packages", {}))
+            assert packages["ok"] is True
+            assert packages["result"]["ok"] is True
+            assert "providers" in packages["result"]
+
+            owner = dispatcher(
+                request_message(
+                    "req-owner",
+                    "setup.household.people.add",
+                    {"name": "Gerron Smith", "role": "owner"},
+                )
+            )
+            assert owner["ok"] is True
+            assert owner["result"]["ok"] is True
+
+            completed = dispatcher(request_message("req-complete", "setup.complete", {}))
+            assert completed["ok"] is True
+            assert completed["result"]["ok"] is True
+
+            reopened = dispatcher(request_message("req-reopen", "setup.reopen", {}))
+            assert reopened["ok"] is True
+            assert reopened["result"]["ok"] is True
         finally:
             server.server_close()

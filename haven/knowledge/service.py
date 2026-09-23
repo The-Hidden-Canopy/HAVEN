@@ -5,11 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable, Sequence
+from uuid import uuid4
 
 from haven.resources.models import ResourceRecord
 from haven.resources.store import ResourceStore
 
 from .admission import AdmissionResult, AdmissionStatus, ClaimAdmissionService
+from .audit import KnowledgeAuditAction, KnowledgeAuditEvent
 from .claims import is_stale
 from .extraction import ClaimExtractor, ContentReader, DocumentStatementExtractor, extract_text_content
 from .store import ClaimStore
@@ -125,13 +127,83 @@ class KnowledgeService:
         claim = self._claims.get(claim_id)
         if claim is None:
             return AdmissionResult(AdmissionStatus.REJECTED, reason="unknown claim")
-        return self._admission.correct(claim, proposition=proposition, actor=actor, now=self._clock())
+        actor = self._require_actor(actor)
+        now = self._clock()
+        return self._admission.correct(
+            claim,
+            proposition=proposition,
+            actor=actor,
+            now=now,
+            audit_factory=lambda replacement: self._audit_event(
+                scope_id=claim.scope_id,
+                claim_id=replacement.claim_id,
+                action=KnowledgeAuditAction.CORRECT,
+                actor_id=actor,
+                occurred_at=now,
+                details=(
+                    ("prior_claim_id", claim.claim_id),
+                    ("replacement_claim_id", replacement.claim_id),
+                ),
+            ),
+        )
 
-    def mark_claim_stale(self, claim_id: str) -> bool:
-        return self._claims.mark_stale(claim_id)
+    def mark_claim_stale(self, claim_id: str, *, actor: str) -> bool:
+        actor = self._require_actor(actor)
+        claim = self._claims.get(claim_id)
+        if claim is None:
+            return False
+        return self._claims.mark_stale_with_audit(
+            claim_id,
+            self._audit_event(
+                scope_id=claim.scope_id,
+                claim_id=claim.claim_id,
+                action=KnowledgeAuditAction.MARK_STALE,
+                actor_id=actor,
+                occurred_at=self._clock(),
+            ),
+        )
 
     def forget_claim(self, claim, *, forgotten_by: str) -> None:
-        self._claims.forget(claim, forgotten_at=self._clock(), forgotten_by=forgotten_by)
+        forgotten_by = self._require_actor(forgotten_by)
+        now = self._clock()
+        self._claims.forget_with_audit(
+            claim,
+            forgotten_at=now,
+            forgotten_by=forgotten_by,
+            event=self._audit_event(
+                scope_id=claim.scope_id,
+                claim_id=claim.claim_id,
+                action=KnowledgeAuditAction.FORGET,
+                actor_id=forgotten_by,
+                occurred_at=now,
+            ),
+        )
+
+    @staticmethod
+    def _require_actor(actor: str) -> str:
+        if not isinstance(actor, str) or not actor.strip():
+            raise ValueError("a knowledge mutation actor is required")
+        return actor.strip()
+
+    def _audit_event(
+        self,
+        *,
+        scope_id: str,
+        claim_id: str,
+        action: KnowledgeAuditAction,
+        actor_id: str,
+        occurred_at: datetime,
+        details: tuple[tuple[str, object], ...] = (),
+    ) -> KnowledgeAuditEvent:
+        return KnowledgeAuditEvent(
+            event_id=f"knowledge-audit:{uuid4().hex}",
+            scope_id=scope_id,
+            claim_id=claim_id,
+            action=action,
+            actor_id=actor_id,
+            occurred_at=occurred_at,
+            details=details,
+        )
 
 
 __all__ = ["KnowledgeIngestResult", "KnowledgeService"]

@@ -607,16 +607,21 @@ python -m haven.desktop
 ```
 
 The repository launcher (`run-haven.bat`) uses this desktop entry point too.
-Double-clicking it or running it from PowerShell opens HAVEN in its own Edge
-app window. Pass `--demo` only when you explicitly want the simulated
+Double-clicking it or running it from PowerShell opens HAVEN in the native
+WinUI client. Pass `--demo` only when you explicitly want the simulated
 household.
 
-This starts HAVEN on an ephemeral loopback port and opens the existing
-renderer in an Edge app window. The desktop launch gets a fresh per-launch
-session cookie; the local API is not usable without that cookie. The shell
-also advertises the `folder_picker` host capability. The same native picker
-can choose the installation data directory or a computer-provider root; both
-selections go through the existing setup and `FilesystemProvider` boundaries.
+This starts HAVEN on a local named pipe (`haven-ipc-1`) and opens the native
+WinUI client. The shell also advertises the `folder_picker` host capability.
+The same native picker can choose the installation data directory or a
+computer-provider root; both selections go through the existing setup and
+`FilesystemProvider` boundaries.
+
+Pass `--web` (or `--debug-web`) to use the compatibility Edge/WebUI host
+instead — a development/debug surface, not the production experience. That
+path starts HAVEN on an ephemeral loopback port and opens the existing
+renderer in an Edge app window with a fresh per-launch session cookie; the
+local API is not usable without that cookie.
 
 Computer access starts read-only: selecting folders permits indexing and
 search, not file mutation. The setup wizard exposes file organization as a

@@ -187,6 +187,14 @@ def test_knowledge_correction_uses_declared_owner_not_first_member():
             expected_source = f"file:{(root / 'notes.txt').resolve().as_posix()}"
             assert body["claim"]["source_refs"] == [expected_source]
 
+            status, detail = _get(
+                port,
+                f"/api/knowledge/claims/{quote(body['claim']['claim_id'], safe='')}",
+            )
+            assert status == 200
+            assert detail["claim"]["audit"][0]["action"] == "correct"
+            assert detail["claim"]["audit"][0]["actor_id"] == "gerron"
+
             status, search = _get(
                 port,
                 "/api/search?q=" + quote("owner corrected this statement"),

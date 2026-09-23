@@ -10,11 +10,13 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from haven.desktop import shell as shell_module
 from haven.desktop.shell import (
     DesktopShell,
     DesktopShellAlreadyRunning,
     _read_activation_record,
     find_edge_executable,
+    main,
 )
 from haven.desktop.instance_lock import InstanceAlreadyRunning, InstanceLock
 
@@ -410,3 +412,49 @@ def test_data_dir_move_reserves_target_before_moving_when_target_is_owned():
         finally:
             blocker.release()
             shell.close()
+
+
+class _RecordingShell:
+    """Stands in for DesktopShell to capture how ``main`` wires it up."""
+
+    last_kwargs: dict | None = None
+
+    def __init__(self, **kwargs):
+        type(self).last_kwargs = kwargs
+
+    def run(self) -> int:
+        return 0
+
+
+def test_main_launches_native_by_default(monkeypatch):
+    monkeypatch.setattr(shell_module, "DesktopShell", _RecordingShell)
+
+    assert main([]) == 0
+
+    assert _RecordingShell.last_kwargs["native"] is True
+
+
+def test_main_web_flag_falls_back_to_the_compatibility_host(monkeypatch):
+    monkeypatch.setattr(shell_module, "DesktopShell", _RecordingShell)
+
+    assert main(["--web"]) == 0
+    assert _RecordingShell.last_kwargs["native"] is False
+
+    assert main(["--debug-web"]) == 0
+    assert _RecordingShell.last_kwargs["native"] is False
+
+
+def test_main_web_flag_prints_a_debug_surface_banner(monkeypatch, capsys):
+    monkeypatch.setattr(shell_module, "DesktopShell", _RecordingShell)
+
+    main(["--web"])
+
+    assert "debug" in capsys.readouterr().err.lower()
+
+
+def test_main_native_default_prints_no_web_banner(monkeypatch, capsys):
+    monkeypatch.setattr(shell_module, "DesktopShell", _RecordingShell)
+
+    main([])
+
+    assert capsys.readouterr().err == ""
