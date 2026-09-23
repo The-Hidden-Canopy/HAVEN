@@ -48,6 +48,7 @@ from .setup_service import SetupService
 from .computer_actions import ComputerActionService
 from ..actions import ActionLedgerStore
 from ..knowledge import ClaimStore, KnowledgeService
+from ..knowledge.audit import audit_event_to_dict
 from ..knowledge.claims import ClaimState
 from ..knowledge.store import claim_fingerprint, claim_to_dict
 from ..ontology import OntologyStore
@@ -354,6 +355,13 @@ class HavenWebServer(ThreadingHTTPServer):
             payload["superseded_claims"] = [
                 claim_to_dict(found) for found in self.claims.supersedes_of(claim.claim_id)
             ]
+            payload["audit"] = [
+                audit_event_to_dict(event)
+                for event in self.claims.list_audit(
+                    scope_id=claim.scope_id,
+                    claim_id=claim.claim_id,
+                )
+            ]
             return {"claim": payload}
 
         def _knowledge_owner_actor() -> str:
@@ -391,7 +399,10 @@ class HavenWebServer(ThreadingHTTPServer):
 
         def _knowledge_stale(params: dict) -> dict:
             claim = _knowledge_mutation_claim(params)
-            changed = self.knowledge.mark_claim_stale(claim.claim_id)
+            changed = self.knowledge.mark_claim_stale(
+                claim.claim_id,
+                actor=_knowledge_owner_actor(),
+            )
             current = self.claims.get(claim.claim_id)
             return {
                 "changed": changed,
@@ -431,6 +442,67 @@ class HavenWebServer(ThreadingHTTPServer):
                 raise ValueError("focus must be a string or null")
             return self.director.chat(text, focus)
 
+        def _setup_data_dir(params: dict) -> dict:
+            value = params.get("path")
+            return self.setup.choose_data_dir(value if isinstance(value, str) else None)
+
+        def _setup_provider_connect(params: dict) -> dict:
+            kind = params.get("kind")
+            base_url = params.get("base_url")
+            token = params.get("token")
+            return self.setup.connect_provider(
+                kind=kind if isinstance(kind, str) else None,
+                base_url=base_url if isinstance(base_url, str) else None,
+                token=token if isinstance(token, str) else None,
+                skip=bool(params.get("skip", False)),
+            )
+
+        def _setup_enroll(params: dict) -> dict:
+            candidate_id = params.get("candidate_id")
+            device_type = params.get("device_type")
+            room = params.get("room")
+            if not isinstance(candidate_id, str) or not candidate_id.strip():
+                raise ValueError("a non-empty 'candidate_id' is required")
+            if not isinstance(device_type, str) or not device_type.strip():
+                raise ValueError("a non-empty 'device_type' is required")
+            return self.setup.enroll(
+                candidate_id.strip(),
+                device_type=device_type.strip(),
+                room=room if isinstance(room, str) and room.strip() else None,
+            )
+
+        def _setup_household_people_add(params: dict) -> dict:
+            role = params.get("role")
+            return self.setup.declare_person(
+                name=params.get("name"),
+                entity_id=params.get("entity_id"),
+                room_id=params.get("room_id"),
+                role=role if isinstance(role, str) and role.strip() else "member",
+            )
+
+        def _setup_household_contexts_add(params: dict) -> dict:
+            return self.setup.declare_context(label=params.get("label"), entity_id=params.get("entity_id"))
+
+        def _setup_preferences(params: dict) -> dict:
+            return self.setup.set_preferences(voice=params.get("voice"), intelligence=params.get("intelligence"))
+
+        def _setup_computer(params: dict) -> dict:
+            read_only = params.get("read_only")
+            return self.setup.set_computer_provider_enabled(
+                enabled=bool(params.get("enabled", False)),
+                read_only=bool(read_only) if isinstance(read_only, bool) else None,
+            )
+
+        def _setup_provider_package_install(params: dict) -> dict:
+            return self.setup.install_provider_package(
+                entry_point_name=params.get("entry_point_name"), config=params.get("config")
+            )
+
+        def _setup_provider_package_enable(params: dict) -> dict:
+            return self.setup.set_provider_package_enabled(
+                provider_id=params.get("provider_id"), enabled=bool(params.get("enabled", True))
+            )
+
         return IpcDispatcher(
             {
                 "host.capabilities": lambda _params: {
@@ -440,6 +512,35 @@ class HavenWebServer(ThreadingHTTPServer):
                 },
                 "state.get": lambda _params: self.director.state(),
                 "setup.status": lambda _params: self.setup.status(),
+                "setup.data_dir": _setup_data_dir,
+                "setup.provider.connect": _setup_provider_connect,
+                "setup.enroll": _setup_enroll,
+                "setup.discovery.scan": lambda _params: self.setup.run_discovery(),
+                "setup.household.people.add": _setup_household_people_add,
+                "setup.household.people.remove": lambda params: self.setup.remove_person(
+                    person_id=params.get("person_id")
+                ),
+                "setup.household.contexts.add": _setup_household_contexts_add,
+                "setup.household.contexts.remove": lambda params: self.setup.remove_context(
+                    context_id=params.get("context_id")
+                ),
+                "setup.preferences": _setup_preferences,
+                "setup.computer": _setup_computer,
+                "setup.computer.roots.add": lambda params: self.setup.add_computer_provider_root(
+                    path=params.get("path")
+                ),
+                "setup.computer.roots.remove": lambda params: self.setup.remove_computer_provider_root(
+                    path=params.get("path")
+                ),
+                "setup.computer.scan": lambda _params: self.setup.scan_computer_provider(),
+                "setup.complete": lambda _params: self.setup.complete(),
+                "setup.reopen": lambda _params: self.setup.reopen(),
+                "setup.providers.packages": lambda _params: self.setup.list_provider_packages(),
+                "setup.providers.install": _setup_provider_package_install,
+                "setup.providers.enable": _setup_provider_package_enable,
+                "setup.providers.uninstall": lambda params: self.setup.uninstall_provider_package(
+                    provider_id=params.get("provider_id")
+                ),
                 "models.overview": lambda _params: overview_payload(self.models),
                 "search.query": _search,
                 "knowledge.claims": _knowledge_claims,
@@ -1647,6 +1748,13 @@ class _Handler(BaseHTTPRequestHandler):
             payload["superseded_claims"] = [
                 claim_to_dict(found) for found in self.server.claims.supersedes_of(claim.claim_id)
             ]
+            payload["audit"] = [
+                audit_event_to_dict(event)
+                for event in self.server.claims.list_audit(
+                    scope_id=claim.scope_id,
+                    claim_id=claim.claim_id,
+                )
+            ]
         return payload
 
     def _send_knowledge_claims(self, params: dict) -> None:
@@ -1715,7 +1823,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "claim": self._claim_payload(result.claim)})
             return
         if action == "stale":
-            changed = self.server.knowledge.mark_claim_stale(claim_id)
+            changed = self.server.knowledge.mark_claim_stale(claim_id, actor=actor.strip())
             self._send_json(200, {"ok": True, "changed": changed, "claim": self._claim_payload(self.server.claims.get(claim_id))})
             return
         self.server.knowledge.forget_claim(claim, forgotten_by=actor.strip())
@@ -1874,7 +1982,12 @@ def main(argv: list[str] | None = None) -> None:
     # picker returns a path.
     server, _ = make_server(args.port, demo=args.demo, folder_picker=choose_folder)
     host, port = server.server_address
-    print(f"HAVEN web surface listening on http://{host}:{port}", file=sys.stderr)
+    print(
+        f"HAVEN web surface (development/compatibility only; the native "
+        f"WinUI client is the production experience) listening on "
+        f"http://{host}:{port}",
+        file=sys.stderr,
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
