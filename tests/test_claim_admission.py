@@ -9,6 +9,7 @@ from pathlib import Path
 from haven.knowledge import (
     AdmissionStatus,
     CandidateClaim,
+    Claim,
     ClaimAdmissionService,
     ClaimProvenance,
     ClaimState,

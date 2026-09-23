@@ -700,30 +700,45 @@ itself -- that seam is the whole point of `haven/models` and
 ## Relationship to the adjacent stack
 
 HAVEN is intentionally independent of the existing repositories at this
-stage. A plugin -- Ghost Teacher, TraceGlass, or a future third party --
-never runs inside HAVEN and never talks to a household's HAVEN instance
-directly. It reads versioned, provenance-preserving receipts a household
-explicitly exported, and only through the Hub's signed plugin catalog. See
-[`docs/plugin-boundary.md`](docs/plugin-boundary.md) for the full contract,
-including why this is a different relationship from the in-process
-`provider` contract in `docs/authoring-providers.md`.
+stage. TraceGlass and Ghost Teacher are each split the same way: a public
+Protocol lives in HAVEN, HAVEN Core never imports an implementation, and
+the actual analyzer/evaluator is a private product living in its own
+repository. This is the same shape as a `haven/providers` implementation --
+the contract is public so anything can plug in without HAVEN depending on
+it -- applied to deeper, receipt-chain-level analysis instead of runtime
+providers:
 
-- Ghost Teacher can generate adversarial household situations and evaluate an
-  intelligence provider or planner against them, using exported evaluation
-  signals -- never live household state, never execution authority.
-- TraceGlass can reconstruct a HAVEN receipt as an
+- **TraceGlass is diagnostic.** [`haven/trace/contracts.py`](haven/trace/contracts.py)
+  defines `TraceAnalyzer`: reconstruct a HAVEN receipt chain as
   available-information -> inferred-belief -> candidate-action ->
-  executed-action -> consequence chain, from the export, never from a live
-  connection to a household.
+  executed-action -> consequence, and find the earliest point it broke.
+  It runs locally, against the household's own full receipt chain --
+  nothing is exported for this path, because nothing needs to leave the
+  installation to explain what already happened.
+- **Ghost Teacher is training and improvement**, the counterpart question
+  asked of the same kind of receipt chain: not "what happened" but "what
+  should the next training run target." [`haven/curriculum/contracts.py`](haven/curriculum/contracts.py)
+  defines `CurriculumEvaluator` the same way -- a local Protocol, no
+  implementation in this repo, receipt chain never leaves the installation
+  for this path either.
 
-The Hub-side plugin catalog exists, and so does the household side of
-*consuming* it: `haven/plugins` fetches and Ed25519-verifies the catalog,
-independently re-checks the boundary policy against a compromised or
-misconfigured Hub, and records local opt-in/opt-out through a Settings ->
-Plugins web view and `python -m haven.plugins`. What does not exist yet is
-the actual data path: the receipt-export side and the Hub-side relay from
-an export to a subscribed plugin. Enabling a plugin today records a
-household's choice; it does not yet cause any data to move. See
+Neither `TraceAnalyzer` nor `CurriculumEvaluator` has a reference
+implementation in this repository; both are private Hidden Canopy products
+that depend on the public contract here.
+
+Separately, the Hub also publishes a signed plugin catalog
+(`haven/plugins`, see [`docs/plugin-boundary.md`](docs/plugin-boundary.md))
+as a **coming-soon** distribution path for plugins that would rather
+receive a redacted, exported receipt stream than run locally against the
+full chain -- useful for a third party a household doesn't want to install
+locally, or a plugin that only needs a narrow slice of evidence. `haven/plugins`
+fetches and Ed25519-verifies that catalog, independently re-checks the
+boundary policy against a compromised or misconfigured Hub, and records
+local opt-in/opt-out through a Settings -> Plugins web view and
+`python -m haven.plugins`. The marketplace UI is explicitly labeled
+"coming soon": the receipt-export side and the Hub-side relay from an
+export to a subscribed plugin are not built yet, so enabling a plugin
+today records a household's choice and moves no data. See
 `haven/plugins/catalog_client.py` and `docs/plugin-boundary.md` for the
 exact contract that relay must satisfy when it exists.
 

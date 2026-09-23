@@ -1,21 +1,32 @@
 # The HAVEN plugin boundary
 
-This document defines the contract between HAVEN and anything outside it
-that wants to consume HAVEN's behavior -- Ghost Teacher, TraceGlass, or any
-future third party. It is a different relationship from the one
-[`docs/authoring-providers.md`](authoring-providers.md) defines, and the two
-are easy to conflate, so start with the distinction:
+This document defines the contract between HAVEN and a **Hub-relayed
+plugin** specifically: something that wants to consume HAVEN's behavior
+from entirely outside the installation, coming-soon, through the Hub. It is
+easy to conflate this with two other, already-real relationships, so start
+with all three:
 
 - A **provider** runs *inside* HAVEN. It implements one of the `Protocol`
   contracts in `haven/providers` (`IntelligenceProvider`, `ExecutionAdapter`,
   `ObservationProvider`, a speech protocol, ...), is selected through the
   capability registry, and operates under the exact same authority boundary
   as HAVEN's own fixtures. See `authoring-providers.md` for that contract.
-- A **plugin** never runs inside HAVEN, never implements a provider
-  `Protocol`, and never receives live household state. It is a separate
-  product that reads what a household chose to export, after the fact,
-  through the Hub -- never by talking to a household's HAVEN instance
-  directly.
+- A **local analyzer** runs locally against the household's own full
+  receipt chain, never exported, never through the Hub. TraceGlass
+  (diagnostic: `haven/trace/contracts.py`'s `TraceAnalyzer`) and Ghost
+  Teacher (training and improvement: `haven/curriculum/contracts.py`'s
+  `CurriculumEvaluator`) both integrate this way today -- a public
+  Protocol in HAVEN, a private implementation elsewhere, same split as a
+  provider, applied to deeper receipt-chain analysis instead of a runtime
+  capability. This is their primary path.
+- A **Hub-relayed plugin** -- the subject of the rest of this document --
+  never runs inside HAVEN, never implements a provider or local-analyzer
+  Protocol, and never receives live household state. It would read only
+  what a household chose to export, after the fact, relayed through the
+  Hub -- never by talking to a household's HAVEN instance directly. This
+  path is **not built yet**: no export mechanism, no relay, nothing moves.
+  It exists for a plugin that would rather receive a redacted, narrow slice
+  of evidence than be installed and run locally against the full chain.
 
 ## The one rule that matters everywhere
 
@@ -24,9 +35,14 @@ household explicitly exported, and only ever reads them through the Hub.**
 Concretely:
 
 - HAVEN already emits a versioned JSON receipt export locally
-  (`haven/core/receipts.py`, `haven/core/serialize.py`) that omits
-  confirmation material. That export is the only artifact a plugin ever
-  sees a version of.
+  (`haven/audit/receipts.py`'s `ActionReceipt.to_dict()`, wired through
+  `haven/web/serialize.py`) that omits confirmation material. That export
+  is not yet redacted for external release, though -- it still carries
+  `household_id`, `requested_by`, free-text `justification`, and action
+  `parameters`, none of which a Hub-relayed plugin may ever receive. A
+  Hub-relayed plugin's export path still needs its own minimal, allow-listed
+  projection of this receipt, not the raw `to_dict()` output; that
+  projection is part of what "not built yet" means below.
 - Forwarding that export to the Hub is a local, explicit, per-installation
   decision an operator opts into. It is never a default and never silent.
   Nothing in this document should be read as implying that export path is
@@ -57,30 +73,36 @@ the same failure mode `authoring-providers.md` warns providers away from,
 just approached from outside the process instead of inside it. Route around
 the urge, not around the boundary.
 
-## Reference plugins
+## Reference plugins, and why they're listed here at all
 
-Two plugins exist today as products in their own right and are the
-reference implementations of this contract:
+TraceGlass and Ghost Teacher are listed in the Hub's catalog even though
+their primary integration is the **local analyzer** path above, not this
+one. Two reasons: the catalog is also where a future, narrower Hub-relayed
+variant of either would be discovered, and the closed capability vocabulary
+(`decision_chain_reconstruction`, `adaptive_curriculum_evaluation`) is
+shared between both paths, so it's defined once, here:
 
-- **TraceGlass** -- capability `decision_chain_reconstruction`.
-  Reconstructs a HAVEN receipt as an
+- **`decision_chain_reconstruction`** (TraceGlass, diagnostic) --
+  reconstructs a receipt as
   available-information -> inferred-belief -> candidate-action ->
-  executed-action -> consequence chain and identifies the earliest point
-  that chain broke. Strictly read-only: it produces analysis, never an
-  action, and has no path back into HAVEN.
-- **Ghost Teacher** -- capability `adaptive_curriculum_evaluation`. Uses
-  exported, redacted evaluation signals -- where a local intelligence
-  provider under-performed against a household-shaped situation -- to
-  generate adversarial test cases and propose training curriculum back to
-  the IDA training pipeline. It targets training data for the next model,
-  never a live household, and gains no execution authority anywhere.
+  executed-action -> consequence and identifies the earliest point that
+  chain broke. Strictly read-only: it produces analysis, never an action,
+  and has no path back into HAVEN, whether it runs as a local analyzer
+  against the full chain or, someday, as a Hub-relayed plugin against a
+  redacted export.
+- **`adaptive_curriculum_evaluation`** (Ghost Teacher, training and
+  improvement) -- the counterpart question asked of the same kind of
+  receipt chain: not what happened, but what the next training run should
+  target. Produces training signals and curriculum proposals, never an
+  action, never execution authority, whether local or Hub-relayed.
 
-Both are Hidden Canopy products, not community plugins, but they hold no
-special access under this contract -- a third-party plugin that satisfies
-the same catalog entry (capability, `exported_receipts_only` boundary) is
-architecturally indistinguishable from either one. That symmetry is
-deliberate, the same way `haven/providers` treats a free fixture and a paid
-Hidden Canopy provider identically.
+Both are Hidden Canopy products, not community plugins, but under this
+Hub-relay contract specifically they would hold no special access -- a
+third-party plugin that satisfies the same catalog entry (capability,
+`exported_receipts_only` boundary) would be architecturally
+indistinguishable from either one. That symmetry is deliberate, the same
+way `haven/providers` treats a free fixture and a paid Hidden Canopy
+provider identically.
 
 ## What the catalog entry actually is
 
