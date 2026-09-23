@@ -700,35 +700,37 @@ itself -- that seam is the whole point of `haven/models` and
 ## Relationship to the adjacent stack
 
 HAVEN is intentionally independent of the existing repositories at this
-stage. TraceGlass and Ghost Teacher are each split the same way: a public
-Protocol lives in HAVEN, HAVEN Core never imports an implementation, and
-the actual analyzer/evaluator is a private product living in its own
-repository. This is the same shape as a `haven/providers` implementation --
-the contract is public so anything can plug in without HAVEN depending on
-it -- applied to deeper, receipt-chain-level analysis instead of runtime
-providers:
+stage.
 
-- **TraceGlass is diagnostic.** [`haven/trace/contracts.py`](haven/trace/contracts.py)
-  defines `TraceAnalyzer`: reconstruct a HAVEN receipt chain as
-  available-information -> inferred-belief -> candidate-action ->
-  executed-action -> consequence, and find the earliest point it broke.
-  It runs locally, against the household's own full receipt chain --
-  nothing is exported for this path, because nothing needs to leave the
-  installation to explain what already happened.
-- **Ghost Teacher is training and improvement**, the counterpart question
-  asked of the same kind of receipt chain: not "what happened" but "what
-  should the next training run target." [`haven/curriculum/contracts.py`](haven/curriculum/contracts.py)
-  defines `CurriculumEvaluator` the same way -- a local Protocol, no
-  implementation in this repo, receipt chain never leaves the installation
-  for this path either.
+**TraceGlass** is diagnostic, and has a real local integration point:
+[`haven/trace/contracts.py`](haven/trace/contracts.py) defines
+`TraceAnalyzer`, a public Protocol -- HAVEN Core never imports an
+implementation -- for reconstructing a HAVEN receipt chain as
+available-information -> inferred-belief -> candidate-action ->
+executed-action -> consequence, and finding the earliest point it broke.
+It runs locally, against the household's own full receipt chain; nothing
+is exported for this path, because nothing needs to leave the installation
+to explain what already happened. The actual analyzer is a private Hidden
+Canopy product with no implementation in this repository. TraceGlass is
+also a broader, portfolio-wide decision-chain diagnostic (it reconstructs
+breakpoints for other systems too, per its own engineering spec); this
+Protocol is specifically HAVEN's local application of it, not a claim
+about TraceGlass's only use.
 
-Neither `TraceAnalyzer` nor `CurriculumEvaluator` has a reference
-implementation in this repository; both are private Hidden Canopy products
-that depend on the public contract here.
+**Ghost Teacher is a separate, portfolio-wide adaptive evaluation and
+curriculum-generation system** (capability targets, adaptive probing of a
+model endpoint, TraceGlass breakpoint consumption, RegOS admission,
+IDA-TRAIN-V2 lesson compiling -- see its own engineering specification).
+It has no HAVEN-specific integration today, and does not have a local
+Protocol in this repository the way TraceGlass does; a prior draft of
+this document claimed otherwise and was wrong. If a HAVEN intelligence
+provider is ever adaptively evaluated by Ghost Teacher, that would happen
+through Ghost Teacher's own generic model-endpoint adapter, the same way
+it evaluates any other target -- not through a contract HAVEN hosts.
 
 Separately, the Hub also publishes a signed plugin catalog
 (`haven/plugins`, see [`docs/plugin-boundary.md`](docs/plugin-boundary.md))
-as a **coming-soon** distribution path for plugins that would rather
+as a **coming-soon** distribution path for a plugin that would rather
 receive a redacted, exported receipt stream than run locally against the
 full chain -- useful for a third party a household doesn't want to install
 locally, or a plugin that only needs a narrow slice of evidence. `haven/plugins`
