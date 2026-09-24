@@ -238,6 +238,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 payload=payload,
             )
 
+        self._sync_listener = _sync_listener
         self.projects_store = ProjectStore(Path(resolved_data_dir) / "projects.db")
         self.tasks_store = TaskStore(Path(resolved_data_dir) / "tasks.db")
         self.projects_service = ProjectService(
@@ -1477,6 +1478,12 @@ class HavenWebServer(ThreadingHTTPServer):
                 )
             )
 
+        def _sync_scope_aliases(params: dict) -> dict:
+            aliases = params.get("aliases")
+            if not isinstance(aliases, dict):
+                raise ValueError("aliases must be an object mapping foreign scope ids to local ones")
+            return self.sync_engine.set_scope_aliases(aliases)
+
         def _sync_push(_params: dict) -> dict:
             return self.sync_engine.push()
 
@@ -1732,6 +1739,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 "sync.status": _sync_status,
                 "sync.set": _sync_set,
                 "sync.transport.set": _sync_transport_set,
+                "sync.scope_aliases.set": _sync_scope_aliases,
                 "sync.push": _sync_push,
                 "sync.pull": _sync_pull,
                 "sync.conflicts": _sync_conflicts,
@@ -1838,6 +1846,7 @@ class HavenWebServer(ThreadingHTTPServer):
             resources=self.resources,
             ontology=self.ontology,
             clock=self._director_clock or (lambda: datetime.now(timezone.utc)),
+            mutation_listener=self._sync_listener,
         )
         self.tasks_service = TaskService(
             store=self.tasks_store,
@@ -1845,7 +1854,9 @@ class HavenWebServer(ThreadingHTTPServer):
             resources=self.resources,
             ontology=self.ontology,
             clock=self._director_clock or (lambda: datetime.now(timezone.utc)),
+            mutation_listener=self._sync_listener,
         )
+        self.knowledge.set_mutation_listener(self._sync_listener)
         self.windows_provider = WindowObservationProvider(
             resource_store=self.resources,
             scope_id=self.identity.personal_scope_id,
