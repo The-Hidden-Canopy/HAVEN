@@ -33,6 +33,7 @@
                 <NavigationViewItem Content="Search" Tag="search" />
                 <NavigationViewItem Content="Memory" Tag="memory" />
                 <NavigationViewItem Content="Rooms" Tag="rooms" />
+                <NavigationViewItem Content="People" Tag="people" />
                 <NavigationViewItem Content="Home" Tag="home" />
                 <NavigationViewItem Content="Models" Tag="models" />
                 <NavigationViewItem Content="Settings" Tag="settings" />
@@ -106,6 +107,28 @@
                                 <StackPanel x:Name="RoomDetail" Spacing="10" />
                             </ScrollViewer>
                         </Grid>
+                    </StackPanel>
+
+                    <StackPanel x:Name="PeoplePanel" Spacing="12" Visibility="Collapsed">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="4">
+                                <TextBlock FontSize="20" Text="People &amp; contexts" />
+                                <TextBlock Text="Who lives here, how HAVEN senses their presence, and the contexts it watches." TextWrapping="Wrap" Opacity="0.72" />
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="Add person" Click="OnAddPersonClicked" VerticalAlignment="Center" />
+                            <Button Grid.Column="2" Content="Add context" Click="OnAddContextClicked" VerticalAlignment="Center" />
+                        </Grid>
+                        <TextBlock x:Name="PeopleErrorText" TextWrapping="Wrap"
+                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="People" />
+                        <StackPanel x:Name="PeopleList" Spacing="8" />
+                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Contexts" />
+                        <StackPanel x:Name="ContextsList" Spacing="8" />
                     </StackPanel>
 
                     <StackPanel x:Name="HomePanel" Spacing="12">

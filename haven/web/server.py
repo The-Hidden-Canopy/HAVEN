@@ -468,6 +468,67 @@ class HavenWebServer(ThreadingHTTPServer):
                 raise ValueError("unknown request")
             return {"state": self.director.state()}
 
+        def _people_list(params: dict) -> dict:
+            # The same merge the /api/people directory endpoint performs:
+            # declared household people annotated with live presence from the
+            # director, not a second directory with its own rules.
+            household = self.setup.status()["setup"]["household"]
+            present = {person["id"]: person for person in self.director.state().get("people", [])}
+            people = []
+            for declared in household.get("people", []):
+                row = dict(declared)
+                live = present.get(row.get("person_id"))
+                row["present"] = live is not None
+                row["room"] = live.get("room") if live is not None else None
+                people.append(row)
+            return {"people": people}
+
+        def _contexts_list(params: dict) -> dict:
+            # Declarations (the /api/contexts payload) annotated with the
+            # live active flag the web surface reads from the state payload.
+            household = self.setup.status()["setup"]["household"]
+            active = {
+                context["context_id"]: context.get("active", False)
+                for context in self.director.state().get("contexts", [])
+            }
+            contexts = []
+            for declared in household.get("contexts", []):
+                row = dict(declared)
+                row["active"] = active.get(row.get("context_id"), False)
+                contexts.append(row)
+            return {"contexts": contexts}
+
+        def _people_add(params: dict) -> dict:
+            # Identical parameter handling to the /api/people POST handler.
+            role = params.get("role")
+            return self.setup.declare_person(
+                name=params.get("name"),
+                entity_id=params.get("entity_id"),
+                room_id=params.get("room_id"),
+                role=role if isinstance(role, str) and role.strip() else "member",
+            )
+
+        def _people_update(params: dict) -> dict:
+            # Identical to the /api/people/{id} PATCH handler: absent or null
+            # fields keep their current values.
+            return self.setup.update_person(
+                person_id=params.get("person_id"),
+                name=params.get("name"),
+                role=params.get("role"),
+            )
+
+        def _contexts_add(params: dict) -> dict:
+            return self.setup.declare_context(
+                label=params.get("label"), entity_id=params.get("entity_id")
+            )
+
+        def _contexts_update(params: dict) -> dict:
+            return self.setup.update_context(
+                context_id=params.get("context_id"),
+                label=params.get("label"),
+                entity_id=params.get("entity_id"),
+            )
+
         def _computer_action(params: dict) -> dict:
             action = params.get("action")
             parameters = params.get("parameters", {})
@@ -611,6 +672,16 @@ class HavenWebServer(ThreadingHTTPServer):
                 "devices.command": _device_command,
                 "requests.approve": _request_approve,
                 "requests.deny": _request_deny,
+                "people.list": _people_list,
+                "people.add": _people_add,
+                "people.update": _people_update,
+                "people.remove": lambda params: self.setup.remove_person(person_id=params.get("person_id")),
+                "contexts.list": _contexts_list,
+                "contexts.add": _contexts_add,
+                "contexts.update": _contexts_update,
+                "contexts.remove": lambda params: self.setup.remove_context(
+                    context_id=params.get("context_id")
+                ),
             }
         )
 
