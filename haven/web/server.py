@@ -14,6 +14,7 @@ import sys
 import time
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -55,6 +56,9 @@ from ..ontology import OntologyStore
 from ..resources import ResourceStore
 from ..resources.store import resource_record_to_dict
 from ..search import HavenSearchService, SearchQuery
+from ..identity import LocalIdentityProvider, provision_identity
+from ..scopes.migration import migrate_household_first_installation
+from ..scopes.store import ScopeStore
 
 HEARTBEAT_SECONDS = 15
 
@@ -177,6 +181,27 @@ class HavenWebServer(ThreadingHTTPServer):
         self.knowledge = KnowledgeService(resources=self.resources, claims=self.claims, clock=clock)
         self.search = HavenSearchService(resources=self.resources, ontology=self.ontology, claims=self.claims)
         self.action_ledger = ActionLedgerStore(Path(resolved_data_dir) / "action_ledger.db")
+        # Personal scope (milestone C): the local principal, the personal
+        # root scope with the household parented beneath it, and the
+        # household-first migration of computer resources/claims into the
+        # personal root. Provisioning is idempotent; the migration only
+        # moves rows still scoped to the household id, so steady-state
+        # boots are pure reads.
+        scope_clock = clock or (lambda: datetime.now(timezone.utc))
+        self.scope_store = ScopeStore(Path(resolved_data_dir) / "scopes.db")
+        self.identity, _identity_provisioned = provision_identity(
+            data_dir=Path(resolved_data_dir),
+            household_id=self.director.household_id,
+            scope_store=self.scope_store,
+            clock=scope_clock,
+        )
+        self.scope_migration = migrate_household_first_installation(
+            scope_store=self.scope_store,
+            identity=self.identity,
+            resources=self.resources,
+            claims=self.claims,
+            clock=scope_clock,
+        )
         self.setup = SetupService(
             store=self.setup_store,
             director=self.director,
@@ -257,12 +282,11 @@ class HavenWebServer(ThreadingHTTPServer):
         This is intentionally an adapter, not a second application runtime.
         Mutating methods delegate to the same ``SetupService``,
         ``HavenApplication`` and ``ComputerActionService`` instances used by
-        the debug web surface.  The native client receives only the current
-        local household scope until ``IdentityProvider`` membership policy is
-        implemented; arbitrary caller-supplied scopes are rejected here.
+        the debug web surface.  Visible scopes are derived from the
+        authenticated principal's stored memberships (personal root +
+        household today); a caller-supplied scope list may only narrow the
+        query, never widen it.
         """
-
-        household_id = self.director.household_id
 
         def _visible_scope_ids(params: dict) -> tuple[str, ...]:
             requested = params.get("scope_ids", ())
@@ -273,9 +297,12 @@ class HavenWebServer(ThreadingHTTPServer):
             ):
                 raise ValueError("scope_ids must be a list of non-empty strings")
             requested_ids = tuple(requested)
-            if requested_ids and set(requested_ids) != {household_id}:
-                raise ValueError("the native client may only query its authenticated household scope")
-            return (household_id,)
+            visible = self.scope_store.visible_scope_ids(self.identity.principal_id)
+            if requested_ids and not set(requested_ids) <= set(visible):
+                # Fail closed: no caller-supplied scope may widen visibility
+                # beyond the principal's memberships.
+                raise ValueError("the requested scopes are not visible to the authenticated principal")
+            return visible
 
         def _search(params: dict) -> dict:
             text = params.get("text")
@@ -322,7 +349,7 @@ class HavenWebServer(ThreadingHTTPServer):
             if not isinstance(include_stale, bool):
                 raise ValueError("include_stale must be a boolean")
             claims = self.knowledge.list_claims(
-                scope_id=_visible_scope_ids(params)[0],
+                scope_ids=_visible_scope_ids(params),
                 include_stale=include_stale,
             )
             return {"claims": [claim_to_dict(claim) for claim in claims[:200]]}
@@ -332,7 +359,7 @@ class HavenWebServer(ThreadingHTTPServer):
             if not isinstance(claim_id, str) or not claim_id.strip():
                 raise ValueError("a non-empty 'claim_id' is required")
             claim = self.claims.get(claim_id.strip())
-            if claim is None or claim.scope_id != _visible_scope_ids(params)[0]:
+            if claim is None or claim.scope_id not in _visible_scope_ids(params):
                 # Keep the native surface fail-closed and avoid confirming
                 # whether a claim in another scope exists.
                 raise ValueError("unknown claim")
@@ -378,7 +405,7 @@ class HavenWebServer(ThreadingHTTPServer):
             if not isinstance(claim_id, str) or not claim_id.strip():
                 raise ValueError("a non-empty 'claim_id' is required")
             claim = self.claims.get(claim_id.strip())
-            if claim is None or claim.scope_id != _visible_scope_ids(params)[0]:
+            if claim is None or claim.scope_id not in _visible_scope_ids(params):
                 raise ValueError("unknown claim")
             _knowledge_owner_actor()
             return claim
@@ -431,6 +458,24 @@ class HavenWebServer(ThreadingHTTPServer):
             if room is None:
                 raise ValueError("unknown room")
             return {"room": room, "pending": payload["pending"]}
+
+        def _rooms_add(params: dict) -> dict:
+            # Same service and parameter handling as the /api/rooms POST handler.
+            return self.setup.add_room(name=params.get("name"))
+
+        def _rooms_rename(params: dict) -> dict:
+            # Same as the /api/rooms/{id} PATCH handler.
+            return self.setup.rename_room(
+                room_id=params.get("room_id"),
+                name=params.get("name"),
+            )
+
+        def _rooms_remove(params: dict) -> dict:
+            # Same as the /api/rooms/{id} DELETE handler. The service owns the
+            # guard semantics (unknown id refuses; devices referencing the room
+            # do not block a declaration removal) and its envelope crosses
+            # unchanged.
+            return self.setup.remove_room(room_id=params.get("room_id"))
 
         def _device_command(params: dict) -> dict:
             # Mirrors the /api/devices/{id}/command handler: the same
@@ -874,6 +919,9 @@ class HavenWebServer(ThreadingHTTPServer):
                 "computer.action.history": lambda _params: self.computer_actions.history(),
                 "rooms.list": lambda _params: _rooms_payload(),
                 "rooms.get": _rooms_get,
+                "rooms.add": _rooms_add,
+                "rooms.rename": _rooms_rename,
+                "rooms.remove": _rooms_remove,
                 "devices.command": _device_command,
                 "requests.approve": _request_approve,
                 "requests.deny": _request_deny,
@@ -1075,11 +1123,12 @@ class _Handler(BaseHTTPRequestHandler):
     def _visible_scope_ids(self, params: dict, *, key: str) -> tuple[str, ...] | None:
         """Resolve the local visible-scope boundary for a web request.
 
-        The wider ``IdentityProvider.memberships()`` contract is not wired
-        yet, so a local HAVEN installation has exactly one visible scope: its
-        current household.  An omitted filter means that scope; a caller may
-        repeat it explicitly, but cannot turn a query parameter into an
-        authorization grant for another scope.
+        Visible scopes are derived from the authenticated principal's
+        stored memberships (today: the personal root and the household
+        beneath it) -- never from caller input. An omitted filter means all
+        visible scopes; a caller may narrow to any visible subset, but
+        cannot turn a query parameter into an authorization grant for
+        another scope.
         """
 
         requested = params.get(key, [])
@@ -1088,8 +1137,8 @@ class _Handler(BaseHTTPRequestHandler):
         ):
             self._send_json(400, {"ok": False, "error": f"{key} must contain non-empty scope ids"})
             return None
-        visible = (self.director.household_id,)
-        if requested and set(requested) != set(visible):
+        visible = self.server.identity.visible_scope_ids()
+        if requested and not set(requested) <= set(visible):
             self._send_json(
                 403,
                 {
@@ -1101,7 +1150,7 @@ class _Handler(BaseHTTPRequestHandler):
         return visible
 
     def _claim_is_visible(self, claim) -> bool:
-        return claim.scope_id == self.director.household_id
+        return claim.scope_id in set(self.server.identity.visible_scope_ids())
 
     def _handle_desktop_bootstrap(self) -> None:
         supplied = parse_qs(urlsplit(self.path).query).get("session", [""])[0]
@@ -2134,7 +2183,6 @@ class _Handler(BaseHTTPRequestHandler):
         scope_ids = self._visible_scope_ids(params, key="scope")
         if scope_ids is None:
             return
-        scope_id = scope_ids[0]
         state_value = params.get("state", [None])[0] or None
         include_stale = params.get("include_stale", ["false"])[0].strip().lower() in ("1", "true", "yes")
         try:
@@ -2142,7 +2190,7 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError:
             self._send_json(400, {"ok": False, "error": f"unknown claim state: {state_value}"})
             return
-        claims = self.server.knowledge.list_claims(scope_id=scope_id, include_stale=include_stale)
+        claims = self.server.knowledge.list_claims(scope_ids=scope_ids, include_stale=include_stale)
         if state is not None:
             claims = tuple(claim for claim in claims if claim.state is state)
         try:

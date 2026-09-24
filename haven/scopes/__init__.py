@@ -1,9 +1,10 @@
 """Scopes: the partition unit the life substrate keys against.
 
-Contract-only package (see `models.py`'s docstring) -- no registry, no
-policy layer, no persistence yet.
+`models.py` holds the contract records (`ScopeRef`, `Membership`);
+`store.py` is their SQLite persistence and the derivation point for
+visibility (design spec pages 18-19, milestone C).
 """
 
-from .models import ScopeRef
+from .models import Membership, ScopeRef
 
-__all__ = ["ScopeRef"]
+__all__ = ["Membership", "ScopeRef"]

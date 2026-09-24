@@ -1293,6 +1293,139 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void OnAddRoomClicked(object sender, RoutedEventArgs args)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        var name = new TextBox { PlaceholderText = "e.g. Studio", MinWidth = 280 };
+        var fields = new StackPanel { Spacing = 8 };
+        fields.Children.Add(new TextBlock { Text = "Room name" });
+        fields.Children.Add(name);
+        fields.Children.Add(new TextBlock
+        {
+            Text = "A room is your declaration; it is valid before any device is connected and survives a provider being unavailable.",
+            TextWrapping = TextWrapping.Wrap,
+            Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+        });
+        var dialog = new ContentDialog
+        {
+            Title = "Add room",
+            Content = fields,
+            PrimaryButtonText = "Add",
+            CloseButtonText = "Cancel",
+            XamlRoot = RootGrid().XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary || string.IsNullOrWhiteSpace(name.Text))
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.AddRoomAsync(name.Text.Trim());
+            if (result.ValueKind == JsonValueKind.Object
+                && result.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                RoomsErrorText.Text = result.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+                    ? error.GetString() ?? "HAVEN Core refused to add the room."
+                    : "HAVEN Core refused to add the room.";
+                return;
+            }
+            RoomsErrorText.Text = "";
+            await LoadRoomsAsync();
+        }
+        catch (Exception ex)
+        {
+            RoomsErrorText.Text = ex.Message;
+        }
+    }
+
+    private async Task RenameRoomAsync(string roomId, string currentName)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        var name = new TextBox { Text = currentName, MinWidth = 280 };
+        var dialog = new ContentDialog
+        {
+            Title = $"Rename {currentName}",
+            Content = name,
+            PrimaryButtonText = "Save",
+            CloseButtonText = "Cancel",
+            XamlRoot = RootGrid().XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary || string.IsNullOrWhiteSpace(name.Text))
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.RenameRoomAsync(roomId, name.Text.Trim());
+            if (result.ValueKind == JsonValueKind.Object
+                && result.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                RoomsErrorText.Text = result.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+                    ? error.GetString() ?? "HAVEN Core refused to rename the room."
+                    : "HAVEN Core refused to rename the room.";
+                return;
+            }
+            RoomsErrorText.Text = "";
+            await LoadRoomsAsync();
+        }
+        catch (Exception ex)
+        {
+            RoomsErrorText.Text = ex.Message;
+        }
+    }
+
+    private async Task RemoveRoomAsync(string roomId, string roomName)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        var dialog = new ContentDialog
+        {
+            Title = $"Remove {roomName}?",
+            Content = new TextBlock
+            {
+                Text = $"The {roomName} declaration is removed from your household. Devices in it are not deleted; they show as unassigned until you declare the room again.",
+                TextWrapping = TextWrapping.Wrap,
+            },
+            PrimaryButtonText = "Remove",
+            CloseButtonText = "Cancel",
+            PrimaryButtonStyle = (Style)Application.Current.Resources["HavenDangerButtonStyle"],
+            XamlRoot = RootGrid().XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.RemoveRoomAsync(roomId);
+            if (result.ValueKind == JsonValueKind.Object
+                && result.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                RoomsErrorText.Text = result.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+                    ? error.GetString() ?? "HAVEN Core refused to remove the room."
+                    : "HAVEN Core refused to remove the room.";
+                return;
+            }
+            RoomsErrorText.Text = "";
+            await LoadRoomsAsync();
+        }
+        catch (Exception ex)
+        {
+            RoomsErrorText.Text = ex.Message;
+        }
+    }
+
     private async Task DecideRequestAsync(string requestId, bool approve)
     {
         if (_client is null)
@@ -1340,6 +1473,24 @@ public sealed partial class MainWindow : Window
             Text = people.Count > 0 ? string.Join(" · ", people) : "Empty",
             Opacity = 0.72,
         });
+        var roomActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var rename = new Button
+        {
+            Content = "Rename",
+            Style = (Style)Application.Current.Resources["HavenQuietButtonStyle"],
+        };
+        rename.Click += async (_, _) =>
+            await RenameRoomAsync(roomId, GetString(room, "name") ?? roomId);
+        var remove = new Button
+        {
+            Content = "Remove",
+            Style = (Style)Application.Current.Resources["HavenDangerButtonStyle"],
+        };
+        remove.Click += async (_, _) =>
+            await RemoveRoomAsync(roomId, GetString(room, "name") ?? roomId);
+        roomActions.Children.Add(rename);
+        roomActions.Children.Add(remove);
+        head.Children.Add(roomActions);
         RoomDetail.Children.Add(head);
 
         if (room.TryGetProperty("camera", out var camera) && camera.ValueKind == JsonValueKind.Object)
