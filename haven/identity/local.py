@@ -131,7 +131,7 @@ class LocalIdentityProvider:
         return tuple(result)
 
     def visible_scope_ids(self, *, now: datetime | None = None) -> tuple[str, ...]:
-        return self._scopes.visible_scope_ids(self._principal_id, now=now)
+        return self._scopes.visible_scope_ids(self._principal_id, now=now or self._clock())
 
 
 def provision_identity(

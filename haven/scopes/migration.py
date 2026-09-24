@@ -90,7 +90,7 @@ def migrate_household_first_installation(
     for claim in claims.list_all():
         if claim.scope_id != household_id:
             continue
-        if not _claim_is_personal(claim, moved_resource_ids):
+        if not _claim_is_personal(claim, moved_resource_ids, resources, household_id):
             continue  # built on home resources, or explicitly home-specific
         claims.save(replace(claim, scope_id=personal_id))
         migrated_claims.append((claim.claim_id, household_id, personal_id))
@@ -119,18 +119,26 @@ def migrate_household_first_installation(
     )
 
 
-def _claim_is_personal(claim, moved_resource_ids: set[str]) -> bool:
-    """A claim migrates when it is built on moved computer resources, or
-    when it is a pure user statement with no resource backing at all.
-    Claims anchored to home resources stay home-specific."""
+def _claim_is_personal(claim, moved_resource_ids: set[str], resources, household_id: str) -> bool:
+    """A claim migrates when it is built on moved computer resources, or when
+    it is a pure user statement (no resource or device backing). A claim
+    anchored to home evidence -- device refs, or refs resolving to resources
+    that stayed in the household scope -- is home-specific and stays."""
 
     refs = [str(ref) for ref in claim.source_refs]
-    resource_refs = [ref for ref in refs if not ref.startswith("device:")]
-    if any(ref in moved_resource_ids for ref in resource_refs):
+    if any(ref in moved_resource_ids for ref in refs):
         return True
-    if not resource_refs:
+    if not refs:
         return True
-    return False
+    for ref in refs:
+        if ref.startswith("device:"):
+            return False
+        record = resources.get(ref)
+        if record is not None and record.scope_id == household_id:
+            # A resource that stayed home-specific: home evidence wins over
+            # any user-statement default.
+            return False
+    return True
 
 
 def rollback_migration(

@@ -278,9 +278,11 @@ def test_backup_lifecycle_create_list_restore_delete() -> None:
                 "ha_token.txt",
                 "history.db",
                 "resources.db",
-                    "ontology.db",
-                    "claims.db",
-                    "action_ledger.db",
+                "ontology.db",
+                "claims.db",
+                "action_ledger.db",
+                "scopes.db",
+                "identity.json",
             }
 
             # Era two: voice off.
