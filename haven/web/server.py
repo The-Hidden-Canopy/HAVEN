@@ -529,6 +529,82 @@ class HavenWebServer(ThreadingHTTPServer):
                 entity_id=params.get("entity_id"),
             )
 
+        def _automations_enable(params: dict) -> dict:
+            # Mirrors the {"enabled": bool} branch of the /api/automations/{id}
+            # PATCH handler: scheduling can only be toggled on approved rules.
+            rule_id = params.get("rule_id")
+            if not isinstance(rule_id, str) or not rule_id.strip():
+                raise ValueError("a non-empty 'rule_id' is required")
+            enabled = params.get("enabled")
+            if not isinstance(enabled, bool):
+                raise ValueError("enabled must be a boolean")
+            rule = next(
+                (item for item in self.director.store.state.rules if item.rule_id == rule_id.strip()),
+                None,
+            )
+            if rule is None:
+                raise ValueError("unknown automation")
+            if getattr(rule.status, "value", None) != "approved":
+                raise ValueError("only approved automations can be enabled or disabled")
+            return {
+                "scheduler": self.director.set_scheduler_enabled(rule.rule_id, enabled),
+                "state": self.director.state(),
+            }
+
+        def _automations_approve(params: dict) -> dict:
+            # Same default justification as the web approve handler.
+            justification = params.get("justification")
+            return self.director.approve_automation(
+                params.get("rule_id"),
+                justification=(
+                    justification.strip()
+                    if isinstance(justification, str) and justification.strip()
+                    else "owner approved automation from HAVEN"
+                ),
+            )
+
+        def _automations_revoke(params: dict) -> dict:
+            # Same requirement as the web DELETE handler.
+            justification = params.get("justification")
+            if not isinstance(justification, str) or not justification.strip():
+                raise ValueError("automation deletion requires a justification")
+            return self.director.revoke_automation(
+                params.get("rule_id"), justification=justification.strip()
+            )
+
+        def _automations_create(params: dict) -> dict:
+            # Identical parameter handling to the /api/automations POST handler.
+            weekdays = params.get("weekdays", [])
+            return self.director.create_automation(
+                source_text=params.get("source_text"),
+                time_of_day=params.get("time_of_day"),
+                weekdays=weekdays if isinstance(weekdays, list) else [],
+                target_device_id=params.get("target_device_id"),
+                capability=params.get("capability"),
+                service=params.get("service"),
+                interpretation=params.get("interpretation"),
+                parameters=params.get("parameters") if isinstance(params.get("parameters"), dict) else None,
+            )
+
+        def _automations_update(params: dict) -> dict:
+            # Identical to the /api/automations/{id} PATCH handler's edit branch,
+            # including its default justification.
+            weekdays = params.get("weekdays", [])
+            justification = params.get("justification")
+            return self.director.update_automation(
+                params.get("rule_id"),
+                source_text=params.get("source_text"),
+                time_of_day=params.get("time_of_day"),
+                weekdays=weekdays if isinstance(weekdays, list) else [],
+                interpretation=params.get("interpretation"),
+                parameters=params.get("parameters") if isinstance(params.get("parameters"), dict) else None,
+                justification=(
+                    justification
+                    if isinstance(justification, str) and justification.strip()
+                    else "edited automation in HAVEN"
+                ),
+            )
+
         def _computer_action(params: dict) -> dict:
             action = params.get("action")
             parameters = params.get("parameters", {})
@@ -682,6 +758,18 @@ class HavenWebServer(ThreadingHTTPServer):
                 "contexts.remove": lambda params: self.setup.remove_context(
                     context_id=params.get("context_id")
                 ),
+                "automations.list": lambda _params: {
+                    "automations": (state := self.director.state())["automations"],
+                    "scheduler": state["scheduler"],
+                },
+                "automations.options": lambda _params: {
+                    "options": self.director.automation_options()
+                },
+                "automations.create": _automations_create,
+                "automations.update": _automations_update,
+                "automations.enable": _automations_enable,
+                "automations.approve": _automations_approve,
+                "automations.revoke": _automations_revoke,
             }
         )
 
