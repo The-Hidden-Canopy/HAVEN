@@ -170,6 +170,32 @@ public sealed class HavenCoreClient : IAsyncDisposable
     public Task<JsonElement> ReopenSetupAsync(CancellationToken cancellationToken = default) =>
         RequestResultAsync("setup.reopen", new { }, cancellationToken);
 
+    public Task<JsonElement> GetRoomsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("rooms.list", new { }, cancellationToken);
+
+    public Task<JsonElement> GetRoomAsync(string roomId, CancellationToken cancellationToken = default) =>
+        RequestResultAsync("rooms.get", new { room_id = roomId }, cancellationToken);
+
+    public Task<JsonElement> SendDeviceCommandAsync(
+        string deviceId,
+        string service,
+        int? brightnessPct = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "devices.command",
+            new { device_id = deviceId, service, brightness_pct = brightnessPct },
+            cancellationToken);
+
+    public Task<JsonElement> ApproveRequestAsync(
+        string requestId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("requests.approve", new { request_id = requestId }, cancellationToken);
+
+    public Task<JsonElement> DenyRequestAsync(
+        string requestId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("requests.deny", new { request_id = requestId }, cancellationToken);
+
     private async Task<JsonElement> RequestResultAsync(
         string method,
         object parameters,

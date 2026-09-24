@@ -32,6 +32,7 @@
                 <NavigationViewItem Content="Today" Tag="today" />
                 <NavigationViewItem Content="Search" Tag="search" />
                 <NavigationViewItem Content="Memory" Tag="memory" />
+                <NavigationViewItem Content="Rooms" Tag="rooms" />
                 <NavigationViewItem Content="Home" Tag="home" />
                 <NavigationViewItem Content="Models" Tag="models" />
                 <NavigationViewItem Content="Settings" Tag="settings" />
@@ -72,6 +73,38 @@
                                     <TextBlock x:Name="MemoryActionStatus" TextWrapping="Wrap" Opacity="0.72" />
                                 </StackPanel>
                             </Border>
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel x:Name="RoomsPanel" Spacing="12" Visibility="Collapsed">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="4">
+                                <TextBlock FontSize="20" Text="Rooms &amp; devices" />
+                                <TextBlock Text="Your home, its devices, and what HAVEN last observed about them." TextWrapping="Wrap" Opacity="0.72" />
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="Refresh" Click="OnRoomsRefreshClicked" VerticalAlignment="Center" />
+                        </Grid>
+                        <TextBlock x:Name="RoomsErrorText" TextWrapping="Wrap"
+                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                        <Grid ColumnSpacing="18">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="0.8*" />
+                                <ColumnDefinition Width="1.4*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="10">
+                                <ListView x:Name="RoomsList" SelectionChanged="OnRoomSelectionChanged" MaxHeight="380" />
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="Pending confirmations" FontWeight="SemiBold" />
+                                    <StackPanel x:Name="PendingList" Spacing="6" />
+                                </StackPanel>
+                            </StackPanel>
+                            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" MaxHeight="560">
+                                <StackPanel x:Name="RoomDetail" Spacing="10" />
+                            </ScrollViewer>
                         </Grid>
                     </StackPanel>
 
