@@ -31,6 +31,8 @@ _FIXED_NAMES = (
     "ontology.db",
     "claims.db",
     "action_ledger.db",
+    "scopes.db",
+    "identity.json",
     "computer_provider.json",
     "installed_providers.json",
 )

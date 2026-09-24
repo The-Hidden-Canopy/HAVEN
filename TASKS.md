@@ -58,6 +58,8 @@ All tasks above are complete and verified: `tests/test_desktop_shell.py`, `tests
 
 ## Milestone B — done
 
+- [x] **Post-done gap closure — room authoring (native).** During the UI/UX conformance pass, Add Room had to ship disabled-with-reason because no room-authoring IPC existed. Closed by adding three thin adapter methods to `build_ipc_dispatcher()` (`rooms.add` → `SetupService.add_room`, `rooms.rename`, `rooms.remove` — the same calls the `/api/rooms` POST/PATCH/DELETE handlers make, guard semantics unchanged: unknown id refuses inside the result envelope; a declaration removal is never blocked by devices referencing it), covered by 2 new tests in `tests/test_ipc_rooms_devices.py` (round-trip against a seeded real installation incl. `rooms.list`/`rooms.get` shape, blank-name/unknown-id/idempotent re-declare paths), and enabling the native Add Room dialog plus Rename/Remove (destructive confirmation naming object + consequence) in the Home → Rooms tab. The IPC surface is now **40 adapter tests across 6 files**, all green alongside the web suites.
+
 All sub-phases B1–B6 are complete and verified. The exit condition holds — the native WinUI client covers every WebUI surface a normal user needs:
 
 - **Setup** (B1, pre-existing): `setup.*` — 19 methods (data-dir, provider connect, enroll, discovery scan, household people/contexts, preferences, computer roots/scan, complete/reopen, provider packages).

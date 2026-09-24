@@ -116,8 +116,21 @@ class KnowledgeService:
         claims_marked = self._claims.mark_stale_by_source(source_ids)
         return resources_marked, claims_marked
 
-    def list_claims(self, *, scope_id: str | None = None, include_stale: bool = False):
-        claims = self._claims.list_all() if scope_id is None else self._claims.list_by_scope(scope_id)
+    def list_claims(
+        self,
+        *,
+        scope_id: str | None = None,
+        scope_ids: tuple[str, ...] | None = None,
+        include_stale: bool = False,
+    ):
+        if scope_ids is not None:
+            claims = tuple(
+                claim
+                for scope in scope_ids
+                for claim in self._claims.list_by_scope(scope)
+            )
+        else:
+            claims = self._claims.list_all() if scope_id is None else self._claims.list_by_scope(scope_id)
         if include_stale:
             return claims
         now = self._clock()

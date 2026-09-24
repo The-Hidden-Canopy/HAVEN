@@ -238,10 +238,8 @@
 
                         <StackPanel x:Name="HomeTabRooms" Spacing="12">
                             <StackPanel Orientation="Horizontal" Spacing="8">
-                                <Button x:Name="AddRoomButton" Content="Add room" IsEnabled="False"
-                                        ToolTipService.ToolTip="Room authoring is not available over the native bridge yet." />
-                                <TextBlock x:Name="AddRoomNote" VerticalAlignment="Center" Style="{StaticResource HavenMetadataTextStyle}"
-                                           Text="Room authoring arrives in a future home update; rooms you declare elsewhere appear here." />
+                                <Button x:Name="AddRoomButton" Content="Add room" Click="OnAddRoomClicked"
+                                        Style="{StaticResource HavenPrimaryButtonStyle}" />
                             </StackPanel>
                             <ListView x:Name="RoomCards" SelectionChanged="OnRoomSelectionChanged" MaxHeight="300">
                                 <ListView.ItemsPanel>
