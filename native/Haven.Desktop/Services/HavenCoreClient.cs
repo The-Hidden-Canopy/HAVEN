@@ -196,6 +196,59 @@ public sealed class HavenCoreClient : IAsyncDisposable
         CancellationToken cancellationToken = default) =>
         RequestResultAsync("requests.deny", new { request_id = requestId }, cancellationToken);
 
+    public Task<JsonElement> GetPeopleAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("people.list", new { }, cancellationToken);
+
+    public Task<JsonElement> AddPersonAsync(
+        string name,
+        string role = "member",
+        string? entityId = null,
+        string? roomId = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "people.add",
+            new { name, role, entity_id = entityId, room_id = roomId },
+            cancellationToken);
+
+    public Task<JsonElement> UpdatePersonAsync(
+        string personId,
+        string? name = null,
+        string? role = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "people.update",
+            new { person_id = personId, name, role },
+            cancellationToken);
+
+    public Task<JsonElement> RemovePersonAsync(
+        string personId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("people.remove", new { person_id = personId }, cancellationToken);
+
+    public Task<JsonElement> GetContextsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("contexts.list", new { }, cancellationToken);
+
+    public Task<JsonElement> AddContextAsync(
+        string label,
+        string entityId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("contexts.add", new { label, entity_id = entityId }, cancellationToken);
+
+    public Task<JsonElement> UpdateContextAsync(
+        string contextId,
+        string? label = null,
+        string? entityId = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "contexts.update",
+            new { context_id = contextId, label, entity_id = entityId },
+            cancellationToken);
+
+    public Task<JsonElement> RemoveContextAsync(
+        string contextId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("contexts.remove", new { context_id = contextId }, cancellationToken);
+
     private async Task<JsonElement> RequestResultAsync(
         string method,
         object parameters,
