@@ -4258,7 +4258,7 @@ async function refreshPlugins({ forceCatalogFetch = false } = {}) {
 
 function renderPlugins() {
   const plugins = pluginsState.plugins;
-  els.pluginsCount.textContent = plugins.length + (plugins.length === 1 ? ' plugin' : ' plugins');
+  els.pluginsCount.textContent = plugins.length + (plugins.length === 1 ? ' export consumer' : ' export consumers');
 
   if (pluginsState.catalogError) {
     els.pluginsCatalogError.textContent = 'Catalog unavailable (' + pluginsState.catalogError + '); showing the last known list.';
@@ -4271,7 +4271,7 @@ function renderPlugins() {
   if (!plugins.length) {
     const empty = document.createElement('p');
     empty.className = 'sys-unavailable muted';
-    empty.textContent = 'No plugins in the catalog yet. Try "Refresh catalog".';
+    empty.textContent = 'No export consumers in the catalog yet. Try "Refresh catalog".';
     els.pluginsList.appendChild(empty);
     return;
   }

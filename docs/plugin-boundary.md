@@ -1,5 +1,13 @@
 # The HAVEN plugin boundary
 
+> **Taxonomy (spec page 41):** the user-facing surface described in this
+> document is an **Export Consumer** -- an extension that runs outside
+> HAVEN and reads only explicitly exported, redacted artifacts through the
+> signed-catalog boundary. The product UI and docs call it that; the
+> `haven.plugins` package name is unchanged for compatibility. The other
+> extension classes (Provider, Intelligence Service, Feature Module) live
+> under `haven/extensions/` with their own contracts.
+
 This document defines the contract between HAVEN and a **Hub-relayed
 plugin** specifically: something that wants to consume HAVEN's behavior
 from entirely outside the installation, coming-soon, through the Hub. It is

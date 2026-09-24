@@ -457,6 +457,11 @@
                         <Button Content="Open models" Click="OnOpenModelsClicked" VerticalAlignment="Center" />
                     </StackPanel>
 
+                    <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Extensions" />
+                    <TextBlock Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap"
+                               Text="Four extension classes, each with a declared run-location and boundary. What is listed here is described, not granted." />
+                    <StackPanel x:Name="ExtensionsHost" Spacing="8" />
+
                     <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Privacy" />
                     <TextBlock Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap"
                                Text="Retention, activity observation and export controls arrive with the privacy milestone. HAVEN stores everything locally today." />

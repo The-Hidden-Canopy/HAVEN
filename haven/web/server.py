@@ -38,6 +38,7 @@ from .models_api import (
 from ..plugins import PluginManager, PluginRegistry
 from .plugins_api import (
     current_payload as plugins_current_payload,
+    plugin_row,
     marketplace_payload as plugins_marketplace_payload,
     refresh_payload as plugins_refresh_payload,
 )
@@ -62,6 +63,13 @@ from ..scopes.store import ScopeStore
 from ..application import ProjectService, TaskService
 from ..domains.projects import ProjectStore
 from ..domains.tasks import TaskStore
+from ..extensions import (
+    EchoIntelligenceService,
+    ExtensionClass,
+    ExtensionDescriptor,
+    ExtensionRegistry,
+    IntelligenceBoundary,
+)
 from ..graph import Correlator, RelationshipAdmissionPolicy, RelationshipProjector, RelationshipService
 from ..sync import FolderSyncTransport, LocalSyncEngine
 from ..integrations.browser import BrowserHub, BrowserObservationProvider, domain_of
@@ -290,6 +298,25 @@ class HavenWebServer(ThreadingHTTPServer):
             resource_store=self.resources,
             ledger=self.action_ledger,
             clock=scope_clock,
+        )
+        # Extensions (milestone I): the taxonomy registry plus the
+        # intelligence boundary. Export consumers are the existing plugin
+        # surface reclassified; providers are the dynamically-loaded
+        # provider plugins; the local echo service proves the intelligence
+        # seam. Feature modules: none yet, honestly.
+        self.extensions = ExtensionRegistry()
+        self.extensions.register(
+            ExtensionDescriptor(
+                extension_id="intelligence.local-echo",
+                display_name="Local echo (diagnostic)",
+                extension_class=ExtensionClass.INTELLIGENCE,
+                source="builtin",
+                detail="Answers with a summary of the bounded context it was handed; proves the seam.",
+            )
+        )
+        self._echo_service = EchoIntelligenceService()
+        self.intelligence_boundary = IntelligenceBoundary(
+            resources=self.resources, claims=self.claims, identity=self.identity
         )
         # Relationship graph (milestone G): deterministic projections plus
         # the learned-candidate pipeline, admitted only through policy.
@@ -1502,6 +1529,91 @@ class HavenWebServer(ThreadingHTTPServer):
                 else None,
             )
 
+
+        def _extensions_list(_params: dict) -> dict:
+            registry = ExtensionRegistry()
+            # Export consumers: the existing plugin surface, reclassified.
+            view = self.plugins.view()
+            for entry in view.entries:
+                registry.register(
+                    ExtensionDescriptor(
+                        extension_id=f"export-consumer.{entry.descriptor.plugin_id}",
+                        display_name=entry.descriptor.display_name,
+                        extension_class=ExtensionClass.EXPORT_CONSUMER,
+                        source="hub-catalog",
+                        detail=entry.descriptor.description,
+                        state=(
+                            ("plugin_id", entry.descriptor.plugin_id),
+                            ("publisher", entry.descriptor.publisher),
+                            ("capability", entry.descriptor.capability.value),
+                            ("data_boundary", entry.descriptor.data_boundary.value),
+                            ("enabled", entry.enabled),
+                        ),
+                    )
+                )
+            # Providers: dynamically-loaded provider plugins.
+            from ..providers.loader import discover_provider_packages, inspect_provider_package
+
+            for discovered in discover_provider_packages():
+                try:
+                    manifest = inspect_provider_package(discovered)
+                except Exception:
+                    continue
+                registry.register(
+                    ExtensionDescriptor(
+                        extension_id=f"provider.{manifest.provider_id}",
+                        display_name=manifest.display_name,
+                        extension_class=ExtensionClass.PROVIDER,
+                        source=discovered.entry_point,
+                        detail=manifest.description,
+                        state=(("provider_id", manifest.provider_id),),
+                    )
+                )
+            # Intelligence services: registered boundary services.
+            for descriptor in self.extensions.list_by_class(ExtensionClass.INTELLIGENCE):
+                registry.register(descriptor)
+            classes = []
+            for extension_class in ExtensionClass:
+                classes.append(
+                    {
+                        "class": extension_class.value,
+                        "extensions": [
+                            descriptor.wire()
+                            for descriptor in registry.list_by_class(extension_class)
+                        ],
+                    }
+                )
+            return {"ok": True, "classes": classes}
+
+        def _extensions_export_consumers_set(params: dict) -> dict:
+            # Reuse the plugin registry's enablement -- no forked path.
+            plugin_id = params.get("plugin_id")
+            enabled = params.get("enabled")
+            if not isinstance(plugin_id, str) or not plugin_id.strip():
+                raise ValueError("a non-empty 'plugin_id' is required")
+            if not isinstance(enabled, bool):
+                raise ValueError("enabled must be a boolean")
+            view = self.plugins.enable(plugin_id) if enabled else self.plugins.disable(plugin_id)
+            return {"ok": True, "plugins": [plugin_row(entry) for entry in view.entries]}
+
+        def _intelligence_echo(params: dict) -> dict:
+            # Diagnostic: runs the local echo service through the boundary and
+            # returns both its answer and the exact bounded context it saw.
+            text = params.get("text")
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("a non-empty 'text' is required")
+            result = self.intelligence_boundary.submit(
+                self._echo_service, text=text.strip(),
+                focus=params.get("focus") if isinstance(params.get("focus"), str) else None,
+            )
+            if not result.get("ok"):
+                return result
+            return {
+                "ok": True,
+                "answer": result["text"],
+                "context": result["context"],
+            }
+
         def _computer_files(_params: dict) -> dict:
             visible = self.identity.visible_scope_ids()
             rows = [
@@ -1736,6 +1848,9 @@ class HavenWebServer(ThreadingHTTPServer):
                 "computer.observation.set": _computer_observation_set,
                 "computer.observation.suppress": _computer_observation_suppress,
                 "computer.files.list": _computer_files,
+                "extensions.list": _extensions_list,
+                "extensions.export_consumers.set_enabled": _extensions_export_consumers_set,
+                "intelligence.echo": _intelligence_echo,
                 "sync.status": _sync_status,
                 "sync.set": _sync_set,
                 "sync.transport.set": _sync_transport_set,
