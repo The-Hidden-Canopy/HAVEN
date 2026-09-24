@@ -1,0 +1,44 @@
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Mono theme, Dark appearance (spec 34-39).  Flat token set:
+         ThemeService swaps one merged dictionary for another live, and the
+         window root's RequestedTheme flips the framework controls. -->
+            <Color x:Key="HavenCanvasColor">#111316</Color>
+            <Color x:Key="HavenSurface1Color">#191C20</Color>
+            <Color x:Key="HavenSurface2Color">#22262B</Color>
+            <Color x:Key="HavenTextColor">#F8FAFC</Color>
+            <Color x:Key="HavenMutedTextColor">#9AA1AA</Color>
+            <Color x:Key="HavenStrokeColor">#3A4048</Color>
+            <Color x:Key="HavenHoverColor">#22FFFFFF</Color>
+
+            <Color x:Key="HavenAccentColor">#E5E7EB</Color>
+            <Color x:Key="HavenAccentHoverColor">#F3F4F6</Color>
+            <Color x:Key="HavenVioletColor">#60A5FA</Color>
+            <Color x:Key="HavenOrangeColor">#6B7280</Color>
+            <Color x:Key="HavenSuccessColor">#22C55E</Color>
+            <Color x:Key="HavenWarningColor">#F59E0B</Color>
+            <Color x:Key="HavenDangerColor">#EF4444</Color>
+            <Color x:Key="HavenAccentTintColor">#33E5E7EB</Color>
+            <Color x:Key="HavenVioletTintColor">#3360A5FA</Color>
+            <Color x:Key="HavenOrangeTintColor">#336B7280</Color>
+            <Color x:Key="HavenSuccessTintColor">#3322C55E</Color>
+            <Color x:Key="HavenWarningTintColor">#33F59E0B</Color>
+            <Color x:Key="HavenDangerTintColor">#33EF4444</Color>
+            <Color x:Key="HavenFocusRingColor">#99E5E7EB</Color>
+            <Color x:Key="HavenPermissionGlowColor">#408B5CF6</Color>
+
+            <LinearGradientBrush x:Key="HavenCanvasGradient" StartPoint="0,0" EndPoint="0.15,1">
+                <GradientStop Color="#0E1013" Offset="0" />
+                <GradientStop Color="#111316" Offset="0.55" />
+                <GradientStop Color="#171A1E" Offset="0.82" />
+                <GradientStop Color="#1C2025" Offset="0.95" />
+                <GradientStop Color="#20252B" Offset="1" />
+            </LinearGradientBrush>
+            <LinearGradientBrush x:Key="HavenSplashGradient" StartPoint="0,0" EndPoint="0,1">
+                <GradientStop Color="#0E1013" Offset="0" />
+                <GradientStop Color="#111316" Offset="0.6" />
+                <GradientStop Color="#1C2025" Offset="0.9" />
+                <GradientStop Color="#232830" Offset="1" />
+            </LinearGradientBrush>
+</ResourceDictionary>

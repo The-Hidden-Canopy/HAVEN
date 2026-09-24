@@ -141,7 +141,24 @@
         <Rectangle Grid.Column="1" Grid.RowSpan="3" Width="1" Margin="0,10"
                    Fill="{ThemeResource HavenStrokeBrush}" />
 
-        <ScrollViewer x:Name="ContentScroll" Grid.Row="1" Grid.Column="2" Padding="30,16,30,24">
+        <Grid Grid.Row="1" Grid.Column="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Border x:Name="ConnectionBanner" Grid.Row="0" Visibility="Collapsed"
+                    Background="{ThemeResource HavenWarningTintBrush}"
+                    BorderBrush="{ThemeResource HavenWarningBrush}" BorderThickness="0,0,0,1"
+                    Padding="30,8">
+                <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                    <TextBlock x:Name="ConnectionBannerText" VerticalAlignment="Center"
+                               Style="{StaticResource HavenBodyTextStyle}"
+                               Foreground="{ThemeResource HavenTextBrush}"
+                               TextWrapping="Wrap" />
+                    <Button x:Name="ConnectionBannerRetry" Content="Retry now" Click="OnConnectionRetryClicked" />
+                </StackPanel>
+            </Border>
+            <ScrollViewer x:Name="ContentScroll" Grid.Row="1" Padding="30,16,30,24">
             <StackPanel MaxWidth="1120" Spacing="16">
                 <StackPanel Spacing="2">
                     <TextBlock x:Name="PageTitle" Style="{StaticResource HavenPageTitleTextStyle}" Text="Today" />
@@ -439,6 +456,52 @@
                     <TextBlock x:Name="SettingsErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
                     <TextBlock x:Name="SettingsStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
 
+                    <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Appearance" />
+                    <StackPanel Spacing="6">
+                        <TextBlock Style="{StaticResource HavenMetadataTextStyle}" Text="Mode" />
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <RadioButton x:Name="ModeSystemRadio" Content="System" GroupName="AppearanceMode" Click="OnAppearanceChanged" />
+                            <RadioButton x:Name="ModeLightRadio" Content="Light" GroupName="AppearanceMode" Click="OnAppearanceChanged" />
+                            <RadioButton x:Name="ModeDarkRadio" Content="Dark" GroupName="AppearanceMode" Click="OnAppearanceChanged" />
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HavenMetadataTextStyle}" Text="Theme" />
+                        <ComboBox x:Name="ThemePicker" SelectionChanged="OnAppearanceSelectionChanged">
+                            <ComboBoxItem Content="Haven" Tag="haven" />
+                            <ComboBoxItem Content="Canopy" Tag="canopy" />
+                            <ComboBoxItem Content="Ember" Tag="ember" />
+                            <ComboBoxItem Content="Mono" Tag="mono" />
+                        </ComboBox>
+                        <TextBlock Style="{StaticResource HavenMetadataTextStyle}" Text="Density" />
+                        <ComboBox x:Name="DensityPicker" SelectionChanged="OnAppearanceSelectionChanged">
+                            <ComboBoxItem Content="Comfortable" Tag="comfortable" />
+                            <ComboBoxItem Content="Compact" Tag="compact" />
+                        </ComboBox>
+                        <TextBlock Style="{StaticResource HavenMetadataTextStyle}" Text="Motion" />
+                        <ComboBox x:Name="MotionPicker" SelectionChanged="OnAppearanceSelectionChanged">
+                            <ComboBoxItem Content="System" Tag="system" />
+                            <ComboBoxItem Content="Reduced" Tag="reduced" />
+                        </ComboBox>
+                    </StackPanel>
+                    <Border x:Name="AppearancePreview" Style="{StaticResource HavenCardStyle}" Padding="12">
+                        <StackPanel Spacing="8">
+                            <TextBlock Style="{StaticResource HavenMetadataTextStyle}" Text="Preview" />
+                            <Border x:Name="AppearancePreviewNav" Background="{ThemeResource HavenAccentBrush}"
+                                    CornerRadius="8" Padding="12,0" Height="38">
+                                <TextBlock Text="Navigation item" VerticalAlignment="Center" Foreground="#FFFFFF" />
+                            </Border>
+                            <Border Style="{StaticResource HavenCardStyle}" Padding="10">
+                                <TextBlock Style="{StaticResource HavenBodyTextStyle}" Text="Card surface" />
+                            </Border>
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Border Background="{ThemeResource HavenAccentTintBrush}" CornerRadius="10" Padding="10,3">
+                                    <TextBlock Style="{StaticResource HavenMetadataTextStyle}" Text="Chip" />
+                                </Border>
+                                <Button Content="Primary" Style="{StaticResource HavenPrimaryButtonStyle}" IsEnabled="False" />
+                                <Button Content="Quiet" Style="{StaticResource HavenQuietButtonStyle}" IsEnabled="False" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
                     <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="General" />
                     <StackPanel x:Name="ServicePanel" Spacing="8" />
 
@@ -491,6 +554,7 @@
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>
+        </Grid>
 
         <!-- Persistent composer (spec 10): centered pill, mic left, circular send. -->
         <Grid Grid.Row="2" Grid.Column="2">

@@ -6,7 +6,7 @@ Milestones **A through I are complete** (native default, native parity B1–B6, 
 - **Credentialed providers + credential store** — email/calendar send/mutate stay capability-unavailable until credential storage lands.
 - **P2P/encrypted sync transport** — folder-pair transport only; the seam exists.
 - **Model-derived relationship candidates** — the deterministic correlator feeds the pipeline; a model proposer plugs into `CandidateRelationship` unchanged.
-- **IPC event stream** — request/response only; views re-poll (the spec's push events need a transport addition).
+- **IPC event stream** — ~~request/response only; views re-poll~~ **resolved by Product Pass phase 2**: the `haven-events-<installation-id>` push pipe + `HavenEventClient` now invalidate domains without polling (the 2s models poll is gone). Residual: a few ambient emitters (director-driven `home.state.changed` from web-originated edits, wake-set internal bumps) still only notify via the sync listener domains — see the Product Pass section.
 - **Interactive UI QA passes** — WinUI compositing on the dev machine is intermittent, so several native surfaces are compile-verified + contract-tested but not pixel-clicked end-to-end.
 - Also open: conversation providers (Slack/Teams-style), feature modules (contract exists, none built), tablet pixel pass, screen-capture tiers (spec page 37, intentionally deferred).
 
@@ -211,6 +211,43 @@ Source: spec pages 12, 41 (extension taxonomy, business model).
 - [~] Feature-module contract: native/domain extensions must call application services, not stores directly.
   - Contract shape only: the taxonomy declares the boundary (application services, never stores) and the native surface shows an honest empty state; no module loader exists yet — first-party features already demonstrate the services-only idiom.
 
+# Native Product Pass — Connectivity • Density • Themes v1.0 (phases 1–7)
+
+Source: `haven_pass_spec_extracted.txt` v1.0 (spec sections 08–17, 34–42). Phases 1–3 are complete; 4–7 are queued (componentization, density tokens, connection center, tablet/a11y pixel pass). Not yet committed.
+
+## Phase 1 — Connection lifecycle + central banner ✅
+
+- [x] `Services/ConnectionService.cs`: the shell-level state machine (STARTING → CONNECTING → CONNECTED/DEGRADED → RECONNECTING with 250ms→5s capped backoff → DISCONNECTED after 12 attempts). Liveness is a 10s `state.get` probe rather than a raw pipe-failure signal (deliberate v1 simplification); reconcile failures demote to DEGRADED without dropping the pipe. `IsMutationsEnabled` is CONNECTED-only.
+- [x] `HavenCoreClient` reconnectable: `ConnectAsync` early-returns only on a live pipe; new `DisconnectAsync` disposes the dead pipe before re-authentication.
+- [x] Central banner in `MainWindow.xaml` (`ConnectionBanner` + Retry button above the content ScrollViewer): hidden when CONNECTED; "Connected with issues — some data may be stale." (DEGRADED); "Reconnecting to HAVEN Core…"; "HAVEN Core is unreachable. Changes are on hold; your input is kept." (DISCONNECTED). Rail `ConnectionText` mirrors the aggregate state; `Retry Now` interrupts the backoff (cancels the delay) and restarts the loop from DISCONNECTED.
+- [x] Offline gate: the composer refuses to submit unless CONNECTED and keeps the input ("Core is offline — your message is kept; try again when connected."); reconnect re-runs `EnsureSetupAsync` + `ShowPage(current)` and never clears composer text.
+- Build green (`dotnet build -p:Platform=x64`, 0 warnings). Interactive reconnect click-through not run (headless); state transitions covered by inspection + the event-pipe contract tests below.
+
+## Phase 2 — Native event pipe + domain invalidation ✅
+
+- [x] `haven/ipc/events_pipe.py`: `EventPublisher` (keep-last-per-event-name coalescing flushed on 200ms; 15s heartbeat bypassing coalescing; monotonic `revision` + UTC `at` on every frame; payloads carry invalidations, never rows) and `NamedPipeEventServer`, a push-only sibling pipe (`haven-events-<installation-id>` derived from the RPC pipe name, same `host.authenticate` token). Lifecycle frames: `core.connected` on client auth, `core.shutdown` on stop (with a one-flush grace so the frame beats handle teardown).
+- [x] Transport hardening: no server-side `FlushFileBuffers` on the push path (it rendezvous-blocks writers against an idle client), and no pending blocking `ReadFile` post-auth (it monopolizes the synchronous handle and deadlocks writers) — disconnect detection uses `PeekNamedPipe` polling instead. Post-auth requests get a correlated "push-only" error.
+- [x] Server emitters (`haven/web/server.py`): `HavenWebServer.events` publisher; the sync mutation listener now emits `tasks.changed` / `projects.changed` / `memory.changed` (+ `relationships.changed`, `search.index.changed`) for **all** origins (web and native); `model.job.progress` via `DownloadJobManager.subscribe`; mutating IPC methods emit their domain event on success only (home/authority/models/computer/browser/comms/email/relationships — see `_IPC_METHOD_EVENTS`). Failures never emit and never propagate into the mutation path. `server_close` stops the publisher; `NativeIpcHost` serves both pipes.
+- [x] Native client `Services/HavenEventClient.cs`: derives the events pipe name from the RPC pipe, independent auth, read loop, 30s heartbeat-missed watchdog, quiet reconnect on the next reconcile.
+- [x] `MainWindow` domain invalidation: event → domain → visible-page map; visible domains refresh immediately (coalesced, dropping superseded bursts), background domains mark dirty and reconcile on navigation; `core.shutdown` marks everything dirty. The 2s `_modelsPollTimer` is **deleted** — the Models page now reloads from `models.changed`/`model.job.progress` events plus its Refresh button.
+- [x] `tests/test_event_pipe.py`: 16 tests — vocabulary matches the spec taxonomy exactly, name derivation, auth rejection, push-only enforcement, coalescing, heartbeat, shutdown, re-accept after disconnect, reconnect, and server emitters (task/room/model mutations emit; failed mutations emit nothing).
+
+## Phase 3 — Themes × appearance ✅
+
+- [x] Four theme dictionaries `Themes/{Haven,Canopy,Ember,Mono}.xaml`, each with Dark + Light `ThemeDictionaries` carrying the full token set: 7 shell `*Color`s, 15 interaction colors (accent/hover/violet/orange/success/warning/danger + 6 tints + focus ring + permission glow) and both canvas gradients. Dark palettes match the spec hexes exactly (Haven/Canopy/Ember/Mono spot-checked); light variants are derived cool-off-white sets. Success/warning/danger stay fixed across themes by design (semantic status colors).
+- [x] `App.xaml` keeps the historic `Haven*Brush` names (now `ThemeResource`-bound) and adds the semantic family: `CanvasBase/SurfacePrimary/SurfaceSecondary/TextPrimary/TextSecondary/TextMuted/StrokeSubtle/Accent/AccentHover/FocusRing/PermissionGlow/Success/Warning/Danger(+Tints)`, `Series1–8`, `HeatLow/Med/High` (Series/Heat are v1 aliases of the interaction tokens; per-theme dataviz palettes land with the density pass).
+- [x] `Services/ThemeService.cs`: live swap of the merged theme dictionary (no restart), `Root.RequestedTheme` per mode, theme-aware title-bar colors, high-contrast flat-canvas fallback, persistence at `%LOCALAPPDATA%/Haven.Desktop/settings.json` (`{mode, theme, density, motion}`), fail-closed to Haven/system on bad JSON.
+- [x] Settings → Appearance (spec 40): System/Light/Dark radios, theme ComboBox (4), density ComboBox (2), motion ComboBox, and a live preview block (nav pill/card/chip/buttons bound to the same resources). Density is persisted and previewed; the global density token pass is phase 4.
+- [x] `tests/test_themes.py`: 9 tests parse the XAML — both appearances per theme, full token completeness, exact spec hexes, ≥3:1 contrast for text (primary + muted) on all three surfaces, 20%-alpha tints, semantic alias completeness and theme-defined resolution.
+- No C# test runner exists in the repo; ThemeService persistence/swap is build-verified + code-reviewed, not unit-tested. Interactive theme switching not pixel-verified (WinUI compositing on the dev machine is intermittent).
+
+## Queued — phases 4–7
+
+- [ ] **Phase 4 — Componentization + density**: split `MainWindow` (~5k lines) into page controls, apply the density tokens globally (nav rows, lists, cards), per-theme dataviz palettes.
+- [ ] **Phase 5 — Connection center**: full connection UI (per-domain status, manual reconnect, diagnostics).
+- [ ] **Phase 6 — Tablet adaptation polish.**
+- [ ] **Phase 7 — Accessibility/pixel pass.**
+
 # Definition of done (spec page 44, verbatim target)
 
 HAVEN is "native life assistant v1" when a fresh user can install it, create projects/tasks/people, point it at allowed files, search and correlate their information, inspect/correct memory, use local or external models, perform governed computer/home actions, and close/reopen the native app without touching a browser surface — while every action remains scoped, explainable, and independently verifiable where the provider permits it.
@@ -227,5 +264,5 @@ Facts below ground the milestone notes above; revisit this section when a milest
 - **Ontology (G).** `OntologyStore` (SQLite, indexed `edges_from`/`edges_to`) exists but is **never fed** — no relationship generation in production; search's ontology expansion (`haven/search/service.py:167-170`) would consume edges if any existed.
 - **Sync (H).** `haven/sync/contracts.py` (`SyncRecord`/`SyncBatch`/`SyncProvider`) only; no implementation, no references elsewhere.
 - **Plugins (I).** `haven/plugins/` is already the narrow receipt-consumer boundary (plugins never run inside HAVEN, never get live state — `docs/plugin-boundary.md`). A separate provider-plugin mechanism exists (`haven/providers/plugin.py`, `ProviderManifest` Protocol, loaded via `setup.providers.install`). Milestone I is taxonomy + surfaces, not new isolation machinery.
-- **IPC (affects B–G).** The named-pipe dispatcher (`haven/ipc/dispatcher.py`) is strictly request/response — **no event push**. The spec's recommended events (`state.changed`, `project.changed`, `action.progress`, … page 16) need an event channel added; web SSE exists only browser-side (`/events`, `/api/models/events`) with naive `retry: 3000` reconnect, no resume cursor. B2–B6 views will need polling or a new IPC event stream.
+- **IPC (affects B–G).** ~~The named-pipe dispatcher (`haven/ipc/dispatcher.py`) is strictly request/response — **no event push**~~ The RPC pipe remains request/response, but Product Pass phase 2 added the one-directional events sibling (`haven/ipc/events_pipe.py`: `EventPublisher` + `NamedPipeEventServer`, name `haven-events-<installation-id>` derived from the RPC pipe name, same token handshake, keep-last-per-event coalescing on a 200ms flush, 15s heartbeat, `core.connected`/`core.shutdown` lifecycle frames). Web SSE still exists only browser-side (`/events`, `/api/models/events`) — untouched.
 - **Tests.** 125 files / 1258 tests, green at HEAD. The earlier `test_claim_admission.py`/`test_plugins_*` failures were environmental (broken ACLs on a stale pytest temp dir), not code. `tests/test_web_plugins.py` is flaky in full-suite runs (live-network catalog tests, `WinError 10053` while booting a real server); each failure passes in isolation.

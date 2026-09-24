@@ -1,0 +1,44 @@
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Canopy theme, Light appearance (spec 34-39).  Flat token set:
+         ThemeService swaps one merged dictionary for another live, and the
+         window root's RequestedTheme flips the framework controls. -->
+            <Color x:Key="HavenCanvasColor">#F2FAF7</Color>
+            <Color x:Key="HavenSurface1Color">#FFFFFF</Color>
+            <Color x:Key="HavenSurface2Color">#E7F3EE</Color>
+            <Color x:Key="HavenTextColor">#12312B</Color>
+            <Color x:Key="HavenMutedTextColor">#51776D</Color>
+            <Color x:Key="HavenStrokeColor">#C9E0D7</Color>
+            <Color x:Key="HavenHoverColor">#14000000</Color>
+
+            <Color x:Key="HavenAccentColor">#0D9488</Color>
+            <Color x:Key="HavenAccentHoverColor">#0F766E</Color>
+            <Color x:Key="HavenVioletColor">#3B82F6</Color>
+            <Color x:Key="HavenOrangeColor">#EA580C</Color>
+            <Color x:Key="HavenSuccessColor">#22C55E</Color>
+            <Color x:Key="HavenWarningColor">#F59E0B</Color>
+            <Color x:Key="HavenDangerColor">#EF4444</Color>
+            <Color x:Key="HavenAccentTintColor">#330D9488</Color>
+            <Color x:Key="HavenVioletTintColor">#333B82F6</Color>
+            <Color x:Key="HavenOrangeTintColor">#33EA580C</Color>
+            <Color x:Key="HavenSuccessTintColor">#3322C55E</Color>
+            <Color x:Key="HavenWarningTintColor">#33F59E0B</Color>
+            <Color x:Key="HavenDangerTintColor">#33EF4444</Color>
+            <Color x:Key="HavenFocusRingColor">#990D9488</Color>
+            <Color x:Key="HavenPermissionGlowColor">#667C3AED</Color>
+
+            <LinearGradientBrush x:Key="HavenCanvasGradient" StartPoint="0,0" EndPoint="0.15,1">
+                <GradientStop Color="#E8F4EF" Offset="0" />
+                <GradientStop Color="#F2FAF7" Offset="0.55" />
+                <GradientStop Color="#FAFDFB" Offset="0.82" />
+                <GradientStop Color="#E2F0EA" Offset="0.95" />
+                <GradientStop Color="#DCEEE7" Offset="1" />
+            </LinearGradientBrush>
+            <LinearGradientBrush x:Key="HavenSplashGradient" StartPoint="0,0" EndPoint="0,1">
+                <GradientStop Color="#E8F4EF" Offset="0" />
+                <GradientStop Color="#F2FAF7" Offset="0.6" />
+                <GradientStop Color="#DDEEE7" Offset="0.9" />
+                <GradientStop Color="#E9F1EC" Offset="1" />
+            </LinearGradientBrush>
+</ResourceDictionary>

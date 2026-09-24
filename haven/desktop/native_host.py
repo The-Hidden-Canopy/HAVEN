@@ -12,19 +12,31 @@ from __future__ import annotations
 import secrets
 from pathlib import Path
 
+from haven.ipc.events_pipe import (
+    EventPublisher,
+    NamedPipeEventServer,
+    derive_events_pipe_name,
+)
 from haven.ipc.named_pipe import NamedPipeServer, installation_id_for_data_dir, installation_pipe_name
 
 
 class NativeIpcHost:
-    """Expose one authenticated Core instance to the native client."""
+    """Expose one authenticated Core instance to the native client.
+
+    Serves the request/response RPC pipe plus its one-directional sibling,
+    ``haven-events-<installation-id>``, which pushes domain-invalidation
+    events after the same token handshake (spec sections 15-17).
+    """
 
     def __init__(self, *, server, data_dir: str | Path, auth_token: str | None = None) -> None:
         self.server = server
         self.data_dir = Path(data_dir).expanduser().resolve()
         self.installation_id = installation_id_for_data_dir(self.data_dir)
         self.pipe_name = installation_pipe_name(self.installation_id)
+        self.events_pipe_name = derive_events_pipe_name(self.pipe_name)
         self.auth_token = auth_token or secrets.token_urlsafe(32)
         self._pipe: NamedPipeServer | None = None
+        self._events_pipe: NamedPipeEventServer | None = None
 
     @property
     def is_running(self) -> bool:
@@ -41,6 +53,15 @@ class NativeIpcHost:
                 auth_token=self.auth_token,
                 handler=self.server.build_ipc_dispatcher(),
             ).start()
+        if self._events_pipe is None:
+            publisher = getattr(self.server, "events", None)
+            if publisher is None:  # fail soft for non-web compositions
+                publisher = EventPublisher()
+            self._events_pipe = NamedPipeEventServer(
+                pipe_name=self.events_pipe_name,
+                auth_token=self.auth_token,
+                publisher=publisher,
+            ).start()
         return self
 
     def stop(self) -> None:
@@ -48,6 +69,10 @@ class NativeIpcHost:
         self._pipe = None
         if pipe is not None:
             pipe.stop()
+        events_pipe = self._events_pipe
+        self._events_pipe = None
+        if events_pipe is not None:
+            events_pipe.stop()
 
 
 __all__ = ["NativeIpcHost"]
