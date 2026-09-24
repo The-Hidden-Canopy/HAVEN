@@ -399,6 +399,37 @@ public sealed class HavenCoreClient : IAsyncDisposable
         CancellationToken cancellationToken = default) =>
         RequestResultAsync("models.assign", new { role, id = modelId }, cancellationToken);
 
+    public Task<JsonElement> GetSystemDiagnosticsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("system.diagnostics", new { }, cancellationToken);
+
+    public Task<JsonElement> ProbeSystemProviderAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("system.probe", new { }, cancellationToken);
+
+    public Task<JsonElement> GetBackupsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("system.backups", new { }, cancellationToken);
+
+    public Task<JsonElement> CreateBackupAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("system.backup.create", new { }, cancellationToken);
+
+    public Task<JsonElement> RestoreBackupAsync(
+        string backupId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("system.backup.restore", new { id = backupId }, cancellationToken);
+
+    public Task<JsonElement> DeleteBackupAsync(
+        string backupId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("system.backup.delete", new { id = backupId }, cancellationToken);
+
+    public Task<JsonElement> GetServiceStatusAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("system.service", new { }, cancellationToken);
+
+    public Task<JsonElement> InstallServiceAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("system.service.install", new { }, cancellationToken);
+
+    public Task<JsonElement> UninstallServiceAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("system.service.uninstall", new { }, cancellationToken);
+
     private async Task<JsonElement> RequestResultAsync(
         string method,
         object parameters,

@@ -20,6 +20,15 @@ public sealed partial class MainWindow : Window
         _modelsPollTimer.Tick += OnModelsPollTick;
         RootGrid().ActualThemeChanged += (_, _) => UpdateLogo();
         RootGrid().Loaded += OnLoaded;
+        SelectHomeTab("rooms");
+        SelectModelsTab("local");
+        var searchAccelerator = new KeyboardAccelerator
+        {
+            Key = VirtualKey.K,
+            Modifiers = VirtualKeyModifiers.Control,
+        };
+        searchAccelerator.Invoked += (_, _) => SelectNavigation("search");
+        RootGrid().KeyboardAccelerators.Add(searchAccelerator);
     }
 
     private Grid RootGrid() => (Grid)Content;
@@ -39,7 +48,7 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(pipeName) || string.IsNullOrWhiteSpace(token))
         {
             ConnectionText.Text = "Native Core not connected";
-            ResponseText.Text = "Start HAVEN Core with a named-pipe endpoint to connect this native client.";
+            ComposerStatus.Text = "Start HAVEN Core with a named-pipe endpoint to connect this native client.";
             return;
         }
 
@@ -49,14 +58,13 @@ public sealed partial class MainWindow : Window
             await client.ConnectAsync();
             _client = client;
             ConnectionText.Text = "Connected";
-            var state = await _client.GetStateAsync();
-            ResponseText.Text = state.GetRawText();
+            await LoadTodayAsync();
             await EnsureSetupAsync();
         }
         catch (Exception ex)
         {
             ConnectionText.Text = "Core unavailable";
-            ResponseText.Text = ex.Message;
+            ComposerStatus.Text = ex.Message;
         }
     }
 
@@ -82,7 +90,7 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             // Setup status is best-effort: the main window stays usable without it.
-            ResponseText.Text = ex.Message;
+            ComposerStatus.Text = ex.Message;
         }
     }
 
@@ -98,22 +106,10 @@ public sealed partial class MainWindow : Window
         SetupOverlay.Visibility = Visibility.Visible;
     }
 
-    private async void OnSetupCompleted(object sender, EventArgs args)
+    private void OnSetupCompleted(object sender, EventArgs args)
     {
         SetupOverlay.Visibility = Visibility.Collapsed;
         ReopenSetupButton.Visibility = Visibility.Visible;
-        if (_client is not null)
-        {
-            try
-            {
-                var state = await _client.GetStateAsync();
-                ResponseText.Text = state.GetRawText();
-            }
-            catch (Exception ex)
-            {
-                ResponseText.Text = ex.Message;
-            }
-        }
     }
 
     private async void OnReopenSetupClicked(object sender, RoutedEventArgs args)
@@ -129,7 +125,7 @@ public sealed partial class MainWindow : Window
                 && envelope.TryGetProperty("ok", out var ok)
                 && !ok.GetBoolean())
             {
-                ResponseText.Text = envelope.TryGetProperty("error", out var error)
+                ComposerStatus.Text = envelope.TryGetProperty("error", out var error)
                     ? error.GetString()
                     : "HAVEN Core refused to reopen setup.";
                 return;
@@ -139,7 +135,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            ResponseText.Text = ex.Message;
+            ComposerStatus.Text = ex.Message;
         }
     }
 
@@ -214,7 +210,7 @@ public sealed partial class MainWindow : Window
                 });
                 summary.Children.Add(new TextBlock
                 {
-                    Text = $"{state.ToUpperInvariant()} · {confidence} · {provenance}",
+                    Text = $"{Sentence(state)} · {confidence} · {provenance}",
                     Opacity = 0.72,
                 });
                 MemoryClaims.Items.Add(new ListViewItem { Tag = claimId, Content = summary });
@@ -437,33 +433,128 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void OnComposerClicked(object sender, RoutedEventArgs args)
+    // -- persistent composer (spec 10) ----------------------------------------
+
+    private bool _composerBusy;
+
+    private async void OnComposerSendClicked(object sender, RoutedEventArgs args)
     {
-        await AskAsync();
+        await SubmitComposerAsync();
     }
 
     private async void OnComposerKeyDown(object sender, KeyRoutedEventArgs args)
     {
-        if (args.Key == VirtualKey.Enter)
+        // Enter submits; Shift+Enter inserts a newline.
+        var shift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift);
+        if (args.Key == VirtualKey.Enter && (int)shift == 0)
         {
-            await AskAsync();
+            args.Handled = true;
+            await SubmitComposerAsync();
         }
     }
 
-    private async Task AskAsync()
+    private async Task SubmitComposerAsync()
     {
-        if (_client is null || string.IsNullOrWhiteSpace(ComposerBox.Text))
+        if (_client is null || _composerBusy || string.IsNullOrWhiteSpace(ComposerInput.Text))
         {
             return;
         }
+        var text = ComposerInput.Text.Trim();
+        _composerBusy = true;
+        ComposerSendButton.IsEnabled = false;
+        ComposerSendContent.Visibility = Visibility.Collapsed;
+        ComposerThinking.Visibility = Visibility.Visible;
+        ComposerStatus.Text = "";
         try
         {
-            var state = await _client.AskAsync(ComposerBox.Text.Trim());
-            ResponseText.Text = state.GetRawText();
+            var state = await _client.AskAsync(text);
+            ComposerInput.Text = "";
+            RenderComposerAnswer(state, text);
         }
         catch (Exception ex)
         {
-            ResponseText.Text = ex.Message;
+            ComposerStatus.Text = $"Could not reach HAVEN: {ex.Message}";
+        }
+        finally
+        {
+            // One-shot control: the send button returns to idle however the
+            // request ended (spec 12).
+            _composerBusy = false;
+            ComposerSendButton.IsEnabled = true;
+            ComposerSendContent.Visibility = Visibility.Visible;
+            ComposerThinking.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void RenderComposerAnswer(JsonElement state, string question)
+    {
+        ComposerResults.Children.Clear();
+        ComposerResults.Visibility = Visibility.Visible;
+
+        string? answer = null;
+        if (state.ValueKind == JsonValueKind.Object && state.TryGetProperty("conversation", out var conversation))
+        {
+            foreach (var entry in Enumerate(conversation))
+            {
+                if (GetString(entry, "from") == "haven")
+                {
+                    answer = GetString(entry, "text");
+                }
+            }
+        }
+        ComposerResults.Children.Add(new Border
+        {
+            Style = (Style)Application.Current.Resources["HavenCardStyle"],
+            Child = new StackPanel
+            {
+                Spacing = 6,
+                Children =
+                {
+                    new TextBlock { Text = question, Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"], TextWrapping = TextWrapping.Wrap },
+                    new TextBlock { Text = answer ?? "HAVEN answered, but the reply did not include text.", Style = (Style)Application.Current.Resources["HavenBodyTextStyle"], TextWrapping = TextWrapping.Wrap },
+                },
+            },
+        });
+
+        // Mutation honesty (spec 10): anything action-like that this exchange
+        // produced is a proposal awaiting review, never presented as done.
+        var proposalNotes = new List<string>();
+        if (state.ValueKind == JsonValueKind.Object)
+        {
+            var pending = state.TryGetProperty("pending", out var pendingValue) ? pendingValue.GetArrayLength() : 0;
+            if (pending > 0)
+            {
+                proposalNotes.Add($"{pending} confirmation{(pending == 1 ? "" : "s")} awaiting your decision");
+            }
+            if (state.TryGetProperty("automations", out var automations))
+            {
+                var proposed = Enumerate(automations).Count(rule => GetString(rule, "status") == "proposed");
+                if (proposed > 0)
+                {
+                    proposalNotes.Add($"{proposed} automation proposal{(proposed == 1 ? "" : "s")} awaiting approval");
+                }
+            }
+        }
+        foreach (var note in proposalNotes)
+        {
+            var banner = new Border
+            {
+                Style = (Style)Application.Current.Resources["HavenCardStyle"],
+                BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenWarningBrush"],
+                Child = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 10,
+                    Children =
+                    {
+                        new TextBlock { Text = $"Proposal — review required: {note}.", Style = (Style)Application.Current.Resources["HavenBodyTextStyle"], VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap },
+                        new Button { Content = "Review in Home", VerticalAlignment = VerticalAlignment.Center },
+                    },
+                },
+            };
+            var review = (Button)((StackPanel)banner.Child).Children[1];
+            review.Click += (_, _) => SelectNavigation("home");
+            ComposerResults.Children.Add(banner);
         }
     }
 
@@ -497,35 +588,49 @@ public sealed partial class MainWindow : Window
 
     private void OnNavigationChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
-        var tag = (args.SelectedItem as NavigationViewItem)?.Tag?.ToString();
-        var search = tag == "search";
-        var memory = tag == "memory";
-        var rooms = tag == "rooms";
-        var people = tag == "people";
-        var automations = tag == "automations";
-        var models = tag == "models";
-        SearchPanel.Visibility = search ? Visibility.Visible : Visibility.Collapsed;
-        MemoryPanel.Visibility = memory ? Visibility.Visible : Visibility.Collapsed;
-        RoomsPanel.Visibility = rooms ? Visibility.Visible : Visibility.Collapsed;
-        PeoplePanel.Visibility = people ? Visibility.Visible : Visibility.Collapsed;
-        AutomationsPanel.Visibility = automations ? Visibility.Visible : Visibility.Collapsed;
-        ModelsPanel.Visibility = models ? Visibility.Visible : Visibility.Collapsed;
-        HomePanel.Visibility = search || memory || rooms || people || automations || models
-            ? Visibility.Collapsed
-            : Visibility.Visible;
-        PageTitle.Text = tag switch
+        var tag = (args.SelectedItem as NavigationViewItem)?.Tag?.ToString() ?? "today";
+        ShowPage(tag);
+    }
+
+    private void SelectNavigation(string tag)
+    {
+        var item = NavView.MenuItems.OfType<NavigationViewItem>().FirstOrDefault(entry => entry.Tag?.ToString() == tag);
+        if (item is not null)
         {
-            "search" => "Search your life",
-            "memory" => "Memory",
-            "rooms" => "Rooms & devices",
-            "people" => "People & contexts",
-            "automations" => "Automations",
-            "models" => "Models",
-            "home" => "Home",
-            "settings" => "Settings",
-            _ => "HAVEN",
+            NavView.SelectedItem = item;
+        }
+        ShowPage(tag);
+    }
+
+    private void ShowPage(string tag)
+    {
+        TodayPanel.Visibility = tag == "today" ? Visibility.Visible : Visibility.Collapsed;
+        SearchPanel.Visibility = tag == "search" ? Visibility.Visible : Visibility.Collapsed;
+        ProjectsPanel.Visibility = tag == "projects" ? Visibility.Visible : Visibility.Collapsed;
+        TasksPanel.Visibility = tag == "tasks" ? Visibility.Visible : Visibility.Collapsed;
+        PeoplePanel.Visibility = tag == "people" ? Visibility.Visible : Visibility.Collapsed;
+        MemoryPanel.Visibility = tag == "memory" ? Visibility.Visible : Visibility.Collapsed;
+        ComputerPanel.Visibility = tag == "computer" ? Visibility.Visible : Visibility.Collapsed;
+        CommunicationsPanel.Visibility = tag == "communications" ? Visibility.Visible : Visibility.Collapsed;
+        HomePanel.Visibility = tag == "home" ? Visibility.Visible : Visibility.Collapsed;
+        ModelsPanel.Visibility = tag == "models" ? Visibility.Visible : Visibility.Collapsed;
+        SettingsPanel.Visibility = tag == "settings" ? Visibility.Visible : Visibility.Collapsed;
+        (PageTitle.Text, PageDescription.Text) = tag switch
+        {
+            "today" => ("Today", "What matters now, and the fastest way to act on it."),
+            "search" => ("Search your life", "Files, people, claims and anything else HAVEN can see, in one ranked list."),
+            "projects" => ("Projects", "Bodies of work shared across files, tasks and people."),
+            "tasks" => ("Tasks", "Commitments and next actions."),
+            "people" => ("People", "Who lives here and how HAVEN senses their presence."),
+            "memory" => ("Memory", "What HAVEN knows, where it came from, and how certain it is."),
+            "computer" => ("Computer", "Your files, applications, windows and activity."),
+            "communications" => ("Communications", "Email, messages and threads with their context."),
+            "home" => ("Home", "Rooms, devices, automations and contexts."),
+            "models" => ("Models", "Local, downloaded and external intelligence."),
+            "settings" => ("Settings", "Control boundaries: startup, storage, privacy, connections, about."),
+            _ => ("HAVEN", ""),
         };
-        if (models)
+        if (tag == "models")
         {
             _modelsPollTimer.Start();
         }
@@ -533,29 +638,489 @@ public sealed partial class MainWindow : Window
         {
             _modelsPollTimer.Stop();
         }
-        if (memory)
+        switch (tag)
         {
-            _ = LoadMemoryAsync();
-        }
-        if (rooms)
-        {
-            _ = LoadRoomsAsync();
-        }
-        if (people)
-        {
-            _ = LoadPeopleAsync();
-        }
-        if (automations)
-        {
-            _ = LoadAutomationsAsync();
-        }
-        if (models)
-        {
-            _ = LoadModelsAsync();
+            case "today":
+                _ = LoadTodayAsync();
+                break;
+            case "search":
+                SearchBox.Focus(FocusState.Programmatic);
+                break;
+            case "people":
+                PeopleStatusText.Text = "Loading…";
+                _ = LoadPeopleAsync();
+                break;
+            case "memory":
+                _ = LoadMemoryAsync();
+                break;
+            case "home":
+                HomeStatusText.Text = "Loading…";
+                _ = LoadRoomsAsync();
+                _ = LoadAutomationsAsync();
+                _ = LoadContextsAsync();
+                break;
+            case "models":
+                _ = LoadModelsAsync();
+                break;
+            case "settings":
+                SettingsStatusText.Text = "Loading…";
+                _ = LoadSettingsAsync();
+                break;
         }
     }
 
-    // -- rooms & devices ----------------------------------------------------
+    // -- today ----------------------------------------------------------------
+
+    private async Task LoadTodayAsync()
+    {
+        var hour = DateTime.Now.Hour;
+        TodayGreeting.Text = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+        TodayDate.Text = DateTime.Now.ToString("dddd, MMMM d");
+        TodayStatus.Text = "";
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var state = await _client.GetStateAsync();
+            var pending = state.TryGetProperty("pending", out var pendingValue) ? pendingValue.GetArrayLength() : 0;
+            TodayPendingBanner.Visibility = pending > 0 ? Visibility.Visible : Visibility.Collapsed;
+            TodayPendingText.Text = pending > 0
+                ? $"{pending} action{(pending == 1 ? " is" : "s are")} waiting for your approval."
+                : "";
+        }
+        catch (Exception ex)
+        {
+            TodayStatus.Text = $"Could not load today's summary: {ex.Message}";
+        }
+    }
+
+    private void OnTodayPendingClicked(object sender, RoutedEventArgs args)
+    {
+        SelectHomeTab("rooms");
+        SelectNavigation("home");
+    }
+
+    private void OnQuickActionTaskClicked(object sender, RoutedEventArgs args)
+    {
+        SelectNavigation("tasks");
+    }
+
+    private void OnQuickActionProjectClicked(object sender, RoutedEventArgs args)
+    {
+        SelectNavigation("projects");
+    }
+
+    private void OnQuickActionNoteClicked(object sender, RoutedEventArgs args)
+    {
+        // The honest route to "Add note" today: the memory surface, where
+        // telling HAVEN something creates a correctable, source-backed claim.
+        SelectNavigation("memory");
+        ComposerInput.Focus(FocusState.Programmatic);
+    }
+
+    private void OnQuickActionFindClicked(object sender, RoutedEventArgs args)
+    {
+        SelectNavigation("search");
+    }
+
+    private void OnQuickActionOpenClicked(object sender, RoutedEventArgs args)
+    {
+        SelectNavigation("computer");
+    }
+
+    private void OnLensAskClicked(object sender, RoutedEventArgs args)
+    {
+        ComposerInput.Focus(FocusState.Programmatic);
+    }
+
+    // -- home tabs --------------------------------------------------------------
+
+    private string _homeTab = "rooms";
+
+    private void OnHomeTabClicked(object sender, RoutedEventArgs args)
+    {
+        if (sender is Button button && button.Tag is string tab)
+        {
+            SelectHomeTab(tab);
+        }
+    }
+
+    private void SelectHomeTab(string tab)
+    {
+        _homeTab = tab;
+        HomeTabRooms.Visibility = tab == "rooms" ? Visibility.Visible : Visibility.Collapsed;
+        HomeTabDevices.Visibility = tab == "devices" ? Visibility.Visible : Visibility.Collapsed;
+        HomeTabAutomations.Visibility = tab == "automations" ? Visibility.Visible : Visibility.Collapsed;
+        HomeTabContexts.Visibility = tab == "contexts" ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var button in HomeTabs.Children.OfType<Button>())
+        {
+            button.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                button.Tag?.ToString() == tab ? "HavenAccentBrush" : "HavenMutedTextBrush"];
+            button.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                button.Tag?.ToString() == tab ? "HavenAccentBrush" : "HavenStrokeBrush"];
+        }
+    }
+
+
+    // -- system (diagnostics, backups, service) -------------------------------
+
+    private JsonElement _diagnostics = default;
+
+    private async void OnSettingsRefreshClicked(object sender, RoutedEventArgs args)
+    {
+        await LoadSettingsAsync();
+    }
+
+    private async Task LoadSettingsAsync()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var diagnostics = await _client.GetSystemDiagnosticsAsync();
+            var backups = await _client.GetBackupsAsync();
+            var service = await _client.GetServiceStatusAsync();
+            _diagnostics = diagnostics.GetProperty("diagnostics").Clone();
+            SettingsErrorText.Text = "";
+            SettingsStatusText.Text = "";
+            StorageDataDirText.Text = GetString(_diagnostics, "data_dir") ?? "Unknown";
+            var voice = _diagnostics.TryGetProperty("voice", out var voiceValue) && voiceValue.ValueKind == JsonValueKind.Object
+                ? voiceValue
+                : default;
+            var voiceEnabled = voice.ValueKind == JsonValueKind.Object
+                && voice.TryGetProperty("enabled", out var enabledValue)
+                && enabledValue.GetBoolean();
+            IntelligenceVoiceText.Text = voiceEnabled
+                ? $"Voice is enabled (state: {GetString(voice, "state") ?? "unknown"})"
+                : "Voice is off. Models, routing and downloads live on the Models page.";
+            var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+            AboutVersionText.Text = $"HAVEN Desktop {version?.Major}.{version?.Minor}.{version?.Build} — local-first; your data stays on this machine.";
+            RenderDiagnostics();
+            RenderBackups(backups.GetProperty("backups"));
+            RenderService(service.GetProperty("service"));
+        }
+        catch (Exception ex)
+        {
+            SettingsStatusText.Text = "";
+            SettingsErrorText.Text = $"Could not load system state: {ex.Message} Use Refresh to retry.";
+        }
+    }
+
+    private void OnOpenModelsClicked(object sender, RoutedEventArgs args)
+    {
+        SelectNavigation("models");
+    }
+
+    private void RenderDiagnostics()
+    {
+        DiagnosticsList.Children.Clear();
+        void Row(string label, string value)
+        {
+            var row = new Grid();
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(200) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
+            var name = new TextBlock { Text = label, Opacity = 0.72 };
+            var content = new TextBlock { Text = value, TextWrapping = TextWrapping.Wrap };
+            row.Children.Add(name);
+            Grid.SetColumn(content, 1);
+            row.Children.Add(content);
+            DiagnosticsList.Children.Add(row);
+        }
+
+        if (_diagnostics.ValueKind != JsonValueKind.Object)
+        {
+            DiagnosticsList.Children.Add(new TextBlock { Text = "Diagnostics unavailable.", Opacity = 0.72 });
+            return;
+        }
+        Row("Data directory", GetString(_diagnostics, "data_dir") ?? "—");
+        var world = GetString(_diagnostics, "world", "mode");
+        Row("World mode", world ?? "—");
+        var provider = _diagnostics.TryGetProperty("provider", out var providerValue) && providerValue.ValueKind == JsonValueKind.Object
+            ? providerValue
+            : default;
+        Row("Provider", provider.ValueKind == JsonValueKind.Object
+            ? (provider.TryGetProperty("configured", out var configured) && configured.GetBoolean()
+                ? $"{GetString(provider, "kind")} · {GetString(provider, "base_url")}"
+                : "not configured")
+            : "—");
+        var household = _diagnostics.TryGetProperty("household", out var householdValue) && householdValue.ValueKind == JsonValueKind.Object
+            ? householdValue
+            : default;
+        if (household.ValueKind == JsonValueKind.Object)
+        {
+            Row("Household", $"{GetInt(household, "people")} people · {GetInt(household, "contexts")} contexts");
+        }
+        var devices = _diagnostics.TryGetProperty("devices", out var devicesValue) && devicesValue.ValueKind == JsonValueKind.Object
+            ? devicesValue
+            : default;
+        if (devices.ValueKind == JsonValueKind.Object)
+        {
+            Row("Devices", $"{GetInt(devices, "enrolled")} enrolled · {GetInt(devices, "registered")} registered");
+        }
+        var rules = _diagnostics.TryGetProperty("rules", out var rulesValue) && rulesValue.ValueKind == JsonValueKind.Object
+            ? rulesValue
+            : default;
+        if (rules.ValueKind == JsonValueKind.Object)
+        {
+            Row("Rules", $"{GetInt(rules, "total")} total · {GetInt(rules, "approved")} approved · {GetInt(rules, "proposed")} proposed");
+        }
+        var models = _diagnostics.TryGetProperty("models", out var modelsValue) && modelsValue.ValueKind == JsonValueKind.Object
+            ? modelsValue
+            : default;
+        if (models.ValueKind == JsonValueKind.Object)
+        {
+            Row("Models", $"{GetInt(models, "registered")} registered · {GetInt(models, "loaded")} loaded");
+        }
+        var voice = _diagnostics.TryGetProperty("voice", out var voiceValue) && voiceValue.ValueKind == JsonValueKind.Object
+            ? voiceValue
+            : default;
+        if (voice.ValueKind == JsonValueKind.Object)
+        {
+            var enabled = voice.TryGetProperty("enabled", out var voiceEnabled) && voiceEnabled.GetBoolean();
+            Row("Voice", enabled ? $"enabled · {GetString(voice, "state") ?? "?"}" : "disabled");
+        }
+        Row("Uptime", $"{GetInt(_diagnostics, "uptime_seconds")} s");
+    }
+
+    private async void OnProbeProviderClicked(object sender, RoutedEventArgs args)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.ProbeSystemProviderAsync();
+            if (result.ValueKind == JsonValueKind.Object
+                && result.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                ProbeResultText.Text = result.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+                    ? error.GetString() ?? "Probe failed."
+                    : "Probe failed.";
+                return;
+            }
+            var reachable = result.TryGetProperty("reachable", out var reachableValue) && reachableValue.GetBoolean();
+            ProbeResultText.Text = (reachable ? "Provider reachable" : "Provider unreachable")
+                + (result.TryGetProperty("detail", out var detail) && detail.ValueKind == JsonValueKind.String
+                    ? $" — {detail.GetString()}"
+                    : "");
+        }
+        catch (Exception ex)
+        {
+            ProbeResultText.Text = ex.Message;
+        }
+    }
+
+    private void RenderBackups(JsonElement backups)
+    {
+        BackupsList.Children.Clear();
+        foreach (var backup in Enumerate(backups))
+        {
+            var backupId = GetString(backup, "id") ?? "";
+            var card = new StackPanel { Spacing = 4 };
+            card.Children.Add(new TextBlock
+            {
+                Text = backupId,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            });
+            var created = GetString(backup, "created_at");
+            var files = Enumerate(backup, "files").Count();
+            card.Children.Add(new TextBlock
+            {
+                Text = $"{created ?? "unknown time"} · {files} files",
+                Opacity = 0.72,
+            });
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            var restore = new Button { Content = "Restore" };
+            restore.Click += async (_, _) => await RestoreBackupAsync(backupId);
+            var delete = new Button { Content = "Delete" };
+            delete.Click += async (_, _) => await DeleteBackupAsync(backupId);
+            buttons.Children.Add(restore);
+            buttons.Children.Add(delete);
+            card.Children.Add(buttons);
+            BackupsList.Children.Add(WrapCard(card));
+        }
+        if (BackupsList.Children.Count == 0)
+        {
+            BackupsList.Children.Add(new TextBlock
+            {
+                Text = "No backups yet. Create one before changing providers or data directories.",
+                Opacity = 0.72,
+            });
+        }
+    }
+
+    private async void OnCreateBackupClicked(object sender, RoutedEventArgs args)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.CreateBackupAsync();
+            if (result.ValueKind == JsonValueKind.Object
+                && result.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                SettingsErrorText.Text = result.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+                    ? error.GetString() ?? "Backup failed."
+                    : "Backup failed.";
+                return;
+            }
+            SettingsErrorText.Text = "";
+            await LoadSettingsAsync();
+        }
+        catch (Exception ex)
+        {
+            SettingsErrorText.Text = ex.Message;
+        }
+    }
+
+    private async Task RestoreBackupAsync(string backupId)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        // Mirror the web surface's confirmation: a restore is high-consequence
+        // and the running process keeps its in-memory state until a restart.
+        var dialog = new ContentDialog
+        {
+            Title = $"Restore {backupId}?",
+            Content = new TextBlock
+            {
+                Text = "Backup files replace the current installation files on disk. The running process keeps its in-memory rules, household, and enrollments until HAVEN restarts.",
+                TextWrapping = TextWrapping.Wrap,
+            },
+            PrimaryButtonText = "Restore",
+            CloseButtonText = "Cancel",
+            XamlRoot = RootGrid().XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.RestoreBackupAsync(backupId);
+            if (result.ValueKind == JsonValueKind.Object
+                && result.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                SettingsErrorText.Text = result.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+                    ? error.GetString() ?? "Restore failed."
+                    : "Restore failed.";
+                return;
+            }
+            SettingsErrorText.Text = "Restore complete — restart HAVEN to apply it to the running process.";
+            await LoadSettingsAsync();
+        }
+        catch (Exception ex)
+        {
+            SettingsErrorText.Text = ex.Message;
+        }
+    }
+
+    private async Task DeleteBackupAsync(string backupId)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        var dialog = new ContentDialog
+        {
+            Title = $"Delete backup {backupId}?",
+            Content = new TextBlock
+            {
+                Text = "The backup's files are removed permanently.",
+                TextWrapping = TextWrapping.Wrap,
+            },
+            PrimaryButtonText = "Delete",
+            CloseButtonText = "Cancel",
+            XamlRoot = RootGrid().XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.DeleteBackupAsync(backupId);
+            if (result.ValueKind == JsonValueKind.Object
+                && result.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                SettingsErrorText.Text = result.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+                    ? error.GetString() ?? "Delete failed."
+                    : "Delete failed.";
+                return;
+            }
+            SettingsErrorText.Text = "";
+            await LoadSettingsAsync();
+        }
+        catch (Exception ex)
+        {
+            SettingsErrorText.Text = ex.Message;
+        }
+    }
+
+    private void RenderService(JsonElement service)
+    {
+        ServicePanel.Children.Clear();
+        var installed = service.TryGetProperty("installed", out var installedValue) && installedValue.GetBoolean();
+        var running = service.TryGetProperty("running", out var runningValue) && runningValue.GetBoolean();
+        var detail = GetString(service, "detail") ?? "";
+        var card = new StackPanel { Spacing = 4 };
+        card.Children.Add(new TextBlock
+        {
+            Text = installed
+                ? (running ? "HAVEN starts at logon (running)" : $"HAVEN starts at logon ({detail})")
+                : $"Not installed to start at logon ({detail})",
+            TextWrapping = TextWrapping.Wrap,
+        });
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var toggle = new Button { Content = installed ? "Uninstall" : "Install" };
+        toggle.Click += async (_, _) => await ToggleServiceAsync(installed);
+        buttons.Children.Add(toggle);
+        card.Children.Add(buttons);
+        ServicePanel.Children.Add(WrapCard(card));
+    }
+
+    private async Task ToggleServiceAsync(bool installed)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var result = installed
+                ? await _client.UninstallServiceAsync()
+                : await _client.InstallServiceAsync();
+            if (result.ValueKind == JsonValueKind.Object
+                && result.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                SettingsErrorText.Text = result.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+                    ? error.GetString() ?? "Service change failed."
+                    : "Service change failed.";
+                return;
+            }
+            SettingsErrorText.Text = "";
+            await LoadSettingsAsync();
+        }
+        catch (Exception ex)
+        {
+            SettingsErrorText.Text = ex.Message;
+        }
+    }
+
 
     private JsonElement _rooms = default;
     private JsonElement _pending = default;
@@ -577,58 +1142,109 @@ public sealed partial class MainWindow : Window
             _rooms = result.GetProperty("rooms").Clone();
             _pending = result.GetProperty("pending").Clone();
             RoomsErrorText.Text = "";
+            HomeStatusText.Text = "";
+            HomeUpdatedText.Text = $"Updated {DateTime.Now:t}";
             RenderRooms();
+            RenderHomeDevices();
         }
         catch (Exception ex)
         {
-            RoomsErrorText.Text = ex.Message;
+            HomeStatusText.Text = "";
+            RoomsErrorText.Text = $"Could not load home state: {ex.Message} Use Refresh to retry.";
         }
     }
 
     private void RenderRooms()
     {
-        var selected = (RoomsList.SelectedItem as ListViewItem)?.Tag?.ToString();
-        RoomsList.Items.Clear();
+        var selected = (RoomCards.SelectedItem as ListViewItem)?.Tag?.ToString();
+        RoomCards.Items.Clear();
         foreach (var room in Enumerate(_rooms))
         {
             var roomId = GetString(room, "id") ?? "";
-            var summary = new StackPanel { Spacing = 3 };
+            var people = GetPeople(room);
+            var deviceCount = Enumerate(room, "devices").Count();
+            var card = new StackPanel { Spacing = 4, MinWidth = 200 };
             var name = new TextBlock
             {
                 Text = GetString(room, "name") ?? roomId,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             };
-            if (GetPeople(room).Count > 0)
+            card.Children.Add(name);
+            card.Children.Add(new TextBlock
             {
-                name.Text += "  ●";
-            }
-            summary.Children.Add(name);
-            var deviceCount = Enumerate(room, "devices").Count();
-            summary.Children.Add(new TextBlock
+                Text = people.Count > 0 ? string.Join(" · ", people) : "Empty",
+                Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+            });
+            card.Children.Add(new TextBlock
             {
                 Text = deviceCount == 0
                     ? "No devices"
                     : deviceCount == 1 ? "1 device" : $"{deviceCount} devices",
+                Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+            });
+            RoomCards.Items.Add(new ListViewItem
+            {
+                Tag = roomId,
+                Content = new Border
+                {
+                    Style = (Style)Application.Current.Resources["HavenCardStyle"],
+                    MinWidth = 210,
+                    Child = card,
+                },
+            });
+        }
+        if (RoomCards.Items.Count == 0)
+        {
+            RoomCards.Items.Add(new TextBlock
+            {
+                Text = "No rooms yet. Rooms are yours to declare and do not require a device.",
                 Opacity = 0.72,
             });
-            RoomsList.Items.Add(new ListViewItem { Tag = roomId, Content = summary });
         }
-        if (RoomsList.Items.Count == 0)
-        {
-            RoomsList.Items.Add(new TextBlock { Text = "No rooms.", Opacity = 0.72 });
-        }
-        else if (selected is not null && RoomsList.Items.Any(item =>
+        else if (selected is not null && RoomCards.Items.Any(item =>
             item is ListViewItem listItem && listItem.Tag?.ToString() == selected))
         {
-            RoomsList.SelectedItem = RoomsList.Items.First(item =>
+            RoomCards.SelectedItem = RoomCards.Items.First(item =>
                 item is ListViewItem listItem && listItem.Tag?.ToString() == selected);
         }
-        else if (RoomsList.SelectedItem is null && RoomsList.Items[0] is ListViewItem)
+        else if (RoomCards.SelectedItem is null && RoomCards.Items[0] is ListViewItem)
         {
-            RoomsList.SelectedItem = RoomsList.Items[0];
+            RoomCards.SelectedItem = RoomCards.Items[0];
         }
         RenderPending();
         RenderRoomDetail();
+    }
+
+    private void RenderHomeDevices()
+    {
+        HomeDevicesList.Children.Clear();
+        var any = false;
+        foreach (var room in Enumerate(_rooms))
+        {
+            var devices = Enumerate(room, "devices").ToList();
+            if (devices.Count == 0)
+            {
+                continue;
+            }
+            any = true;
+            HomeDevicesList.Children.Add(new TextBlock
+            {
+                Text = GetString(room, "name") ?? GetString(room, "id") ?? "Room",
+                Style = (Style)Application.Current.Resources["HavenSectionTextStyle"],
+            });
+            foreach (var device in devices)
+            {
+                HomeDevicesList.Children.Add(MakeDeviceRow(device));
+            }
+        }
+        if (!any)
+        {
+            HomeDevicesList.Children.Add(new TextBlock
+            {
+                Text = "No devices yet. Enroll a device from Setup → Connections and it appears here.",
+                Opacity = 0.72,
+            });
+        }
     }
 
     private void RenderPending()
@@ -667,7 +1283,7 @@ public sealed partial class MainWindow : Window
                 Padding = new Microsoft.UI.Xaml.Thickness(10),
                 CornerRadius = new Microsoft.UI.Xaml.CornerRadius(8),
                 BorderThickness = new Microsoft.UI.Xaml.Thickness(1),
-                BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenStrokeBrush"],
                 Child = card,
             });
         }
@@ -699,7 +1315,7 @@ public sealed partial class MainWindow : Window
     private void RenderRoomDetail()
     {
         RoomDetail.Children.Clear();
-        if (RoomsList.SelectedItem is not ListViewItem item || item.Tag is not string roomId)
+        if (RoomCards.SelectedItem is not ListViewItem item || item.Tag is not string roomId)
         {
             RoomDetail.Children.Add(new TextBlock { Text = "Select a room.", Opacity = 0.72 });
             return;
@@ -781,7 +1397,7 @@ public sealed partial class MainWindow : Window
         };
         if (degraded)
         {
-            stateText.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorCautionBrush"];
+            stateText.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenWarningBrush"];
         }
         Grid.SetColumn(stateText, 1);
         head.Children.Add(stateText);
@@ -804,7 +1420,7 @@ public sealed partial class MainWindow : Window
             Padding = new Microsoft.UI.Xaml.Thickness(12),
             CornerRadius = new Microsoft.UI.Xaml.CornerRadius(8),
             BorderThickness = new Microsoft.UI.Xaml.Thickness(1),
-            BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+            BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenStrokeBrush"],
             Child = card,
         };
     }
@@ -899,6 +1515,7 @@ public sealed partial class MainWindow : Window
         }
         RoomsErrorText.Text = "";
         RenderRooms();
+        RenderHomeDevices();
     }
 
     private void OnRoomSelectionChanged(object sender, SelectionChangedEventArgs args)
@@ -911,6 +1528,24 @@ public sealed partial class MainWindow : Window
     private JsonElement _people = default;
     private JsonElement _contexts = default;
 
+    private async Task LoadContextsAsync()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var contexts = await _client.GetContextsAsync();
+            _contexts = contexts.GetProperty("contexts").Clone();
+            RenderContexts();
+        }
+        catch (Exception ex)
+        {
+            RoomsErrorText.Text = $"Could not load contexts: {ex.Message}";
+        }
+    }
+
     private async Task LoadPeopleAsync()
     {
         if (_client is null)
@@ -920,16 +1555,15 @@ public sealed partial class MainWindow : Window
         try
         {
             var people = await _client.GetPeopleAsync();
-            var contexts = await _client.GetContextsAsync();
             _people = people.GetProperty("people").Clone();
-            _contexts = contexts.GetProperty("contexts").Clone();
             PeopleErrorText.Text = "";
+            PeopleStatusText.Text = "";
             RenderPeople();
-            RenderContexts();
         }
         catch (Exception ex)
         {
-            PeopleErrorText.Text = ex.Message;
+            PeopleStatusText.Text = "";
+            PeopleErrorText.Text = $"Could not load people: {ex.Message} Use Refresh to retry.";
         }
     }
 
@@ -940,7 +1574,7 @@ public sealed partial class MainWindow : Window
         {
             var personId = GetString(person, "person_id") ?? "";
             var name = GetString(person, "name") ?? personId;
-            var role = (GetString(person, "role") ?? "member").ToUpperInvariant();
+            var role = Sentence(GetString(person, "role") ?? "member");
 
             var card = new StackPanel { Spacing = 4 };
             var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
@@ -1019,7 +1653,7 @@ public sealed partial class MainWindow : Window
             };
             if (active)
             {
-                state.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
+                state.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenSuccessBrush"];
             }
             head.Children.Add(state);
             card.Children.Add(head);
@@ -1053,10 +1687,7 @@ public sealed partial class MainWindow : Window
 
     private static Border WrapCard(StackPanel content) => new()
     {
-        Padding = new Microsoft.UI.Xaml.Thickness(12),
-        CornerRadius = new Microsoft.UI.Xaml.CornerRadius(8),
-        BorderThickness = new Microsoft.UI.Xaml.Thickness(1),
-        BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+        Style = (Style)Application.Current.Resources["HavenCardStyle"],
         Child = content,
     };
 
@@ -1274,11 +1905,13 @@ public sealed partial class MainWindow : Window
             _scheduler = result.GetProperty("scheduler").Clone();
             _automationOptions = options.GetProperty("options").Clone();
             AutomationsErrorText.Text = "";
+            AutomationsStatusText.Text = "";
             RenderAutomations();
         }
         catch (Exception ex)
         {
-            AutomationsErrorText.Text = ex.Message;
+            AutomationsStatusText.Text = "";
+            AutomationsErrorText.Text = $"Could not load automations: {ex.Message} Use Refresh to retry.";
         }
     }
 
@@ -1313,13 +1946,13 @@ public sealed partial class MainWindow : Window
         });
         var badge = new TextBlock
         {
-            Text = status.ToUpperInvariant(),
+            Text = Sentence(status),
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
         };
         var badgeBrush = status switch
         {
-            "approved" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorSuccessBrush"],
-            "proposed" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorCautionBrush"],
+            "approved" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenSuccessBrush"],
+            "proposed" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenWarningBrush"],
             _ => null,
         };
         if (badgeBrush is not null)
@@ -1691,6 +2324,31 @@ public sealed partial class MainWindow : Window
     private JsonElement _modelJobs = default;
     private JsonElement _discovered = default;
     private bool _assigningRoles;
+    private string _modelsTab = "local";
+
+    private void OnModelsTabClicked(object sender, RoutedEventArgs args)
+    {
+        if (sender is Button button && button.Tag is string tab)
+        {
+            SelectModelsTab(tab);
+        }
+    }
+
+    private void SelectModelsTab(string tab)
+    {
+        _modelsTab = tab;
+        ModelsTabLocal.Visibility = tab == "local" ? Visibility.Visible : Visibility.Collapsed;
+        ModelsTabDownloaded.Visibility = tab == "downloaded" ? Visibility.Visible : Visibility.Collapsed;
+        ModelsTabExternal.Visibility = tab == "endpoint" ? Visibility.Visible : Visibility.Collapsed;
+        ModelsTabDownloads.Visibility = tab == "downloads" ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var button in ModelsTabs.Children.OfType<Button>())
+        {
+            button.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                button.Tag?.ToString() == tab ? "HavenAccentBrush" : "HavenMutedTextBrush"];
+            button.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                button.Tag?.ToString() == tab ? "HavenAccentBrush" : "HavenStrokeBrush"];
+        }
+    }
 
     private async void OnModelsPollTick(object? sender, object args)
     {
@@ -1736,8 +2394,27 @@ public sealed partial class MainWindow : Window
 
     private void RenderModels()
     {
+        // Spec 38 tabs: Local / Downloaded / External, fed by the record's source.
+        var local = Enumerate(_models).Where(model => GetString(model, "source") == "local").ToList();
+        var downloaded = Enumerate(_models).Where(model => GetString(model, "source") == "downloaded").ToList();
+        var external = Enumerate(_models).Where(model => GetString(model, "source") == "endpoint").ToList();
+
+        ModelsLocalList.Children.Clear();
+        foreach (var model in local)
+        {
+            ModelsLocalList.Children.Add(MakeModelCard(model));
+        }
+        if (ModelsLocalList.Children.Count == 0)
+        {
+            ModelsLocalList.Children.Add(new TextBlock
+            {
+                Text = "No local models. Install a model folder or add a folder to scan.",
+                Opacity = 0.72,
+            });
+        }
+
         ModelsList.Children.Clear();
-        foreach (var model in Enumerate(_models))
+        foreach (var model in downloaded)
         {
             ModelsList.Children.Add(MakeModelCard(model));
         }
@@ -1745,7 +2422,21 @@ public sealed partial class MainWindow : Window
         {
             ModelsList.Children.Add(new TextBlock
             {
-                Text = "No models installed yet. Install from a URL, a local folder, or an endpoint.",
+                Text = "No downloaded models yet. Install from a URL to see progress and verification here.",
+                Opacity = 0.72,
+            });
+        }
+
+        ModelsExternalList.Children.Clear();
+        foreach (var model in external)
+        {
+            ModelsExternalList.Children.Add(MakeModelCard(model));
+        }
+        if (ModelsExternalList.Children.Count == 0)
+        {
+            ModelsExternalList.Children.Add(new TextBlock
+            {
+                Text = "No external endpoints. Add a provider endpoint to use hosted intelligence.",
                 Opacity = 0.72,
             });
         }
@@ -1765,14 +2456,14 @@ public sealed partial class MainWindow : Window
         });
         var badge = new TextBlock
         {
-            Text = state.ToUpperInvariant(),
+            Text = Sentence(state),
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
         };
         var badgeBrush = ModelFailureStates.Contains(state)
-            ? Application.Current.Resources["SystemFillColorCriticalBrush"]
+            ? Application.Current.Resources["HavenDangerBrush"]
             : state is "ready" or "loaded"
-                ? Application.Current.Resources["SystemFillColorSuccessBrush"]
-                : Application.Current.Resources["SystemFillColorCautionBrush"];
+                ? Application.Current.Resources["HavenSuccessBrush"]
+                : Application.Current.Resources["HavenWarningBrush"];
         badge.Foreground = (Microsoft.UI.Xaml.Media.Brush)badgeBrush;
         head.Children.Add(badge);
         card.Children.Add(head);
@@ -1891,12 +2582,12 @@ public sealed partial class MainWindow : Window
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 TextWrapping = TextWrapping.Wrap,
             });
-            var badge = new TextBlock { Text = state.ToUpperInvariant() };
+            var badge = new TextBlock { Text = Sentence(state) };
             badge.Foreground = state switch
             {
-                "ready" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorSuccessBrush"],
-                "failed" or "cancelled" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorCriticalBrush"],
-                _ => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorCautionBrush"],
+                "ready" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenSuccessBrush"],
+                "failed" or "cancelled" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenDangerBrush"],
+                _ => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenWarningBrush"],
             };
             head.Children.Add(badge);
             card.Children.Add(head);
@@ -1922,7 +2613,7 @@ public sealed partial class MainWindow : Window
                 {
                     Text = error,
                     TextWrapping = TextWrapping.Wrap,
-                    Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorCriticalBrush"],
+                    Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenDangerBrush"],
                 });
             }
             if (state is "queued" or "downloading" or "verifying")
@@ -1977,7 +2668,7 @@ public sealed partial class MainWindow : Window
                 {
                     Text = problem,
                     TextWrapping = TextWrapping.Wrap,
-                    Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorCriticalBrush"],
+                    Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenDangerBrush"],
                 });
             }
             // Scan discovers, never activates: registration is the explicit gate.
@@ -2366,6 +3057,23 @@ public sealed partial class MainWindow : Window
         && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    /* Sentence case per spec 05: "Proposed", never "PROPOSED". */
+    private static string Sentence(string value) =>
+        value.Length == 0 ? value : char.ToUpperInvariant(value[0]) + value[1..];
+
+    private static string? GetString(JsonElement element, string property, string nested) =>
+        element.ValueKind == JsonValueKind.Object
+        && element.TryGetProperty(property, out var value)
+            ? GetString(value, nested)
+            : null;
+
+    private static long GetInt(JsonElement element, string property) =>
+        element.ValueKind == JsonValueKind.Object
+        && element.TryGetProperty(property, out var value)
+        && value.ValueKind == JsonValueKind.Number
+            ? value.GetInt64()
+            : 0;
 
     private static double? GetDouble(JsonElement element, string property) =>
         element.ValueKind == JsonValueKind.Object

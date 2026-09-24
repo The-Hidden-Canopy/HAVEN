@@ -715,6 +715,25 @@ class HavenWebServer(ThreadingHTTPServer):
             role = _require_model_field(params, "role")
             return assign_payload(self.models, role, params.get("id"))
 
+        # -- system ----------------------------------------------------------
+        # Diagnostics, backups, and logon-service control delegate to the same
+        # SystemDiagnostics / BackupManager / StartupManager instances the
+        # /api/system* handlers call. Restore/delete keep the web surface's
+        # safety behavior: a non-empty id is required, and BackupManager's
+        # ValueError (path traversal, unknown id) answers fail-closed.
+
+        def _system_backup_id(params: dict) -> str:
+            backup_id = params.get("id")
+            if not isinstance(backup_id, str) or not backup_id.strip():
+                raise ValueError("a non-empty 'id' is required")
+            return backup_id.strip()
+
+        def _system_backup_restore(params: dict) -> dict:
+            return {"ok": True, "result": self.backups.restore(_system_backup_id(params))}
+
+        def _system_backup_delete(params: dict) -> dict:
+            return {"ok": True, "result": self.backups.delete(_system_backup_id(params))}
+
         def _computer_action(params: dict) -> dict:
             action = params.get("action")
             parameters = params.get("parameters", {})
@@ -898,6 +917,15 @@ class HavenWebServer(ThreadingHTTPServer):
                     "jobs": [job_to_dict(job) for job in self.model_jobs.list()],
                 },
                 "models.job.cancel": _models_job_cancel,
+                "system.diagnostics": lambda _params: self.diagnostics.collect(),
+                "system.probe": lambda _params: self.diagnostics.probe_provider(),
+                "system.backups": lambda _params: {"ok": True, "backups": self.backups.list()["backups"]},
+                "system.backup.create": lambda _params: {"ok": True, "backup": self.backups.create()},
+                "system.backup.restore": _system_backup_restore,
+                "system.backup.delete": _system_backup_delete,
+                "system.service": lambda _params: {"ok": True, "service": self.service.status()},
+                "system.service.install": lambda _params: self.service.install(),
+                "system.service.uninstall": lambda _params: self.service.uninstall(),
             }
         )
 

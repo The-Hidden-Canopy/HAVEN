@@ -3,6 +3,114 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Application.Resources>
-        <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Dark">
+                    <Color x:Key="HavenCanvasColor">#0B1220</Color>
+                    <Color x:Key="HavenSurface1Color">#111827</Color>
+                    <Color x:Key="HavenSurface2Color">#182235</Color>
+                    <Color x:Key="HavenTextColor">#F3F6FC</Color>
+                    <Color x:Key="HavenMutedTextColor">#93A1B8</Color>
+                    <Color x:Key="HavenStrokeColor">#2A3850</Color>
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Light">
+                    <Color x:Key="HavenCanvasColor">#F5F7FB</Color>
+                    <Color x:Key="HavenSurface1Color">#FFFFFF</Color>
+                    <Color x:Key="HavenSurface2Color">#F0F3F8</Color>
+                    <Color x:Key="HavenTextColor">#172033</Color>
+                    <Color x:Key="HavenMutedTextColor">#5C6678</Color>
+                    <Color x:Key="HavenStrokeColor">#D8DFEA</Color>
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+
+            <SolidColorBrush x:Key="HavenCanvasBrush" Color="{ThemeResource HavenCanvasColor}" />
+            <SolidColorBrush x:Key="HavenSurface1Brush" Color="{ThemeResource HavenSurface1Color}" />
+            <SolidColorBrush x:Key="HavenSurface2Brush" Color="{ThemeResource HavenSurface2Color}" />
+            <SolidColorBrush x:Key="HavenTextBrush" Color="{ThemeResource HavenTextColor}" />
+            <SolidColorBrush x:Key="HavenMutedTextBrush" Color="{ThemeResource HavenMutedTextColor}" />
+            <SolidColorBrush x:Key="HavenStrokeBrush" Color="{ThemeResource HavenStrokeColor}" />
+
+            <!-- Accent and semantic tokens are identical in both themes (spec section 04). -->
+            <SolidColorBrush x:Key="HavenAccentBrush" Color="#3B82F6" />
+            <SolidColorBrush x:Key="HavenVioletBrush" Color="#7C3AED" />
+            <SolidColorBrush x:Key="HavenOrangeBrush" Color="#FF8A3D" />
+            <SolidColorBrush x:Key="HavenSuccessBrush" Color="#22C55E" />
+            <SolidColorBrush x:Key="HavenWarningBrush" Color="#F59E0B" />
+            <SolidColorBrush x:Key="HavenDangerBrush" Color="#EF4444" />
+
+            <!-- Typography scale (spec section 05). Sentence case in copy. -->
+            <Style x:Key="HavenDisplayTextStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="28" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Foreground" Value="{ThemeResource HavenTextBrush}" />
+            </Style>
+            <Style x:Key="HavenPageTitleTextStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="24" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Foreground" Value="{ThemeResource HavenTextBrush}" />
+            </Style>
+            <Style x:Key="HavenSectionTextStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="16" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Foreground" Value="{ThemeResource HavenTextBrush}" />
+            </Style>
+            <Style x:Key="HavenBodyTextStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="13.5" />
+                <Setter Property="Foreground" Value="{ThemeResource HavenTextBrush}" />
+            </Style>
+            <Style x:Key="HavenMetadataTextStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="Foreground" Value="{ThemeResource HavenMutedTextBrush}" />
+            </Style>
+            <Style x:Key="HavenMonoTextStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="FontFamily" Value="Cascadia Mono" />
+                <Setter Property="Foreground" Value="{ThemeResource HavenTextBrush}" />
+            </Style>
+
+            <!-- Cards (spec section 06/13): raised surface, 8px radius. -->
+            <Style x:Key="HavenCardStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource HavenSurface2Brush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource HavenStrokeBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="Padding" Value="12" />
+            </Style>
+
+            <!-- Button hierarchy (spec section 12). -->
+            <Style x:Key="HavenPrimaryButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="{ThemeResource HavenAccentBrush}" />
+                <Setter Property="Foreground" Value="#FFFFFF" />
+            </Style>
+            <Style x:Key="HavenSecondaryButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderBrush" Value="{ThemeResource HavenStrokeBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Foreground" Value="{ThemeResource HavenTextBrush}" />
+            </Style>
+            <Style x:Key="HavenQuietButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{ThemeResource HavenAccentBrush}" />
+            </Style>
+            <Style x:Key="HavenDangerButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderBrush" Value="{ThemeResource HavenDangerBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Foreground" Value="{ThemeResource HavenDangerBrush}" />
+            </Style>
+
+            <!-- In-page tab row (Home domains, Models sources). -->
+            <Style x:Key="HavenTabButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{ThemeResource HavenMutedTextBrush}" />
+                <Setter Property="BorderThickness" Value="0,0,0,2" />
+                <Setter Property="BorderBrush" Value="Transparent" />
+                <Setter Property="Padding" Value="10,6" />
+            </Style>
+        </ResourceDictionary>
     </Application.Resources>
 </Application>
