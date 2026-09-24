@@ -10,8 +10,20 @@ import pytest
 
 from haven.ipc import request_message
 from haven.web.server import make_server
+from haven.web.setup_config import SetupConfig, SetupConfigStore
 
 NOW = datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc)
+
+
+def _seed_installation(data_dir: Path) -> None:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    SetupConfigStore(data_dir / "haven.json").save(
+        SetupConfig(completed=True, data_dir=str(data_dir), household_id="household-authoring")
+    )
+    (data_dir / "household.json").write_text(
+        '{"version": 1, "rooms": [], "people": [], "contexts": []}',
+        encoding="utf-8",
+    )
 
 
 @pytest.fixture()
@@ -196,3 +208,82 @@ def test_malformed_commands_fail_closed_at_the_adapter(server) -> None:
         )
         assert response["ok"] is False
         assert "brightness_pct" in response["error"]
+
+
+@pytest.fixture()
+def real_server():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp) / "data"
+        _seed_installation(data_dir)
+        instance, _director = make_server(0, data_dir=data_dir, clock=lambda: NOW)
+        try:
+            yield instance
+        finally:
+            instance.server_close()
+
+
+def test_room_authoring_round_trip_and_shape(real_server) -> None:
+    instance = real_server
+    dispatcher = instance.build_ipc_dispatcher()
+
+    added = dispatcher(request_message("req-add-room", "rooms.add", {"name": "Studio"}))
+    assert added["ok"] is True
+    assert added["result"]["ok"] is True
+    assert any(
+        room["room_id"] == "studio"
+        for room in added["result"]["setup"]["household"]["rooms"]
+    )
+    # A declaration is valid with no device connected (spec section 36).
+    listed = dispatcher(request_message("req-list", "rooms.list", {}))
+    studio = next(room for room in listed["result"]["rooms"] if room["id"] == "studio")
+    assert studio["devices"] == []
+    assert studio["name"] == "Studio"
+    detail = dispatcher(request_message("req-get", "rooms.get", {"room_id": "studio"}))
+    assert detail["result"]["room"]["name"] == "Studio"
+
+    renamed = dispatcher(
+        request_message("req-rename", "rooms.rename", {"room_id": "studio", "name": "Workshop"})
+    )
+    assert renamed["ok"] is True
+    assert renamed["result"]["ok"] is True
+    assert any(
+        room["room_id"] == "studio" and room["name"] == "Workshop"
+        for room in renamed["result"]["setup"]["household"]["rooms"]
+    )
+    listed = dispatcher(request_message("req-list-2", "rooms.list", {}))
+    assert next(room for room in listed["result"]["rooms"] if room["id"] == "studio")["name"] == "Workshop"
+
+    removed = dispatcher(request_message("req-remove", "rooms.remove", {"room_id": "studio"}))
+    assert removed["ok"] is True
+    assert removed["result"]["ok"] is True
+    listed = dispatcher(request_message("req-list-3", "rooms.list", {}))
+    assert all(room["id"] != "studio" for room in listed["result"]["rooms"])
+    gone = dispatcher(request_message("req-get-gone", "rooms.get", {"room_id": "studio"}))
+    assert gone["ok"] is False
+    assert "unknown room" in gone["error"]
+
+
+def test_room_authoring_validation_and_idempotency(real_server) -> None:
+    instance = real_server
+    dispatcher = instance.build_ipc_dispatcher()
+
+    blank = dispatcher(request_message("req-blank", "rooms.add", {"name": "  "}))
+    assert blank["ok"] is True
+    assert blank["result"]["ok"] is False
+    assert "name" in blank["result"]["error"]
+
+    first = dispatcher(request_message("req-first", "rooms.add", {"name": "Loft"}))
+    assert first["result"]["ok"] is True
+    # Re-declaring the same name is a harmless no-op.
+    again = dispatcher(request_message("req-again", "rooms.add", {"name": "Loft"}))
+    assert again["result"]["ok"] is True
+
+    renamed = dispatcher(
+        request_message("req-rename-unknown", "rooms.rename", {"room_id": "attic", "name": "Attic"})
+    )
+    assert renamed["result"]["ok"] is False
+    assert renamed["result"]["error"] == "unknown room: attic"
+
+    removed = dispatcher(request_message("req-remove-unknown", "rooms.remove", {"room_id": "attic"}))
+    assert removed["result"]["ok"] is False
+    assert removed["result"]["error"] == "unknown room: attic"
