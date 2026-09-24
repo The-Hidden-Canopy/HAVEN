@@ -17,18 +17,22 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _themeService.Load();
+        // Defer the first apply until the window is loaded: swapping merged
+        // dictionaries during InitializeComponent breaks the framework's
+        // theme-resource cache.
+        DispatcherQueue.TryEnqueue(() => _themeService.Apply(this));
         // The shell draws its own title bar: system caption buttons stay,
         // everything else is HAVEN's canvas (mockup 3's seamless chrome).
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(DragStrip);
-        var titleBar = AppWindow.TitleBar;
-        titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
-        titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
-        titleBar.ButtonHoverBackgroundColor = Microsoft.UI.ColorHelper.FromArgb(0x33, 0xFF, 0xFF, 0xFF);
-        titleBar.ButtonForegroundColor = Microsoft.UI.Colors.White;
+        ApplyTitleBarColors();
         UpdateLogo();
-        _modelsPollTimer.Tick += OnModelsPollTick;
-        RootGrid().ActualThemeChanged += (_, _) => UpdateLogo();
+        RootGrid().ActualThemeChanged += (_, _) =>
+        {
+            UpdateLogo();
+            ApplyTitleBarColors();
+        };
         RootGrid().Loaded += OnLoaded;
         RootGrid().SizeChanged += OnRootSizeChanged;
         SelectHomeTab("rooms");
@@ -47,9 +51,104 @@ public sealed partial class MainWindow : Window
         };
         searchAccelerator.Invoked += (_, _) => SelectNavigation("search");
         RootGrid().KeyboardAccelerators.Add(searchAccelerator);
+        SyncAppearanceControls();
     }
 
     private Grid RootGrid() => (Grid)Content;
+
+    public void ApplyTitleBarColors()
+    {
+        var titleBar = AppWindow.TitleBar;
+        titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
+        titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+        var dark = RootGrid().ActualTheme == ElementTheme.Dark;
+        titleBar.ButtonHoverBackgroundColor = dark
+            ? Microsoft.UI.ColorHelper.FromArgb(0x33, 0xFF, 0xFF, 0xFF)
+            : Microsoft.UI.ColorHelper.FromArgb(0x33, 0x00, 0x00, 0x00);
+        titleBar.ButtonForegroundColor = dark ? Microsoft.UI.Colors.White : Microsoft.UI.Colors.Black;
+    }
+
+    /// <summary>Flat-canvas fallback for high contrast (spec section 34).</summary>
+    public void SetFlatCanvas(bool flat)
+    {
+        Root.Background = flat
+            ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenCanvasBrush"]
+            : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenCanvasGradient"];
+    }
+
+    /// <summary>Set the resolved appearance on the root element.</summary>
+    public void SetRequestedTheme(string appearance)
+    {
+        // The effective appearance is always resolved by ThemeService
+        // (system mode included); ElementTheme.Default is never assigned.
+        Root.RequestedTheme = appearance == "dark" ? ElementTheme.Dark : ElementTheme.Light;
+    }
+
+    // -- appearance (spec 40) ---------------------------------------------------
+
+    private readonly ThemeService _themeService = new();
+    private bool _appearanceReady;
+
+    private void OnAppearanceChanged(object sender, RoutedEventArgs args)
+    {
+        if (_appearanceReady)
+        {
+            _ = ApplyAppearanceAsync();
+        }
+    }
+
+    private void OnAppearanceSelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (_appearanceReady)
+        {
+            _ = ApplyAppearanceAsync();
+        }
+    }
+
+    private async Task ApplyAppearanceAsync()
+    {
+        var mode = ModeDarkRadio.IsChecked == true
+            ? "dark"
+            : ModeLightRadio.IsChecked == true ? "light" : "system";
+        var theme = (ThemePicker.SelectedItem as ComboBoxItem)?.Tag as string ?? ThemeService.DefaultTheme;
+        var density = (DensityPicker.SelectedItem as ComboBoxItem)?.Tag as string ?? ThemeService.DefaultDensity;
+        var motion = (MotionPicker.SelectedItem as ComboBoxItem)?.Tag as string ?? ThemeService.DefaultMotion;
+        _themeService.SetAppearance(theme, mode, density, motion);
+        _themeService.Apply(this);
+        ApplyDensityPreview();
+        await _themeService.SaveAsync();
+    }
+
+    private void ApplyDensityPreview()
+    {
+        // The global density token pass lands in phase 4; the preview block
+        // shows the compact row height live.
+        AppearancePreviewNav.Height = _themeService.Density == "compact" ? 30 : 38;
+    }
+
+    private void SyncAppearanceControls()
+    {
+        ModeSystemRadio.IsChecked = _themeService.Mode == "system";
+        ModeLightRadio.IsChecked = _themeService.Mode == "light";
+        ModeDarkRadio.IsChecked = _themeService.Mode == "dark";
+        SelectAppearanceItem(ThemePicker, _themeService.Theme);
+        SelectAppearanceItem(DensityPicker, _themeService.Density);
+        SelectAppearanceItem(MotionPicker, _themeService.Motion);
+        ApplyDensityPreview();
+        _appearanceReady = true;
+    }
+
+    private static void SelectAppearanceItem(ComboBox picker, string tag)
+    {
+        foreach (var item in picker.Items.OfType<ComboBoxItem>())
+        {
+            if (item.Tag as string == tag)
+            {
+                picker.SelectedItem = item;
+                return;
+            }
+        }
+    }
 
     // -- tablet adaptation (spec 06/07/21) -------------------------------------
     // Below ~900px the rail collapses to icons, touch targets grow, the
@@ -127,19 +226,12 @@ public sealed partial class MainWindow : Window
         SplashLogo.Source = source;
     }
 
-    private async void OnLoaded(object sender, RoutedEventArgs args)
-    {
-        try
-        {
-            await ConnectAsync();
-        }
-        finally
-        {
-            SplashOverlay.Visibility = Visibility.Collapsed;
-        }
-    }
+    private string? _connectionPipeName;
+    private string? _connectionToken;
+    private ConnectionService? _connection;
+    private Task? _connectionTask;
 
-    private async Task ConnectAsync()
+    private async void OnLoaded(object sender, RoutedEventArgs args)
     {
         var pipeName = CommandLineValue("--pipe-name") ?? Environment.GetEnvironmentVariable("HAVEN_IPC_PIPE");
         var token = await ResolveAuthTokenAsync();
@@ -147,23 +239,246 @@ public sealed partial class MainWindow : Window
         {
             ConnectionText.Text = "Native Core not connected";
             ComposerStatus.Text = "Start HAVEN Core with a named-pipe endpoint to connect this native client.";
+            SplashOverlay.Visibility = Visibility.Collapsed;
             return;
         }
 
-        try
+        _connectionPipeName = pipeName;
+        _connectionToken = token;
+        _connection = new ConnectionService(
+            connectOnce: async () =>
+            {
+                // Reconnect lifecycle: drop the dead pipe before re-authenticating.
+                await (_client?.DisconnectAsync() ?? Task.CompletedTask);
+                var client = new HavenCoreClient(_connectionPipeName!, _connectionToken!);
+                await client.ConnectAsync();
+                _client = client;
+                return client;
+            },
+            onStateChanged: state => DispatcherQueue.TryEnqueue(() => ApplyConnectionState(state)),
+            onReconciled: async () =>
+            {
+                await EnsureSetupAsync();
+                ShowPage(_currentTag);
+                SplashOverlay.Visibility = Visibility.Collapsed;
+                EnsureEventClientAsync();
+            });
+        _connectionTask = _connection.RunAsync();
+    }
+
+    private void ApplyConnectionState(string state)
+    {
+        ConnectionText.Text = state switch
         {
-            var client = new HavenCoreClient(pipeName, token);
-            await client.ConnectAsync();
-            _client = client;
-            ConnectionText.Text = "Connected";
-            ShowPage(_currentTag);
-            await EnsureSetupAsync();
-        }
-        catch (Exception ex)
+            ConnectionService.StateConnected => "Connected",
+            ConnectionService.StateDegraded => "Connected with issues",
+            ConnectionService.StateReconnecting => "Reconnecting…",
+            ConnectionService.StateConnecting => "Connecting to HAVEN Core…",
+            _ => "Core offline",
+        };
+        switch (state)
         {
-            ConnectionText.Text = "Core unavailable";
-            ComposerStatus.Text = ex.Message;
+            case ConnectionService.StateConnected:
+                ConnectionBanner.Visibility = Visibility.Collapsed;
+                break;
+            case ConnectionService.StateDegraded:
+                ConnectionBanner.Visibility = Visibility.Visible;
+                ConnectionBannerText.Text = "Connected with issues — some data may be stale.";
+                break;
+            case ConnectionService.StateReconnecting:
+            case ConnectionService.StateConnecting:
+                ConnectionBanner.Visibility = Visibility.Visible;
+                ConnectionBannerText.Text = "Reconnecting to HAVEN Core…";
+                break;
+            default:
+                ConnectionBanner.Visibility = Visibility.Visible;
+                ConnectionBannerText.Text = "HAVEN Core is unreachable. Changes are on hold; your input is kept.";
+                break;
         }
+        // One-shot composer control: submissions are allowed only on a healthy
+        // connection (spec section 11).
+        ComposerSendButton.IsEnabled = state == ConnectionService.StateConnected && !_composerBusy;
+    }
+
+    private async void OnConnectionRetryClicked(object sender, RoutedEventArgs args)
+    {
+        if (_connection is null)
+        {
+            return;
+        }
+        await _connection.RetryNowAsync();
+        // Retry Now from DISCONNECTED: the loop already exited, so restart it.
+        if (_connectionTask is { IsCompleted: true })
+        {
+            _connectionTask = _connection.RunAsync();
+        }
+    }
+
+    // -- domain invalidation via the events pipe (spec 15-17) ------------------
+
+    private HavenEventClient? _eventClient;
+    private readonly HashSet<string> _dirtyDomains = new();
+    private bool _eventRefreshInFlight;
+    private bool _eventRefreshRequested;
+
+    private static readonly Dictionary<string, string[]> EventDomains = new()
+    {
+        ["tasks.changed"] = new[] { "tasks" },
+        ["projects.changed"] = new[] { "projects" },
+        ["relationships.changed"] = new[] { "relationships" },
+        ["memory.changed"] = new[] { "memory" },
+        ["search.index.changed"] = new[] { "search" },
+        ["computer.files.changed"] = new[] { "computer" },
+        ["computer.windows.changed"] = new[] { "computer" },
+        ["computer.activity.changed"] = new[] { "computer" },
+        ["email.changed"] = new[] { "comms" },
+        ["calendar.changed"] = new[] { "comms" },
+        ["browser.tabs.changed"] = new[] { "comms" },
+        ["home.state.changed"] = new[] { "home", "authority" },
+        ["authority.pending.changed"] = new[] { "home", "authority" },
+        ["models.changed"] = new[] { "models" },
+        ["model.job.progress"] = new[] { "models" },
+        ["core.shutdown"] = Array.Empty<string>(),
+    };
+
+    private static string[] DomainsForPage(string tag) => tag switch
+    {
+        "today" => new[] { "tasks", "projects", "relationships", "comms", "models", "home" },
+        "tasks" => new[] { "tasks", "projects" },
+        "projects" => new[] { "projects", "tasks", "relationships" },
+        "people" => new[] { "home", "relationships" },
+        "memory" => new[] { "memory", "search" },
+        "computer" => new[] { "computer" },
+        "communications" => new[] { "comms" },
+        "home" => new[] { "home", "authority" },
+        "models" => new[] { "models" },
+        "search" => new[] { "search" },
+        _ => Array.Empty<string>(),
+    };
+
+    private void EnsureEventClientAsync()
+    {
+        if (_eventClient is { IsConnected: true }
+            || string.IsNullOrWhiteSpace(_connectionPipeName)
+            || string.IsNullOrWhiteSpace(_connectionToken))
+        {
+            return;
+        }
+        var client = new HavenEventClient(_connectionPipeName, _connectionToken!)
+        {
+            EventReceived = (eventName, _payload) =>
+                DispatcherQueue.TryEnqueue(() => OnDomainEvent(eventName)),
+            ConnectionLost = () => DispatcherQueue.TryEnqueue(async () => await OnEventConnectionLostAsync()),
+        };
+        _eventClient = client;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await client.ConnectAsync();
+            }
+            catch (Exception)
+            {
+                // The RPC channel's liveness probe reports core health; the
+                // events channel reconnects quietly on the next reconcile.
+            }
+        });
+    }
+
+    private async Task OnEventConnectionLostAsync()
+    {
+        if (_eventClient is null || _connection is not { IsOnline: true })
+        {
+            return;
+        }
+        MarkAllDomainsDirty();
+        await Task.Delay(2000);
+        EnsureEventClientAsync();
+    }
+
+    private void OnDomainEvent(string eventName)
+    {
+        if (eventName == "core.shutdown")
+        {
+            MarkAllDomainsDirty();
+            return;
+        }
+        if (!EventDomains.TryGetValue(eventName, out var domains))
+        {
+            return;
+        }
+        if (domains.Length == 0)
+        {
+            return;
+        }
+        var visible = DomainsForPage(_currentTag);
+        if (domains.Any(visible.Contains))
+        {
+            // The changed domain is on screen: reconcile it now.
+            RequestEventRefresh();
+        }
+        else
+        {
+            // Background domain: invalidate and reconcile on next activation.
+            _dirtyDomains.UnionWith(domains);
+        }
+    }
+
+    private void MarkAllDomainsDirty()
+    {
+        foreach (var domains in EventDomains.Values)
+        {
+            _dirtyDomains.UnionWith(domains);
+        }
+    }
+
+    private void RequestEventRefresh()
+    {
+        if (_eventRefreshInFlight)
+        {
+            // Collapse bursts: one coalesced re-render of the visible page.
+            _eventRefreshRequested = true;
+            return;
+        }
+        _eventRefreshInFlight = true;
+        var tag = _currentTag;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var completion = new TaskCompletionSource();
+                if (!DispatcherQueue.TryEnqueue(() =>
+                {
+                    try
+                    {
+                        ShowPage(tag);
+                        completion.TrySetResult();
+                    }
+                    catch (Exception ex)
+                    {
+                        completion.TrySetException(ex);
+                    }
+                }))
+                {
+                    completion.TrySetCanceled();
+                }
+                await completion.Task;
+            }
+            catch (Exception)
+            {
+                // A failed refresh leaves the domain dirty for the next pass.
+            }
+            finally
+            {
+                var again = _eventRefreshRequested;
+                _eventRefreshRequested = false;
+                _eventRefreshInFlight = false;
+                if (again)
+                {
+                    RequestEventRefresh();
+                }
+            }
+        });
     }
 
     private async Task EnsureSetupAsync()
@@ -553,6 +868,12 @@ public sealed partial class MainWindow : Window
 
     private async Task SubmitComposerAsync()
     {
+        if (_connection is { IsMutationsEnabled: false })
+        {
+            // Offline gate (spec section 11): the input is kept, not cleared.
+            ComposerStatus.Text = "Core is offline — your message is kept; try again when connected.";
+            return;
+        }
         if (_client is null || _composerBusy || string.IsNullOrWhiteSpace(ComposerInput.Text))
         {
             return;
@@ -708,6 +1029,8 @@ public sealed partial class MainWindow : Window
                 : Microsoft.UI.Text.FontWeights.Normal;
         }
         ShowPage(tag);
+        // Showing a page reloads its domains; drop their dirty marks.
+        _dirtyDomains.ExceptWith(DomainsForPage(tag));
     }
 
     private void ShowPage(string tag)
@@ -740,11 +1063,7 @@ public sealed partial class MainWindow : Window
         };
         if (tag == "models")
         {
-            _modelsPollTimer.Start();
-        }
-        else
-        {
-            _modelsPollTimer.Stop();
+            _ = LoadModelsAsync(silent: true);
         }
         switch (tag)
         {
@@ -4244,7 +4563,6 @@ public sealed partial class MainWindow : Window
         "incomplete", "unsupported", "hash_mismatch", "backend_missing", "load_failed", "unreachable",
     };
 
-    private readonly DispatcherTimer _modelsPollTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private JsonElement _models = default;
     private JsonElement _modelAssignments = default;
     private JsonElement _modelJobs = default;
@@ -4274,11 +4592,6 @@ public sealed partial class MainWindow : Window
             button.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
                 button.Tag?.ToString() == tab ? "HavenAccentBrush" : "HavenStrokeBrush"];
         }
-    }
-
-    private async void OnModelsPollTick(object? sender, object args)
-    {
-        await LoadModelsAsync(silent: true);
     }
 
     private async void OnModelsRefreshClicked(object sender, RoutedEventArgs args)

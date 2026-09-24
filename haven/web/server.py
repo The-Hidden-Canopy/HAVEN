@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..models import ModelManager, inspect_folder
 from ..ipc import IpcDispatcher
+from ..ipc.events_pipe import EventPublisher
 from ..models.jobs import DownloadJobManager, job_to_dict
 from ..models.storage import default_models_root
 from .application import build_application
@@ -100,6 +101,62 @@ _KNOWLEDGE_CLAIM_PATH = re.compile(r"^/api/knowledge/claims/([^/]+)$")
 _KNOWLEDGE_CLAIM_ACTION_PATH = re.compile(r"^/api/knowledge/claims/([^/]+)/(correct|stale|forget)$")
 _AUTHORING_AUTOMATION_ACTION_PATH = re.compile(r"^/api/automations/([^/]+)/(approve|revoke)$")
 
+# Native events pipe (product pass phase 2): mutating IPC methods publish
+# a domain invalidation on success.  Task/project/claim mutations emit
+# through the sync listener instead, so web-originated changes notify too.
+_IPC_METHOD_EVENTS = {
+    "rooms.add": "home.state.changed",
+    "rooms.rename": "home.state.changed",
+    "rooms.remove": "home.state.changed",
+    "devices.command": "home.state.changed",
+    "people.add": "home.state.changed",
+    "people.update": "home.state.changed",
+    "people.remove": "home.state.changed",
+    "contexts.add": "home.state.changed",
+    "contexts.update": "home.state.changed",
+    "contexts.remove": "home.state.changed",
+    "automations.create": "home.state.changed",
+    "automations.update": "home.state.changed",
+    "automations.enable": "home.state.changed",
+    "automations.approve": "home.state.changed",
+    "automations.revoke": "home.state.changed",
+    "requests.approve": "authority.pending.changed",
+    "requests.deny": "authority.pending.changed",
+    "models.download": "models.changed",
+    "models.install_url": "models.changed",
+    "models.install_local": "models.changed",
+    "models.add_endpoint": "models.changed",
+    "models.add_root": "models.changed",
+    "models.scan": "models.changed",
+    "models.register": "models.changed",
+    "models.load": "models.changed",
+    "models.unload": "models.changed",
+    "models.remove": "models.changed",
+    "models.assign": "models.changed",
+    "computer.window.focus": "computer.windows.changed",
+    "computer.observation.set": "computer.activity.changed",
+    "computer.observation.suppress": "computer.activity.changed",
+    "computer.action.request": "computer.files.changed",
+    "computer.action.confirm": "computer.files.changed",
+    "browser.tab.focus": "browser.tabs.changed",
+    "browser.tab.open": "browser.tabs.changed",
+    "browser.tab.close": "browser.tabs.changed",
+    "browser.tab.close.confirm": "browser.tabs.changed",
+    "browser.tab.close.deny": "browser.tabs.changed",
+    "calendar.sources.add": "calendar.changed",
+    "calendar.sources.remove": "calendar.changed",
+    "calendar.event.attach": "calendar.changed",
+    "calendar.event.propose_task": "calendar.changed",
+    "calendar.event.create": "calendar.changed",
+    "calendar.event.update": "calendar.changed",
+    "calendar.event.delete": "calendar.changed",
+    "calendar.event.confirm": "calendar.changed",
+    "calendar.event.deny": "calendar.changed",
+    "email.maildir.set": "email.changed",
+    "relationships.admit": "relationships.changed",
+    "relationships.reject": "relationships.changed",
+}
+
 # Pinned static content types (mimetypes is platform-dependent).
 _STATIC_CONTENT_TYPES = {
     ".webmanifest": "application/manifest+json",
@@ -176,6 +233,11 @@ class HavenWebServer(ThreadingHTTPServer):
         # lock, callbacks fired outside it).
         self.models = ModelManager(resolved_models_root)
         self.model_jobs = DownloadJobManager(self.models)
+        # Native push invalidation (product pass phase 2): one publisher
+        # feeds the haven-events-<installation-id> pipe.  Every emitter is
+        # best-effort so a slow or absent client can never stall mutations.
+        self.events = EventPublisher()
+        self.model_jobs.subscribe(self._on_model_job_transition)
         # The plugin marketplace is a separate concept from a model: it never
         # runs in-process and never receives live household state (see
         # docs/plugin-boundary.md). Enablement is local, file-backed state,
@@ -245,6 +307,17 @@ class HavenWebServer(ThreadingHTTPServer):
                 revision=revision,
                 payload=payload,
             )
+            # Domain invalidations for the native events pipe: keep-last
+            # notifications, never row payloads.
+            if kind == "task":
+                self._emit_event("tasks.changed")
+                self._emit_event("relationships.changed")
+            elif kind == "project":
+                self._emit_event("projects.changed")
+                self._emit_event("relationships.changed")
+            else:
+                self._emit_event("memory.changed")
+            self._emit_event("search.index.changed")
 
         self._sync_listener = _sync_listener
         self.projects_store = ProjectStore(Path(resolved_data_dir) / "projects.db")
@@ -416,6 +489,21 @@ class HavenWebServer(ThreadingHTTPServer):
         # model pair are available; a no-op (returns False) otherwise, so
         # boot never fails or blocks on missing hardware/models.
         self.director.start_voice()
+
+    def _emit_event(self, event: str, **data) -> None:
+        """Best-effort domain invalidation for native clients (spec 15-17)."""
+        publisher = getattr(self, "events", None)
+        if publisher is None:
+            return
+        try:
+            publisher.publish(event, **data)
+        except Exception:
+            # Events must never break the mutation path that produced them.
+            pass
+
+    def _on_model_job_transition(self, job) -> None:
+        state = getattr(job.state, "value", job.state)
+        self._emit_event("model.job.progress", job_id=job.job_id, state=state)
 
     def _register_sync_appliers(self) -> None:
         from ..domains.projects.models import ProjectRecord
@@ -1719,8 +1807,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 provider_id=params.get("provider_id"), enabled=bool(params.get("enabled", True))
             )
 
-        return IpcDispatcher(
-            {
+        handlers = {
                 "host.capabilities": lambda _params: {
                     **self.host_capabilities(),
                     "ipc_protocol": "haven-ipc-1",
@@ -1885,7 +1972,21 @@ class HavenWebServer(ThreadingHTTPServer):
                 "email.messages.list": _email_messages,
                 "email.maildir.set": _email_maildir_set,
             }
-        )
+
+        def _with_event(event_name: str, handler):
+            def _wrapped(params: dict):
+                # Emit only on success: exceptions propagate to the dispatcher
+                # and must not invalidate a domain that did not change.
+                result = handler(params)
+                self._emit_event(event_name)
+                return result
+
+            return _wrapped
+
+        for _method, _event_name in _IPC_METHOD_EVENTS.items():
+            if _method in handlers:
+                handlers[_method] = _with_event(_event_name, handlers[_method])
+        return IpcDispatcher(handlers)
 
     def _build_director(self) -> HavenApplication:
         # Keep rebuilds on the same explicit mode: normal boot remains a real
@@ -2005,6 +2106,10 @@ class HavenWebServer(ThreadingHTTPServer):
         new.start_voice()
 
     def server_close(self) -> None:
+        try:
+            self.events.stop()
+        except Exception:
+            pass
         self.director.stop_scheduler()
         self.director.stop_voice()
         self.director.close_history()
