@@ -288,6 +288,26 @@ class FilesystemProvider:
         except OSError:
             return None
 
+    def read_bytes(self, resource: ResourceRecord) -> bytes | None:
+        """Binary counterpart of `read_text` for format adapters (DOCX/PDF).
+
+        Same canonical-root re-check at read time; the knowledge pipeline
+        never opens the locator itself.
+        """
+
+        if resource.locator is None:
+            return None
+        try:
+            resolved = self._require_within_roots(resource.locator)
+        except PathOutsideAllowedRoots:
+            return None
+        if not resolved.is_file():
+            return None
+        try:
+            return resolved.read_bytes()
+        except OSError:
+            return None
+
     def _walk(self, root: Path):
         yield root
         try:

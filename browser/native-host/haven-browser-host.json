@@ -1,0 +1,9 @@
+{
+  "name": "haven.browser",
+  "description": "HAVEN browser context connector (experimental)",
+  "path": "EDIT-ME-PATH-TO\\haven-browser-host.py",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://EDIT-ME-EXTENSION-ID/"
+  ]
+}

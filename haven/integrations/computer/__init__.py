@@ -13,6 +13,12 @@ from .filesystem import (
     PathOutsideAllowedRoots,
     PROVIDER_ID,
 )
+from .windows import (
+    PROVIDER_ID as WINDOWS_PROVIDER_ID,
+    WindowObservationProvider,
+    WindowSnapshot,
+    window_resource_id,
+)
 
 __all__ = [
     "FILESYSTEM_ACTION_RISK",
@@ -20,4 +26,8 @@ __all__ = [
     "FilesystemProviderConfig",
     "PROVIDER_ID",
     "PathOutsideAllowedRoots",
+    "WINDOWS_PROVIDER_ID",
+    "WindowObservationProvider",
+    "WindowSnapshot",
+    "window_resource_id",
 ]

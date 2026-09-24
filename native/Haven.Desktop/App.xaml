@@ -11,11 +11,12 @@
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Dark">
                     <Color x:Key="HavenCanvasColor">#0B1220</Color>
-                    <Color x:Key="HavenSurface1Color">#111827</Color>
-                    <Color x:Key="HavenSurface2Color">#182235</Color>
+                    <Color x:Key="HavenSurface1Color">#111A2C</Color>
+                    <Color x:Key="HavenSurface2Color">#172238</Color>
                     <Color x:Key="HavenTextColor">#F3F6FC</Color>
-                    <Color x:Key="HavenMutedTextColor">#93A1B8</Color>
-                    <Color x:Key="HavenStrokeColor">#2A3850</Color>
+                    <Color x:Key="HavenMutedTextColor">#8E9BB4</Color>
+                    <Color x:Key="HavenStrokeColor">#27354F</Color>
+                    <Color x:Key="HavenHoverColor">#22FFFFFF</Color>
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Light">
                     <Color x:Key="HavenCanvasColor">#F5F7FB</Color>
@@ -24,8 +25,25 @@
                     <Color x:Key="HavenTextColor">#172033</Color>
                     <Color x:Key="HavenMutedTextColor">#5C6678</Color>
                     <Color x:Key="HavenStrokeColor">#D8DFEA</Color>
+                    <Color x:Key="HavenHoverColor">#14000000</Color>
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
+
+            <!-- Canvas: deep navy with a faint teal/violet horizon glow at the
+                 bottom edge, per the approved shell mockups (not flat). -->
+            <LinearGradientBrush x:Key="HavenCanvasGradient" StartPoint="0,0" EndPoint="0.15,1">
+                <GradientStop Color="#080D18" Offset="0" />
+                <GradientStop Color="#0B1220" Offset="0.55" />
+                <GradientStop Color="#0E1A2E" Offset="0.82" />
+                <GradientStop Color="#14303A" Offset="0.95" />
+                <GradientStop Color="#1B2E4A" Offset="1" />
+            </LinearGradientBrush>
+            <LinearGradientBrush x:Key="HavenSplashGradient" StartPoint="0,0" EndPoint="0,1">
+                <GradientStop Color="#080D18" Offset="0" />
+                <GradientStop Color="#0B1220" Offset="0.6" />
+                <GradientStop Color="#152A44" Offset="0.9" />
+                <GradientStop Color="#4A2E1B" Offset="1" />
+            </LinearGradientBrush>
 
             <SolidColorBrush x:Key="HavenCanvasBrush" Color="{ThemeResource HavenCanvasColor}" />
             <SolidColorBrush x:Key="HavenSurface1Brush" Color="{ThemeResource HavenSurface1Color}" />
@@ -33,14 +51,23 @@
             <SolidColorBrush x:Key="HavenTextBrush" Color="{ThemeResource HavenTextColor}" />
             <SolidColorBrush x:Key="HavenMutedTextBrush" Color="{ThemeResource HavenMutedTextColor}" />
             <SolidColorBrush x:Key="HavenStrokeBrush" Color="{ThemeResource HavenStrokeColor}" />
+            <SolidColorBrush x:Key="HavenHoverBrush" Color="{ThemeResource HavenHoverColor}" />
 
             <!-- Accent and semantic tokens are identical in both themes (spec section 04). -->
             <SolidColorBrush x:Key="HavenAccentBrush" Color="#3B82F6" />
-            <SolidColorBrush x:Key="HavenVioletBrush" Color="#7C3AED" />
+            <SolidColorBrush x:Key="HavenVioletBrush" Color="#8B5CF6" />
             <SolidColorBrush x:Key="HavenOrangeBrush" Color="#FF8A3D" />
             <SolidColorBrush x:Key="HavenSuccessBrush" Color="#22C55E" />
             <SolidColorBrush x:Key="HavenWarningBrush" Color="#F59E0B" />
             <SolidColorBrush x:Key="HavenDangerBrush" Color="#EF4444" />
+
+            <!-- ~20% accent tints for chips and selected states. -->
+            <SolidColorBrush x:Key="HavenAccentTintBrush" Color="#333B82F6" />
+            <SolidColorBrush x:Key="HavenVioletTintBrush" Color="#338B5CF6" />
+            <SolidColorBrush x:Key="HavenOrangeTintBrush" Color="#33FF8A3D" />
+            <SolidColorBrush x:Key="HavenSuccessTintBrush" Color="#3322C55E" />
+            <SolidColorBrush x:Key="HavenWarningTintBrush" Color="#33F59E0B" />
+            <SolidColorBrush x:Key="HavenDangerTintBrush" Color="#33EF4444" />
 
             <!-- Typography scale (spec section 05). Sentence case in copy. -->
             <Style x:Key="HavenDisplayTextStyle" TargetType="TextBlock">
@@ -72,35 +99,73 @@
                 <Setter Property="Foreground" Value="{ThemeResource HavenTextBrush}" />
             </Style>
 
-            <!-- Cards (spec section 06/13): raised surface, 8px radius. -->
+            <!-- Cards (spec 06/13): raised rounded surface, thin stroke. -->
             <Style x:Key="HavenCardStyle" TargetType="Border">
                 <Setter Property="Background" Value="{ThemeResource HavenSurface2Brush}" />
                 <Setter Property="BorderBrush" Value="{ThemeResource HavenStrokeBrush}" />
                 <Setter Property="BorderThickness" Value="1" />
-                <Setter Property="CornerRadius" Value="8" />
-                <Setter Property="Padding" Value="12" />
+                <Setter Property="CornerRadius" Value="12" />
+                <Setter Property="Padding" Value="14" />
             </Style>
 
-            <!-- Button hierarchy (spec section 12). -->
+            <!-- Button hierarchy (spec 12). -->
+            <Style x:Key="HavenButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="{ThemeResource HavenSurface2Brush}" />
+                <Setter Property="Foreground" Value="{ThemeResource HavenTextBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource HavenStrokeBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="MinHeight" Value="32" />
+                <Setter Property="Padding" Value="12,5" />
+            </Style>
             <Style x:Key="HavenPrimaryButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="{ThemeResource HavenAccentBrush}" />
                 <Setter Property="Foreground" Value="#FFFFFF" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="MinHeight" Value="32" />
+                <Setter Property="Padding" Value="14,5" />
+                <Setter Property="FontWeight" Value="SemiBold" />
             </Style>
             <Style x:Key="HavenSecondaryButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderBrush" Value="{ThemeResource HavenStrokeBrush}" />
                 <Setter Property="BorderThickness" Value="1" />
                 <Setter Property="Foreground" Value="{ThemeResource HavenTextBrush}" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="MinHeight" Value="32" />
+                <Setter Property="Padding" Value="12,5" />
             </Style>
             <Style x:Key="HavenQuietButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderBrush" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="Foreground" Value="{ThemeResource HavenAccentBrush}" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="MinHeight" Value="30" />
+                <Setter Property="Padding" Value="10,4" />
             </Style>
             <Style x:Key="HavenDangerButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderBrush" Value="{ThemeResource HavenDangerBrush}" />
                 <Setter Property="BorderThickness" Value="1" />
                 <Setter Property="Foreground" Value="{ThemeResource HavenDangerBrush}" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="MinHeight" Value="32" />
+                <Setter Property="Padding" Value="12,5" />
+            </Style>
+
+            <!-- Circular icon button (mic affordance, send). -->
+            <Style x:Key="HavenCircleButtonStyle" TargetType="Button">
+                <Setter Property="BorderBrush" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Width" Value="36" />
+                <Setter Property="Height" Value="36" />
+                <Setter Property="CornerRadius" Value="18" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{ThemeResource HavenMutedTextBrush}" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="HorizontalAlignment" Value="Center" />
+                <Setter Property="VerticalAlignment" Value="Center" />
             </Style>
 
             <!-- In-page tab row (Home domains, Models sources). -->
@@ -110,6 +175,39 @@
                 <Setter Property="BorderThickness" Value="0,0,0,2" />
                 <Setter Property="BorderBrush" Value="Transparent" />
                 <Setter Property="Padding" Value="10,6" />
+                <Setter Property="MinHeight" Value="34" />
+            </Style>
+
+            <!-- Rail navigation item (spec 08): 36-40px rows, hover surface,
+                 selected = filled blue rounded pill. -->
+            <Style x:Key="HavenNavItemStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{ThemeResource HavenMutedTextBrush}" />
+                <Setter Property="BorderBrush" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="HorizontalContentAlignment" Value="Left" />
+                <Setter Property="HorizontalAlignment" Value="Stretch" />
+                <Setter Property="Height" Value="38" />
+                <Setter Property="Margin" Value="10,1" />
+                <Setter Property="Padding" Value="12,0" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="FontSize" Value="13" />
+            </Style>
+
+            <!-- Dense list rows with hover and selected states (spec 13/14). -->
+            <Style x:Key="HavenListItemStyle" TargetType="ListViewItem">
+                <Setter Property="MinHeight" Value="40" />
+                <Setter Property="Margin" Value="2,1" />
+                <Setter Property="Padding" Value="10,4" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="Background" Value="Transparent" />
+            </Style>
+
+            <!-- Search/result list rows. -->
+            <Style x:Key="HavenRowListStyle" TargetType="ListView">
+                <Setter Property="SelectionMode" Value="None" />
+                <Setter Property="ItemContainerStyle" Value="{StaticResource HavenListItemStyle}" />
+                <Setter Property="Background" Value="Transparent" />
             </Style>
         </ResourceDictionary>
     </Application.Resources>

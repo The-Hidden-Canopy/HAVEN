@@ -13,7 +13,12 @@ from haven.resources.store import ResourceStore
 from .admission import AdmissionResult, AdmissionStatus, ClaimAdmissionService
 from .audit import KnowledgeAuditAction, KnowledgeAuditEvent
 from .claims import is_stale
-from .extraction import ClaimExtractor, ContentReader, DocumentStatementExtractor, extract_text_content
+from .extraction import (
+    ClaimExtractor,
+    ContentReader,
+    DocumentStatementExtractor,
+    extract_document_content,
+)
 from .store import ClaimStore
 
 
@@ -25,6 +30,21 @@ class KnowledgeIngestResult:
     duplicates: int = 0
     suppressed: int = 0
     rejected: int = 0
+    # Explicit capability state for format adapters (NOMAD honesty): an
+    # absent optional dependency or unreadable document is reported here,
+    # never silently skipped.
+    unavailable: tuple[str, ...] = ()
+
+
+def _no_bytes(resource: ResourceRecord) -> bytes | None:
+    """Default binary reader: binary formats simply report unavailable.
+
+    Providers that support binary reads (the filesystem provider) supply
+    their own boundary-checked reader; callers that only have a text reader
+    degrade honestly instead of guessing an encoding.
+    """
+
+    return None
 
 
 class KnowledgeService:
@@ -44,6 +64,15 @@ class KnowledgeService:
         self._admission = admission or ClaimAdmissionService(claims)
         self._extractors = tuple(extractors or (DocumentStatementExtractor(),))
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._mutation_listener = None
+
+    def set_mutation_listener(self, listener) -> None:
+        self._mutation_listener = listener
+
+    def _emit_claim(self, claim) -> None:
+        listener = self._mutation_listener
+        if listener is not None and claim is not None:
+            listener("claim", claim)
 
     @property
     def claims(self) -> ClaimStore:
@@ -54,7 +83,7 @@ class KnowledgeService:
         return self._resources
 
     def ingest_resource(
-        self, resource: ResourceRecord, *, reader: ContentReader
+        self, resource: ResourceRecord, *, reader: ContentReader, bytes_reader=None
     ) -> KnowledgeIngestResult:
         """Extract only a new/changed resource, before its new row is saved."""
 
@@ -67,8 +96,18 @@ class KnowledgeService:
             # contents. The new extraction below can admit fresh claims.
             self._claims.mark_stale_by_source((resource.resource_id,))
 
-        content = extract_text_content(resource, reader=reader, now=self._clock())
-        if content is None:
+        document = extract_document_content(
+            resource, reader=reader, bytes_reader=bytes_reader or _no_bytes, now=self._clock()
+        )
+        if document is None:
+            return KnowledgeIngestResult(resource.resource_id)
+        if not document.extraction.available:
+            return KnowledgeIngestResult(
+                resource.resource_id,
+                unavailable=(f"{document.extraction.format}: {document.extraction.detail}",),
+            )
+        content = document.content
+        if content is None or not content.text.strip():
             return KnowledgeIngestResult(resource.resource_id)
 
         results: list[AdmissionResult] = []
@@ -142,7 +181,7 @@ class KnowledgeService:
             return AdmissionResult(AdmissionStatus.REJECTED, reason="unknown claim")
         actor = self._require_actor(actor)
         now = self._clock()
-        return self._admission.correct(
+        result = self._admission.correct(
             claim,
             proposition=proposition,
             actor=actor,
@@ -159,13 +198,16 @@ class KnowledgeService:
                 ),
             ),
         )
+        if result.claim is not None:
+            self._emit_claim(result.claim)
+        return result
 
     def mark_claim_stale(self, claim_id: str, *, actor: str) -> bool:
         actor = self._require_actor(actor)
         claim = self._claims.get(claim_id)
         if claim is None:
             return False
-        return self._claims.mark_stale_with_audit(
+        changed = self._claims.mark_stale_with_audit(
             claim_id,
             self._audit_event(
                 scope_id=claim.scope_id,
@@ -175,6 +217,9 @@ class KnowledgeService:
                 occurred_at=self._clock(),
             ),
         )
+        if changed:
+            self._emit_claim(self._claims.get(claim_id))
+        return changed
 
     def forget_claim(self, claim, *, forgotten_by: str) -> None:
         forgotten_by = self._require_actor(forgotten_by)
@@ -191,6 +236,7 @@ class KnowledgeService:
                 occurred_at=now,
             ),
         )
+        self._emit_claim(self._claims.get(claim.claim_id))
 
     @staticmethod
     def _require_actor(actor: str) -> str:
