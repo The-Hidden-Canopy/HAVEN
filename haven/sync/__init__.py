@@ -9,6 +9,7 @@ conflict state that never resolves silently.
 from .contracts import SyncBatch, SyncProvider, SyncReceipt, SyncRecord
 from .engine import LocalSyncEngine
 from .events import SYNCABLE_KINDS, SyncEvent, is_syncable
+from .store import SyncEventStore
 from .transport import FolderSyncTransport
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "SyncEvent",
     "SyncProvider",
     "SyncReceipt",
+    "SyncEventStore",
     "SyncRecord",
     "is_syncable",
 ]

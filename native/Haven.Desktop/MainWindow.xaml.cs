@@ -30,6 +30,7 @@ public sealed partial class MainWindow : Window
         _modelsPollTimer.Tick += OnModelsPollTick;
         RootGrid().ActualThemeChanged += (_, _) => UpdateLogo();
         RootGrid().Loaded += OnLoaded;
+        RootGrid().SizeChanged += OnRootSizeChanged;
         SelectHomeTab("rooms");
         SelectModelsTab("local");
         SelectNavigation("today");
@@ -49,6 +50,72 @@ public sealed partial class MainWindow : Window
     }
 
     private Grid RootGrid() => (Grid)Content;
+
+    // -- tablet adaptation (spec 06/07/21) -------------------------------------
+    // Below ~900px the rail collapses to icons, touch targets grow, the
+    // content padding tightens, and right-pane inspectors stack below their
+    // lists instead of sitting beside them.
+
+    private const double NarrowWidth = 900;
+    private bool _narrow;
+
+    private void OnRootSizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        ApplyAdaptiveLayout(args.NewSize.Width);
+    }
+
+    private void ApplyAdaptiveLayout(double width)
+    {
+        var narrow = width < NarrowWidth;
+        if (narrow == _narrow && width > 0)
+        {
+            return;
+        }
+        _narrow = narrow;
+        ShellRoot().ColumnDefinitions[0].Width = new Microsoft.UI.Xaml.GridLength(narrow ? 72 : 228);
+
+        foreach (var button in NavItems.Children.OfType<Button>())
+        {
+            if (button.Content is StackPanel panel)
+            {
+                foreach (var text in panel.Children.OfType<TextBlock>())
+                {
+                    text.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+                }
+            }
+            button.Height = narrow ? 44 : 38;
+        }
+        ReopenSetupButton.Height = narrow ? 44 : double.NaN;
+        ProfileText.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+
+        ContentScroll.Padding = narrow
+            ? new Microsoft.UI.Xaml.Thickness(16, 12, 16, 20)
+            : new Microsoft.UI.Xaml.Thickness(30, 16, 30, 24);
+
+        // Memory: wide = list + right inspector; narrow = stacked single column.
+        if (narrow)
+        {
+            MemorySplit.ColumnDefinitions.Clear();
+            MemorySplit.RowDefinitions.Clear();
+            MemorySplit.RowDefinitions.Add(new RowDefinition { Height = Microsoft.UI.Xaml.GridLength.Auto });
+            MemorySplit.RowDefinitions.Add(new RowDefinition { Height = Microsoft.UI.Xaml.GridLength.Auto });
+            MemoryClaims.MaxHeight = 320;
+            Grid.SetColumn(MemoryInspector, 0);
+            Grid.SetRow(MemoryInspector, 1);
+        }
+        else
+        {
+            MemorySplit.RowDefinitions.Clear();
+            MemorySplit.ColumnDefinitions.Clear();
+            MemorySplit.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
+            MemorySplit.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1.2, Microsoft.UI.Xaml.GridUnitType.Star) });
+            MemoryClaims.MaxHeight = 560;
+            Grid.SetRow(MemoryInspector, 0);
+            Grid.SetColumn(MemoryInspector, 1);
+        }
+    }
+
+    private Grid ShellRoot() => RootGrid();
 
     private void UpdateLogo()
     {
