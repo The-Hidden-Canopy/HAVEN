@@ -7,54 +7,170 @@
     xmlns:setup="using:Haven.Desktop.Setup"
     mc:Ignorable="d"
     Title="HAVEN">
-    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    <Grid Background="{ThemeResource HavenCanvasBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Grid Padding="24,18" ColumnSpacing="18">
+        <Grid Padding="24,14" ColumnSpacing="18" Background="{ThemeResource HavenSurface1Brush}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <Image x:Name="LogoImage" Width="144" Height="48" Stretch="Uniform" />
-            <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="Local assistant for your computer, information, and connected world" Opacity="0.72" />
+            <Image x:Name="LogoImage" Width="132" Height="44" Stretch="Uniform" />
+            <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="Local assistant for your computer, information, and connected world" Style="{StaticResource HavenMetadataTextStyle}" />
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                <TextBlock x:Name="ConnectionText" VerticalAlignment="Center" Text="Connecting…" />
+                <TextBlock x:Name="ConnectionText" VerticalAlignment="Center" Style="{StaticResource HavenMetadataTextStyle}" Text="Connecting…" />
                 <Button x:Name="ReopenSetupButton" Content="Setup" Click="OnReopenSetupClicked" Visibility="Collapsed" />
             </StackPanel>
         </Grid>
 
-        <NavigationView Grid.Row="1" IsBackButtonVisible="Collapsed" PaneDisplayMode="LeftCompact" SelectionChanged="OnNavigationChanged">
+        <NavigationView Grid.Row="1" x:Name="NavView" IsBackButtonVisible="Collapsed"
+                        PaneDisplayMode="Left" OpenPaneLength="200"
+                        Background="{ThemeResource HavenCanvasBrush}"
+                        SelectionChanged="OnNavigationChanged">
             <NavigationView.MenuItems>
-                <NavigationViewItem Content="Today" Tag="today" />
-                <NavigationViewItem Content="Search" Tag="search" />
-                <NavigationViewItem Content="Memory" Tag="memory" />
-                <NavigationViewItem Content="Rooms" Tag="rooms" />
-                <NavigationViewItem Content="People" Tag="people" />
-                <NavigationViewItem Content="Automations" Tag="automations" />
-                <NavigationViewItem Content="Home" Tag="home" />
-                <NavigationViewItem Content="Models" Tag="models" />
-                <NavigationViewItem Content="Settings" Tag="settings" />
+                <NavigationViewItem Content="Today" Tag="today">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Calendar" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Search" Tag="search">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Find" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Projects" Tag="projects">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Folder" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Tasks" Tag="tasks">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="List" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="People" Tag="people">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="People" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Memory" Tag="memory">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Memo" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Computer" Tag="computer">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE977;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Communications" Tag="communications">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Mail" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Home" Tag="home">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Home" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Models" Tag="models">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE753;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Settings" Tag="settings">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Setting" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
             </NavigationView.MenuItems>
 
             <ScrollViewer Padding="32,24">
-                <StackPanel MaxWidth="980" Spacing="20">
-                    <TextBlock x:Name="PageTitle" FontSize="32" FontWeight="SemiBold" Text="HAVEN" />
-                    <TextBlock x:Name="PageDescription" FontSize="16" Opacity="0.72" Text="One continuous assistant across your computer and connected world." TextWrapping="Wrap" />
+                <StackPanel MaxWidth="1100" Spacing="16">
+                    <TextBlock x:Name="PageTitle" Style="{StaticResource HavenPageTitleTextStyle}" Text="Today" />
+                    <TextBlock x:Name="PageDescription" Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap" />
+
+                    <!-- Today (spec 24/25): greeting + quick actions; the real dashboard lands with milestone G. -->
+                    <StackPanel x:Name="TodayPanel" Spacing="16">
+                        <StackPanel Spacing="2">
+                            <TextBlock x:Name="TodayGreeting" Style="{StaticResource HavenDisplayTextStyle}" Text="Welcome" />
+                            <TextBlock x:Name="TodayDate" Style="{StaticResource HavenMetadataTextStyle}" />
+                        </StackPanel>
+                        <Border x:Name="TodayPendingBanner" Style="{StaticResource HavenCardStyle}" Visibility="Collapsed">
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <TextBlock x:Name="TodayPendingText" VerticalAlignment="Center" Style="{StaticResource HavenBodyTextStyle}" />
+                                <Button x:Name="TodayPendingButton" Content="Review" Click="OnTodayPendingClicked" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Quick actions" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="New task" Click="OnQuickActionTaskClicked" />
+                            <Button Content="New project" Click="OnQuickActionProjectClicked" />
+                            <Button Content="Add note" Click="OnQuickActionNoteClicked" />
+                            <Button Content="Find file" Click="OnQuickActionFindClicked" />
+                            <Button Content="Open app" Click="OnQuickActionOpenClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="TodayStatus" Style="{StaticResource HavenMetadataTextStyle}" />
+                    </StackPanel>
 
                     <StackPanel x:Name="SearchPanel" Spacing="12" Visibility="Collapsed">
-                        <TextBox x:Name="SearchBox" PlaceholderText="Ask HAVEN or find anything…" KeyDown="OnSearchKeyDown" />
+                        <TextBox x:Name="SearchBox" PlaceholderText="Files, people, claims, anything HAVEN can see…" KeyDown="OnSearchKeyDown" />
                         <Button Content="Find" Click="OnSearchClicked" HorizontalAlignment="Left" />
                         <ListView x:Name="SearchResults" SelectionMode="None" />
                     </StackPanel>
 
+                    <!-- Placeholder lenses (spec 18): what belongs here + the next valid action. -->
+                    <StackPanel x:Name="ProjectsPanel" Spacing="12" Visibility="Collapsed">
+                        <Border Style="{StaticResource HavenCardStyle}">
+                            <StackPanel Spacing="8">
+                                <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Projects are on the roadmap" />
+                                <TextBlock Style="{StaticResource HavenBodyTextStyle}" TextWrapping="Wrap"
+                                           Text="Projects will be bodies of work — files, tasks, people and notes sharing one goal — and arrive with the projects milestone. Until then, HAVEN keeps your searchable files and memories; ask about a goal in the composer and HAVEN will answer from what it can see." />
+                                <Button Content="Ask HAVEN" Click="OnLensAskClicked" HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel x:Name="TasksPanel" Spacing="12" Visibility="Collapsed">
+                        <Border Style="{StaticResource HavenCardStyle}">
+                            <StackPanel Spacing="8">
+                                <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Tasks are on the roadmap" />
+                                <TextBlock Style="{StaticResource HavenBodyTextStyle}" TextWrapping="Wrap"
+                                           Text="Tasks — commitments with a next action, due date and project — arrive with the projects milestone. Until then, use the composer to ask HAVEN to find commitments you have written down." />
+                                <Button Content="Ask HAVEN" Click="OnLensAskClicked" HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel x:Name="ComputerPanel" Spacing="12" Visibility="Collapsed">
+                        <Border Style="{StaticResource HavenCardStyle}">
+                            <StackPanel Spacing="8">
+                                <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Computer awareness is on the roadmap" />
+                                <TextBlock Style="{StaticResource HavenBodyTextStyle}" TextWrapping="Wrap"
+                                           Text="This lens will show your authorized files, applications, windows and recent activity. Computer access can already be enabled during setup; the file and application views arrive with the computer milestone." />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel x:Name="CommunicationsPanel" Spacing="12" Visibility="Collapsed">
+                        <Border Style="{StaticResource HavenCardStyle}">
+                            <StackPanel Spacing="8">
+                                <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Communications are on the roadmap" />
+                                <TextBlock Style="{StaticResource HavenBodyTextStyle}" TextWrapping="Wrap"
+                                           Text="Email, messages and threads with their relationship context arrive with the communications milestone. Nothing is connected yet, and HAVEN reads nothing until you add a provider." />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
                     <StackPanel x:Name="MemoryPanel" Spacing="16" Visibility="Collapsed">
                         <StackPanel Spacing="4">
-                            <TextBlock FontSize="20" Text="What HAVEN knows" />
-                            <TextBlock Text="Inspect what was remembered, where it came from, and how certain it is." TextWrapping="Wrap" Opacity="0.72" />
+                            <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="What HAVEN knows" />
+                            <TextBlock Text="Inspect what was remembered, where it came from, and how certain it is." TextWrapping="Wrap" Style="{StaticResource HavenMetadataTextStyle}" />
                         </StackPanel>
                         <Grid ColumnSpacing="18">
                             <Grid.ColumnDefinitions>
@@ -62,7 +178,7 @@
                                 <ColumnDefinition Width="1.2*" />
                             </Grid.ColumnDefinitions>
                             <ListView x:Name="MemoryClaims" SelectionChanged="OnMemorySelectionChanged" MaxHeight="560" />
-                            <Border Grid.Column="1" Padding="18" CornerRadius="10" BorderThickness="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                            <Border Grid.Column="1" Style="{StaticResource HavenCardStyle}" Padding="18">
                                 <StackPanel Spacing="12">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="470">
                                         <TextBlock x:Name="MemoryDetailText" Text="Select a memory to inspect its evidence." TextWrapping="Wrap" />
@@ -70,43 +186,11 @@
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <Button x:Name="MemoryCorrectButton" Content="Correct" Click="OnMemoryCorrectClicked" IsEnabled="False" />
                                         <Button x:Name="MemoryStaleButton" Content="Mark stale" Click="OnMemoryStaleClicked" IsEnabled="False" />
-                                        <Button x:Name="MemoryForgetButton" Content="Forget" Click="OnMemoryForgetClicked" IsEnabled="False" />
+                                        <Button x:Name="MemoryForgetButton" Content="Forget" Click="OnMemoryForgetClicked" IsEnabled="False" Style="{StaticResource HavenDangerButtonStyle}" />
                                     </StackPanel>
-                                    <TextBlock x:Name="MemoryActionStatus" TextWrapping="Wrap" Opacity="0.72" />
+                                    <TextBlock x:Name="MemoryActionStatus" TextWrapping="Wrap" Style="{StaticResource HavenMetadataTextStyle}" />
                                 </StackPanel>
                             </Border>
-                        </Grid>
-                    </StackPanel>
-
-                    <StackPanel x:Name="RoomsPanel" Spacing="12" Visibility="Collapsed">
-                        <Grid ColumnSpacing="12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Spacing="4">
-                                <TextBlock FontSize="20" Text="Rooms &amp; devices" />
-                                <TextBlock Text="Your home, its devices, and what HAVEN last observed about them." TextWrapping="Wrap" Opacity="0.72" />
-                            </StackPanel>
-                            <Button Grid.Column="1" Content="Refresh" Click="OnRoomsRefreshClicked" VerticalAlignment="Center" />
-                        </Grid>
-                        <TextBlock x:Name="RoomsErrorText" TextWrapping="Wrap"
-                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
-                        <Grid ColumnSpacing="18">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="0.8*" />
-                                <ColumnDefinition Width="1.4*" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Spacing="10">
-                                <ListView x:Name="RoomsList" SelectionChanged="OnRoomSelectionChanged" MaxHeight="380" />
-                                <StackPanel Spacing="6">
-                                    <TextBlock Text="Pending confirmations" FontWeight="SemiBold" />
-                                    <StackPanel x:Name="PendingList" Spacing="6" />
-                                </StackPanel>
-                            </StackPanel>
-                            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" MaxHeight="560">
-                                <StackPanel x:Name="RoomDetail" Spacing="10" />
-                            </ScrollViewer>
                         </Grid>
                     </StackPanel>
 
@@ -115,42 +199,91 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="4">
-                                <TextBlock FontSize="20" Text="People &amp; contexts" />
-                                <TextBlock Text="Who lives here, how HAVEN senses their presence, and the contexts it watches." TextWrapping="Wrap" Opacity="0.72" />
+                                <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="People" />
+                                <TextBlock Text="Who lives here and how HAVEN senses their presence." TextWrapping="Wrap" Style="{StaticResource HavenMetadataTextStyle}" />
                             </StackPanel>
                             <Button Grid.Column="1" Content="Add person" Click="OnAddPersonClicked" VerticalAlignment="Center" />
-                            <Button Grid.Column="2" Content="Add context" Click="OnAddContextClicked" VerticalAlignment="Center" />
                         </Grid>
-                        <TextBlock x:Name="PeopleErrorText" TextWrapping="Wrap"
-                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
-                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="People" />
+                        <TextBlock x:Name="PeopleErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
+                        <TextBlock x:Name="PeopleStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
                         <StackPanel x:Name="PeopleList" Spacing="8" />
-                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Contexts" />
-                        <StackPanel x:Name="ContextsList" Spacing="8" />
                     </StackPanel>
 
-                    <StackPanel x:Name="AutomationsPanel" Spacing="12" Visibility="Collapsed">
+                    <!-- Home (spec 36): rooms, devices, automations, contexts under top tabs. -->
+                    <StackPanel x:Name="HomePanel" Spacing="12" Visibility="Collapsed">
                         <Grid ColumnSpacing="12">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="4">
-                                <TextBlock FontSize="20" Text="Automations" />
-                                <TextBlock Text="Rules HAVEN can run on a schedule. Proposals need an owner's approval before the scheduler acts." TextWrapping="Wrap" Opacity="0.72" />
+                                <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Home" />
+                                <TextBlock Text="Rooms, devices, automations and contexts. Rooms are yours even without a smart-home provider." TextWrapping="Wrap" Style="{StaticResource HavenMetadataTextStyle}" />
                             </StackPanel>
-                            <Button Grid.Column="1" Content="Refresh" Click="OnAutomationsRefreshClicked" VerticalAlignment="Center" />
-                            <Button Grid.Column="2" Content="Propose automation" Click="OnProposeAutomationClicked" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <TextBlock x:Name="HomeUpdatedText" VerticalAlignment="Center" Style="{StaticResource HavenMetadataTextStyle}" />
+                                <Button Content="Refresh" Click="OnRoomsRefreshClicked" VerticalAlignment="Center" />
+                            </StackPanel>
                         </Grid>
-                        <TextBlock x:Name="AutomationsErrorText" TextWrapping="Wrap"
-                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
-                        <StackPanel x:Name="AutomationsList" Spacing="8" />
+                        <TextBlock x:Name="RoomsErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
+                        <TextBlock x:Name="HomeStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
+                        <StackPanel x:Name="HomeTabs" Orientation="Horizontal" Spacing="4">
+                            <Button Content="Rooms" Tag="rooms" Click="OnHomeTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                            <Button Content="Devices" Tag="devices" Click="OnHomeTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                            <Button Content="Automations" Tag="automations" Click="OnHomeTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                            <Button Content="Contexts" Tag="contexts" Click="OnHomeTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                        </StackPanel>
+
+                        <StackPanel x:Name="HomeTabRooms" Spacing="12">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="AddRoomButton" Content="Add room" IsEnabled="False"
+                                        ToolTipService.ToolTip="Room authoring is not available over the native bridge yet." />
+                                <TextBlock x:Name="AddRoomNote" VerticalAlignment="Center" Style="{StaticResource HavenMetadataTextStyle}"
+                                           Text="Room authoring arrives in a future home update; rooms you declare elsewhere appear here." />
+                            </StackPanel>
+                            <ListView x:Name="RoomCards" SelectionChanged="OnRoomSelectionChanged" MaxHeight="300">
+                                <ListView.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <ItemsWrapGrid Orientation="Horizontal" MaximumRowsOrColumns="2" />
+                                    </ItemsPanelTemplate>
+                                </ListView.ItemsPanel>
+                            </ListView>
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="Pending confirmations" Style="{StaticResource HavenSectionTextStyle}" />
+                                <StackPanel x:Name="PendingList" Spacing="6" />
+                            </StackPanel>
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="420">
+                                <StackPanel x:Name="RoomDetail" Spacing="10" />
+                            </ScrollViewer>
+                        </StackPanel>
+
+                        <StackPanel x:Name="HomeTabDevices" Spacing="10" Visibility="Collapsed">
+                            <StackPanel x:Name="HomeDevicesList" Spacing="8" />
+                        </StackPanel>
+
+                        <StackPanel x:Name="HomeTabAutomations" Spacing="12" Visibility="Collapsed">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button Content="Refresh" Click="OnAutomationsRefreshClicked" />
+                                <Button Content="Propose automation" Click="OnProposeAutomationClicked" Style="{StaticResource HavenPrimaryButtonStyle}" />
+                            </StackPanel>
+                            <TextBlock x:Name="AutomationsErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
+                            <TextBlock x:Name="AutomationsStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
+                            <StackPanel x:Name="AutomationsList" Spacing="8" />
+                        </StackPanel>
+
+                        <StackPanel x:Name="HomeTabContexts" Spacing="12" Visibility="Collapsed">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBlock VerticalAlignment="Center" Style="{StaticResource HavenMetadataTextStyle}"
+                                           Text="Contexts map a household entity's “on” to a meaning HAVEN can reason about." />
+                                <Button Content="Add context" Click="OnAddContextClicked" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <StackPanel x:Name="ContextsList" Spacing="8" />
+                        </StackPanel>
                     </StackPanel>
 
+                    <!-- Models (spec 38): Local / Downloaded / External / Downloads. -->
                     <StackPanel x:Name="ModelsPanel" Spacing="12" Visibility="Collapsed">
                         <Grid ColumnSpacing="12">
                             <Grid.ColumnDefinitions>
@@ -158,8 +291,8 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="4">
-                                <TextBlock FontSize="20" Text="Models" />
-                                <TextBlock Text="Local and remote intelligence: download, verify, load, and assign models to roles." TextWrapping="Wrap" Opacity="0.72" />
+                                <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Models" />
+                                <TextBlock Text="Local, downloaded and external intelligence. HAVEN runs on any mix of them." TextWrapping="Wrap" Style="{StaticResource HavenMetadataTextStyle}" />
                             </StackPanel>
                             <Button Grid.Column="1" Content="Refresh" Click="OnModelsRefreshClicked" VerticalAlignment="Center" />
                         </Grid>
@@ -170,29 +303,125 @@
                             <Button Content="Add root…" Click="OnAddModelRootClicked" />
                             <Button Content="Scan roots" Click="OnScanModelRootsClicked" />
                         </StackPanel>
-                        <TextBlock x:Name="ModelsErrorText" TextWrapping="Wrap"
-                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
-                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Installed models" />
-                        <StackPanel x:Name="ModelsList" Spacing="8" />
-                        <TextBlock x:Name="DiscoveredHeading" FontSize="16" FontWeight="SemiBold" Text="Discovered candidates" Visibility="Collapsed" />
-                        <StackPanel x:Name="DiscoveredList" Spacing="8" />
-                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Role assignments" />
+                        <TextBlock x:Name="ModelsErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
+                        <StackPanel x:Name="ModelsTabs" Orientation="Horizontal" Spacing="4">
+                            <Button Content="Local" Tag="local" Click="OnModelsTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                            <Button Content="Downloaded" Tag="downloaded" Click="OnModelsTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                            <Button Content="External" Tag="endpoint" Click="OnModelsTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                            <Button Content="Downloads" Tag="downloads" Click="OnModelsTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                        </StackPanel>
+
+                        <StackPanel x:Name="ModelsTabLocal" Spacing="8">
+                            <StackPanel x:Name="ModelsLocalList" Spacing="8" />
+                            <TextBlock x:Name="DiscoveredHeading" Text="Discovered candidates" Style="{StaticResource HavenSectionTextStyle}" Visibility="Collapsed" />
+                            <StackPanel x:Name="DiscoveredList" Spacing="8" />
+                        </StackPanel>
+                        <StackPanel x:Name="ModelsTabDownloaded" Spacing="8" Visibility="Collapsed">
+                            <StackPanel x:Name="ModelsList" Spacing="8" />
+                        </StackPanel>
+                        <StackPanel x:Name="ModelsTabExternal" Spacing="8" Visibility="Collapsed">
+                            <StackPanel x:Name="ModelsExternalList" Spacing="8" />
+                        </StackPanel>
+                        <StackPanel x:Name="ModelsTabDownloads" Spacing="8" Visibility="Collapsed">
+                            <StackPanel x:Name="ModelJobs" Spacing="6" />
+                        </StackPanel>
+
+                        <TextBlock Text="Role assignments" Style="{StaticResource HavenSectionTextStyle}" />
                         <StackPanel x:Name="ModelRoles" Spacing="6" />
-                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Download jobs" />
-                        <StackPanel x:Name="ModelJobs" Spacing="6" />
                     </StackPanel>
 
-                    <StackPanel x:Name="HomePanel" Spacing="12">
-                        <TextBlock FontSize="20" Text="What do you want to do?" />
-                        <TextBox x:Name="ComposerBox" PlaceholderText="Ask HAVEN…" KeyDown="OnComposerKeyDown" />
-                        <Button Content="Ask HAVEN" Click="OnComposerClicked" HorizontalAlignment="Left" />
-                        <TextBlock x:Name="ResponseText" TextWrapping="Wrap" Opacity="0.86" />
+                    <!-- Settings (spec 39): control-center categories. -->
+                    <StackPanel x:Name="SettingsPanel" Spacing="14" Visibility="Collapsed">
+                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                            <Button Content="Probe provider" Click="OnProbeProviderClicked" />
+                            <Button Content="Refresh" Click="OnSettingsRefreshClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="SettingsErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
+                        <TextBlock x:Name="SettingsStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
+
+                        <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="General" />
+                        <StackPanel x:Name="ServicePanel" Spacing="8" />
+
+                        <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Storage" />
+                        <TextBlock x:Name="StorageDataDirText" Style="{StaticResource HavenMonoTextStyle}" TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock VerticalAlignment="Center" Style="{StaticResource HavenMetadataTextStyle}" Text="Backups capture every installation file; restore replaces them on disk." />
+                            <Button Content="Create backup" Click="OnCreateBackupClicked" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <StackPanel x:Name="BackupsList" Spacing="8" />
+
+                        <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Intelligence" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock x:Name="IntelligenceVoiceText" VerticalAlignment="Center" Style="{StaticResource HavenMetadataTextStyle}" />
+                            <Button Content="Open models" Click="OnOpenModelsClicked" VerticalAlignment="Center" />
+                        </StackPanel>
+
+                        <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Privacy" />
+                        <TextBlock Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap"
+                                   Text="Retention, activity observation and export controls arrive with the privacy milestone. HAVEN stores everything locally today." />
+
+                        <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Permissions" />
+                        <TextBlock Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap"
+                                   Text="A view of capability grants and pending authority is planned; governed actions currently surface their permission cards where they happen, and receipts live in the activity history." />
+
+                        <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Connections" />
+                        <TextBlock Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap"
+                                   Text="Calendar, email, browser and provider accounts arrive with their milestones. Connect a home provider any time from Setup." />
+                        <Button Content="Open setup" Click="OnReopenSetupClicked" HorizontalAlignment="Left" />
+
+                        <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Notifications" />
+                        <TextBlock Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap"
+                                   Text="System notifications and quiet hours are not configurable yet; nothing is sent while HAVEN is closed." />
+
+                        <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Accessibility" />
+                        <TextBlock Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap"
+                                   Text="HAVEN follows Windows text scaling, high contrast and reduced-motion settings; dedicated controls arrive later." />
+
+                        <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="About" />
+                        <TextBlock x:Name="AboutVersionText" Style="{StaticResource HavenMetadataTextStyle}" />
+                        <TextBlock x:Name="ProbeResultText" TextWrapping="Wrap" Style="{StaticResource HavenMetadataTextStyle}" />
+                        <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Diagnostics" />
+                        <StackPanel x:Name="DiagnosticsList" Spacing="4" />
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>
         </NavigationView>
 
-        <Grid x:Name="SetupOverlay" Grid.RowSpan="2" Visibility="Collapsed">
+        <!-- Persistent composer (spec 10). -->
+        <Border Grid.Row="2" Background="{ThemeResource HavenSurface1Brush}" BorderBrush="{ThemeResource HavenStrokeBrush}" BorderThickness="0,1,0,0" Padding="24,10">
+            <StackPanel MaxWidth="1100" Spacing="8" HorizontalAlignment="Stretch">
+                <StackPanel x:Name="ComposerResults" Spacing="6" Visibility="Collapsed" />
+                <Grid ColumnSpacing="10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="ComposerInput" PlaceholderText="Ask HAVEN or find anything…"
+                             AcceptsReturn="True" TextWrapping="Wrap" MinHeight="36" MaxHeight="120"
+                             VerticalAlignment="Center" KeyDown="OnComposerKeyDown" />
+                    <Button x:Name="ComposerMicButton" Grid.Column="1" IsEnabled="False"
+                            ToolTipService.ToolTip="Voice input arrives with the native speech surface."
+                            VerticalAlignment="Center">
+                        <SymbolIcon Symbol="Microphone" />
+                    </Button>
+                    <Button x:Name="ComposerSendButton" Grid.Column="2" Click="OnComposerSendClicked"
+                            Style="{StaticResource HavenPrimaryButtonStyle}" VerticalAlignment="Center">
+                        <StackPanel x:Name="ComposerSendContent" Orientation="Horizontal" Spacing="6">
+                            <SymbolIcon Symbol="Send" />
+                            <TextBlock Text="Send" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+                <StackPanel x:Name="ComposerThinking" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
+                    <ProgressRing Width="16" Height="16" IsActive="True" />
+                    <TextBlock Text="Thinking…" Style="{StaticResource HavenMetadataTextStyle}" VerticalAlignment="Center" />
+                </StackPanel>
+                <TextBlock x:Name="ComposerStatus" Style="{StaticResource HavenMetadataTextStyle}" />
+            </StackPanel>
+        </Border>
+
+        <Grid x:Name="SetupOverlay" Grid.RowSpan="3" Visibility="Collapsed">
             <setup:SetupWizardView x:Name="SetupWizard" SetupCompleted="OnSetupCompleted" />
         </Grid>
     </Grid>
