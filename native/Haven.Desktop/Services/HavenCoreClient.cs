@@ -12,6 +12,7 @@ public sealed class HavenCoreClient : IAsyncDisposable
     private readonly string _pipeName;
     private readonly string _authToken;
     private readonly JsonSerializerOptions _json = new() { PropertyNameCaseInsensitive = true };
+    private readonly SemaphoreSlim _requestLock = new(1, 1);
     private NamedPipeClientStream? _pipe;
 
     public HavenCoreClient(string pipeName, string authToken)
@@ -442,6 +443,247 @@ public sealed class HavenCoreClient : IAsyncDisposable
     public Task<JsonElement> UninstallServiceAsync(CancellationToken cancellationToken = default) =>
         RequestResultAsync("system.service.uninstall", new { }, cancellationToken);
 
+    public Task<JsonElement> GetProjectsAsync(
+        string? status = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("projects.list", new { status }, cancellationToken);
+
+    public Task<JsonElement> GetProjectAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("projects.get", new { project_id = projectId }, cancellationToken);
+
+    public Task<JsonElement> CreateProjectAsync(
+        string title,
+        string? description = null,
+        string? status = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "projects.create",
+            new { title, description, status },
+            cancellationToken);
+
+    public Task<JsonElement> UpdateProjectAsync(
+        string projectId,
+        int revision,
+        string? title = null,
+        string? description = null,
+        string? status = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "projects.update",
+            new { project_id = projectId, revision, title, description, status },
+            cancellationToken);
+
+    public Task<JsonElement> ArchiveProjectAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("projects.archive", new { project_id = projectId }, cancellationToken);
+
+    public Task<JsonElement> AttachProjectResourceAsync(
+        string projectId,
+        string resourceId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "projects.attach",
+            new { project_id = projectId, resource_id = resourceId },
+            cancellationToken);
+
+    public Task<JsonElement> DetachProjectResourceAsync(
+        string projectId,
+        string resourceId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "projects.detach",
+            new { project_id = projectId, resource_id = resourceId },
+            cancellationToken);
+
+    public Task<JsonElement> GetProjectResourcesAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("projects.attached", new { project_id = projectId }, cancellationToken);
+
+    public Task<JsonElement> GetTasksAsync(
+        string? view = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("tasks.list", new { view }, cancellationToken);
+
+    public Task<JsonElement> GetTaskAsync(
+        string taskId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("tasks.get", new { task_id = taskId }, cancellationToken);
+
+    public Task<JsonElement> CreateTaskAsync(
+        string title,
+        string? projectId = null,
+        string? detail = null,
+        string? priority = null,
+        string? dueAt = null,
+        string? recurrence = null,
+        string? state = null,
+        IReadOnlyList<string>? dependencyIds = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "tasks.create",
+            new
+            {
+                title,
+                project_id = projectId,
+                detail,
+                priority,
+                due_at = dueAt,
+                recurrence,
+                state,
+                dependency_ids = dependencyIds ?? Array.Empty<string>(),
+            },
+            cancellationToken);
+
+    public Task<JsonElement> UpdateTaskAsync(
+        string taskId,
+        int revision,
+        string? title = null,
+        string? detail = null,
+        string? state = null,
+        string? priority = null,
+        string? dueAt = null,
+        string? projectId = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "tasks.update",
+            new
+            {
+                task_id = taskId,
+                revision,
+                title,
+                detail,
+                state,
+                priority,
+                due_at = dueAt,
+                project_id = projectId,
+            },
+            cancellationToken);
+
+    public Task<JsonElement> CompleteTaskAsync(
+        string taskId,
+        int revision,
+        IReadOnlyList<string>? evidenceRefs = null,
+        string? evidenceSource = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "tasks.complete",
+            new
+            {
+                task_id = taskId,
+                revision,
+                evidence_refs = evidenceRefs ?? Array.Empty<string>(),
+                evidence_source = evidenceSource,
+            },
+            cancellationToken);
+
+    public Task<JsonElement> AddTaskDependencyAsync(
+        string taskId,
+        string dependsOnTaskId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "tasks.add_dependency",
+            new { task_id = taskId, depends_on_task_id = dependsOnTaskId },
+            cancellationToken);
+
+    public Task<JsonElement> RemoveTaskDependencyAsync(
+        string taskId,
+        string dependsOnTaskId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "tasks.remove_dependency",
+            new { task_id = taskId, depends_on_task_id = dependsOnTaskId },
+            cancellationToken);
+
+    public Task<JsonElement> GetComputerFilesAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("computer.files.list", new { }, cancellationToken);
+
+    public Task<JsonElement> GetComputerAppsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("computer.apps.list", new { }, cancellationToken);
+
+    public Task<JsonElement> GetComputerWindowsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("computer.windows.list", new { }, cancellationToken);
+
+    public Task<JsonElement> FocusWindowAsync(
+        string resourceId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "computer.window.focus",
+            new { resource_id = resourceId },
+            cancellationToken);
+
+    public Task<JsonElement> GetComputerActivityAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("computer.activity.list", new { }, cancellationToken);
+
+    public Task<JsonElement> SetComputerObservationAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("computer.observation.set", new { enabled }, cancellationToken);
+
+    public Task<JsonElement> GetBrowserTabsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("browser.tabs.list", new { }, cancellationToken);
+
+    public Task<JsonElement> FocusBrowserTabAsync(
+        string resourceId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("browser.tab.focus", new { resource_id = resourceId }, cancellationToken);
+
+    public Task<JsonElement> OpenBrowserTabAsync(
+        string browser,
+        string url,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("browser.tab.open", new { browser, url }, cancellationToken);
+
+    public Task<JsonElement> CloseBrowserTabAsync(
+        string resourceId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("browser.tab.close", new { resource_id = resourceId }, cancellationToken);
+
+    public Task<JsonElement> ConfirmCloseBrowserTabAsync(
+        string requestId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("browser.tab.close.confirm", new { request_id = requestId }, cancellationToken);
+
+    public Task<JsonElement> GetCalendarEventsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("calendar.events.list", new { }, cancellationToken);
+
+    public Task<JsonElement> AddCalendarSourceAsync(
+        string path,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("calendar.sources.add", new { path }, cancellationToken);
+
+    public Task<JsonElement> ProposeTaskForEventAsync(
+        string eventId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("calendar.event.propose_task", new { event_id = eventId }, cancellationToken);
+
+    public Task<JsonElement> GetEmailStatusAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("email.status", new { }, cancellationToken);
+
+    public Task<JsonElement> GetEmailMessagesAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("email.messages.list", new { }, cancellationToken);
+
+    public Task<JsonElement> SetEmailMaildirAsync(
+        string path,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("email.maildir.set", new { path }, cancellationToken);
+
+    public Task<JsonElement> GetTodayCardsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("today.cards", new { }, cancellationToken);
+
+    public Task<JsonElement> DismissTodayCardAsync(
+        string cardId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("today.dismiss", new { card_id = cardId }, cancellationToken);
+
+    public Task<JsonElement> GetRelationshipsForAsync(
+        string resourceId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("relationships.for", new { resource_id = resourceId }, cancellationToken);
+
     private async Task<JsonElement> RequestResultAsync(
         string method,
         object parameters,
@@ -453,6 +695,25 @@ public sealed class HavenCoreClient : IAsyncDisposable
     }
 
     private async Task<JsonDocument> RequestDocumentAsync(
+        string method,
+        object parameters,
+        CancellationToken cancellationToken)
+    {
+        // One request at a time on the single pipe: the frame protocol is a
+        // strict request/response alternation and concurrent page loads
+        // (rooms + automations + contexts) would interleave frames.
+        await _requestLock.WaitAsync(cancellationToken);
+        try
+        {
+            return await RequestDocumentUnlockedAsync(method, parameters, cancellationToken);
+        }
+        finally
+        {
+            _requestLock.Release();
+        }
+    }
+
+    private async Task<JsonDocument> RequestDocumentUnlockedAsync(
         string method,
         object parameters,
         CancellationToken cancellationToken)

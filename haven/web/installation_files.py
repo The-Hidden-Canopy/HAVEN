@@ -33,6 +33,8 @@ _FIXED_NAMES = (
     "action_ledger.db",
     "scopes.db",
     "identity.json",
+    "projects.db",
+    "tasks.db",
     "computer_provider.json",
     "installed_providers.json",
 )

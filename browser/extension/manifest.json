@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "HAVEN Browser Connector (experimental)",
+  "version": "0.1.0",
+  "description": "Shares tab identity/title/URL/activity with local HAVEN. No page content, cookies, or incognito.",
+  "permissions": ["tabs", "nativeMessaging"],
+  "incognito": "split",
+  "background": {
+    "service_worker": "background.js"
+  }
+}
