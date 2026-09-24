@@ -151,6 +151,37 @@
                         <StackPanel x:Name="AutomationsList" Spacing="8" />
                     </StackPanel>
 
+                    <StackPanel x:Name="ModelsPanel" Spacing="12" Visibility="Collapsed">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="4">
+                                <TextBlock FontSize="20" Text="Models" />
+                                <TextBlock Text="Local and remote intelligence: download, verify, load, and assign models to roles." TextWrapping="Wrap" Opacity="0.72" />
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="Refresh" Click="OnModelsRefreshClicked" VerticalAlignment="Center" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Install from URL…" Click="OnInstallFromUrlClicked" />
+                            <Button Content="Install local folder…" Click="OnInstallLocalClicked" />
+                            <Button Content="Add endpoint…" Click="OnAddEndpointClicked" />
+                            <Button Content="Add root…" Click="OnAddModelRootClicked" />
+                            <Button Content="Scan roots" Click="OnScanModelRootsClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="ModelsErrorText" TextWrapping="Wrap"
+                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Installed models" />
+                        <StackPanel x:Name="ModelsList" Spacing="8" />
+                        <TextBlock x:Name="DiscoveredHeading" FontSize="16" FontWeight="SemiBold" Text="Discovered candidates" Visibility="Collapsed" />
+                        <StackPanel x:Name="DiscoveredList" Spacing="8" />
+                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Role assignments" />
+                        <StackPanel x:Name="ModelRoles" Spacing="6" />
+                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Download jobs" />
+                        <StackPanel x:Name="ModelJobs" Spacing="6" />
+                    </StackPanel>
+
                     <StackPanel x:Name="HomePanel" Spacing="12">
                         <TextBlock FontSize="20" Text="What do you want to do?" />
                         <TextBox x:Name="ComposerBox" PlaceholderText="Ask HAVEN…" KeyDown="OnComposerKeyDown" />

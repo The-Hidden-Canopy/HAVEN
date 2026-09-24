@@ -605,6 +605,116 @@ class HavenWebServer(ThreadingHTTPServer):
                 ),
             )
 
+        # -- model manager ---------------------------------------------------
+        # Every method delegates to the same ModelManager / DownloadJobManager
+        # the /api/models* handlers use, and mirrors their envelopes: manager
+        # failures answer {"ok": False, "error": ...} (with models+roots on
+        # lifecycle paths), never a raised traceback across the IPC boundary.
+
+        def _require_model_field(params: dict, field: str) -> str:
+            value = params.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"a non-empty '{field}' is required")
+            return value.strip()
+
+        def _model_result(action, *, lifecycle: bool = False) -> dict:
+            try:
+                return action()
+            except Exception as exc:
+                payload = {"ok": False, "error": str(exc)}
+                if lifecycle:
+                    fresh = models_payload(self.models)
+                    payload["models"] = fresh["models"]
+                    payload["roots"] = fresh["roots"]
+                return payload
+
+        def _models_download(params: dict) -> dict:
+            url = _require_model_field(params, "url")
+            job_id = self.model_jobs.start(url)
+            job = self.model_jobs.status(job_id)
+            if job.state.value == "failed":
+                # Same synchronous-resolution failure envelope as the web
+                # download endpoint; the failed job still shows in models.jobs.
+                return {"ok": False, "error": job.error or "download failed"}
+            return {"ok": True, "job_id": job_id}
+
+        def _models_job_cancel(params: dict) -> dict:
+            job_id = _require_model_field(params, "job_id")
+            if not self.model_jobs.cancel(job_id):
+                return {"ok": False, "error": f"unknown job: {job_id}"}
+            return {"ok": True, "job": job_to_dict(self.model_jobs.status(job_id))}
+
+        def _models_remove(params: dict) -> dict:
+            model_id = _require_model_field(params, "id")
+            return _model_result(
+                lambda: _models_remove_record(model_id),
+                lifecycle=True,
+            )
+
+        def _models_remove_record(model_id: str) -> dict:
+            # remove() returns None; the refetch shape is the answer, exactly
+            # like the web handler's _install wrapper.
+            self.models.remove(model_id)
+            return models_payload(self.models)
+
+        def _models_install(action) -> dict:
+            # install/register/load/unload return the persisted record; the
+            # web's _install wrapper discards it and answers with the fresh
+            # models+roots payload -- the same refetch shape everywhere.
+            action()
+            return models_payload(self.models)
+
+        def _models_inspect(params: dict) -> dict:
+            url = _require_model_field(params, "url")
+            return _model_result(
+                lambda: {"ok": True, "inspection": inspection_payload(self.models.inspect_url(url))}
+            )
+
+        def _models_install_url(params: dict) -> dict:
+            url = _require_model_field(params, "url")
+            return _model_result(lambda: _models_install(lambda: self.models.install_from_url(url)))
+
+        def _models_install_local(params: dict) -> dict:
+            folder = _require_model_field(params, "folder")
+            return _model_result(lambda: _models_install(lambda: self.models.install_local_folder(folder)))
+
+        def _models_add_endpoint(params: dict) -> dict:
+            url = _require_model_field(params, "url")
+            return _model_result(lambda: _models_install(lambda: self.models.register_endpoint(url)))
+
+        def _models_add_root(params: dict) -> dict:
+            path = _require_model_field(params, "path")
+            return _model_result(lambda: _models_install(lambda: self.models.add_root(path)))
+
+        def _models_scan(_params: dict) -> dict:
+            return _model_result(lambda: scan_payload(self.models, self.models.scan()))
+
+        def _models_register(params: dict) -> dict:
+            path = _require_model_field(params, "path")
+            return _model_result(
+                lambda: _models_install(lambda: self.models.register_candidate(inspect_folder(path)))
+            )
+
+        def _models_load(params: dict) -> dict:
+            model_id = _require_model_field(params, "id")
+            return _model_result(
+                lambda: _models_install(lambda: self.models.load(model_id)),
+                lifecycle=True,
+            )
+
+        def _models_unload(params: dict) -> dict:
+            model_id = _require_model_field(params, "id")
+            return _model_result(
+                lambda: _models_install(lambda: self.models.unload(model_id)),
+                lifecycle=True,
+            )
+
+        def _models_assign(params: dict) -> dict:
+            # Same as POST /api/models/assign: the role is required, id may be
+            # null to clear the assignment.
+            role = _require_model_field(params, "role")
+            return assign_payload(self.models, role, params.get("id"))
+
         def _computer_action(params: dict) -> dict:
             action = params.get("action")
             parameters = params.get("parameters", {})
@@ -770,6 +880,24 @@ class HavenWebServer(ThreadingHTTPServer):
                 "automations.enable": _automations_enable,
                 "automations.approve": _automations_approve,
                 "automations.revoke": _automations_revoke,
+                "models.list": lambda _params: models_payload(self.models),
+                "models.inspect": _models_inspect,
+                "models.download": _models_download,
+                "models.install_url": _models_install_url,
+                "models.install_local": _models_install_local,
+                "models.add_endpoint": _models_add_endpoint,
+                "models.add_root": _models_add_root,
+                "models.scan": _models_scan,
+                "models.register": _models_register,
+                "models.load": _models_load,
+                "models.unload": _models_unload,
+                "models.remove": _models_remove,
+                "models.assign": _models_assign,
+                "models.jobs": lambda _params: {
+                    "ok": True,
+                    "jobs": [job_to_dict(job) for job in self.model_jobs.list()],
+                },
+                "models.job.cancel": _models_job_cancel,
             }
         )
 

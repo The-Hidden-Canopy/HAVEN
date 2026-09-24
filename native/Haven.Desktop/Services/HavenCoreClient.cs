@@ -326,6 +326,79 @@ public sealed class HavenCoreClient : IAsyncDisposable
             new { rule_id = ruleId, justification },
             cancellationToken);
 
+    public Task<JsonElement> GetModelsOverviewAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.overview", new { }, cancellationToken);
+
+    public Task<JsonElement> GetModelsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.list", new { }, cancellationToken);
+
+    public Task<JsonElement> GetModelJobsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.jobs", new { }, cancellationToken);
+
+    public Task<JsonElement> CancelModelJobAsync(
+        string jobId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.job.cancel", new { job_id = jobId }, cancellationToken);
+
+    public Task<JsonElement> InspectModelUrlAsync(
+        string url,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.inspect", new { url }, cancellationToken);
+
+    public Task<JsonElement> DownloadModelAsync(
+        string url,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.download", new { url }, cancellationToken);
+
+    public Task<JsonElement> InstallModelFromUrlAsync(
+        string url,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.install_url", new { url }, cancellationToken);
+
+    public Task<JsonElement> InstallLocalModelAsync(
+        string folder,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.install_local", new { folder }, cancellationToken);
+
+    public Task<JsonElement> AddModelEndpointAsync(
+        string url,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.add_endpoint", new { url }, cancellationToken);
+
+    public Task<JsonElement> AddModelRootAsync(
+        string path,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.add_root", new { path }, cancellationToken);
+
+    public Task<JsonElement> ScanModelRootsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.scan", new { }, cancellationToken);
+
+    public Task<JsonElement> RegisterModelAsync(
+        string path,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.register", new { path }, cancellationToken);
+
+    public Task<JsonElement> LoadModelAsync(
+        string modelId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.load", new { id = modelId }, cancellationToken);
+
+    public Task<JsonElement> UnloadModelAsync(
+        string modelId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.unload", new { id = modelId }, cancellationToken);
+
+    public Task<JsonElement> RemoveModelAsync(
+        string modelId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.remove", new { id = modelId }, cancellationToken);
+
+    public Task<JsonElement> AssignModelAsync(
+        string role,
+        string? modelId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("models.assign", new { role, id = modelId }, cancellationToken);
+
     private async Task<JsonElement> RequestResultAsync(
         string method,
         object parameters,
