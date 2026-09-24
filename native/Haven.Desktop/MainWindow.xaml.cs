@@ -2419,6 +2419,15 @@ public sealed partial class MainWindow : Window
 
         try
         {
+            await RenderExtensionsAsync();
+        }
+        catch (Exception ex)
+        {
+            SettingsErrorText.Text = $"Could not load extensions: {ex.Message}";
+        }
+
+        try
+        {
             backups = (await _client.GetBackupsAsync()).Clone();
         }
         catch (Exception ex)
@@ -2440,6 +2449,126 @@ public sealed partial class MainWindow : Window
         if (service is not null)
         {
             RenderService(service.Value.GetProperty("service"));
+        }
+    }
+
+    private async Task RenderExtensionsAsync()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        var result = await _client.GetExtensionsAsync();
+        ExtensionsHost.Children.Clear();
+        foreach (var group in Enumerate(result.GetProperty("classes")))
+        {
+            var className = GetString(group, "class") ?? "unknown";
+            var title = className switch
+            {
+                "export_consumer" => "Export consumers",
+                "intelligence" => "Intelligence services",
+                "provider" => "Providers",
+                "feature" => "Feature modules",
+                _ => Sentence(className),
+            };
+            var card = new StackPanel { Spacing = 6 };
+            card.Children.Add(new TextBlock
+            {
+                Text = title,
+                Style = (Style)Application.Current.Resources["HavenSectionTextStyle"],
+            });
+            var extensions = Enumerate(group, "extensions").ToList();
+            if (extensions.Count == 0)
+            {
+                card.Children.Add(new TextBlock
+                {
+                    Text = className switch
+                    {
+                        "feature" => "None yet. Feature modules will extend HAVEN through explicit contracts, calling application services only.",
+                        "provider" => "No provider plugins are installed. Provider packages declare themselves through the haven.providers entry point.",
+                        "export_consumer" => "Nothing in the catalog yet. Export consumers read only explicitly exported, redacted receipts — never live state.",
+                        _ => "None registered.",
+                    },
+                    Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                    TextWrapping = TextWrapping.Wrap,
+                });
+            }
+            foreach (var extension in extensions)
+            {
+                var row = new StackPanel { Spacing = 2 };
+                var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                head.Children.Add(new TextBlock
+                {
+                    Text = GetString(extension, "display_name") ?? GetString(extension, "extension_id") ?? "?",
+                    FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                    TextWrapping = TextWrapping.Wrap,
+                });
+                var state = extension.TryGetProperty("state", out var stateValue) && stateValue.ValueKind == JsonValueKind.Object
+                    ? stateValue
+                    : default;
+                var enabled = state.ValueKind == JsonValueKind.Object
+                    && state.TryGetProperty("enabled", out var enabledValue)
+                    && enabledValue.ValueKind == JsonValueKind.True
+                    && enabledValue.GetBoolean();
+                if (state.ValueKind == JsonValueKind.Object && state.TryGetProperty("enabled", out _))
+                {
+                    head.Children.Add(MakeChip(
+                        enabled ? "Enabled" : "Disabled",
+                        enabled ? "HavenSuccessTintBrush" : "HavenStrokeBrush",
+                        enabled ? "HavenSuccessBrush" : "HavenMutedTextBrush"));
+                }
+                row.Children.Add(head);
+                row.Children.Add(new TextBlock
+                {
+                    Text = $"{GetString(extension, "run_location")} · {GetString(extension, "access_boundary")}",
+                    Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                    TextWrapping = TextWrapping.Wrap,
+                });
+                row.Children.Add(new TextBlock
+                {
+                    Text = GetString(extension, "authority_boundary") ?? "",
+                    Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                    TextWrapping = TextWrapping.Wrap,
+                    Opacity = 0.8,
+                });
+                if (GetString(extension, "detail") is { Length: > 0 } detail)
+                {
+                    row.Children.Add(new TextBlock
+                    {
+                        Text = detail,
+                        Style = (Style)Application.Current.Resources["HavenBodyTextStyle"],
+                        TextWrapping = TextWrapping.Wrap,
+                        Opacity = 0.8,
+                    });
+                }
+                if (className == "export_consumer" && state.ValueKind == JsonValueKind.Object
+                    && state.TryGetProperty("plugin_id", out var pluginIdValue)
+                    && pluginIdValue.GetString() is { } pluginId)
+                {
+                    var toggle = new Button
+                    {
+                        Content = enabled ? "Disable" : "Enable",
+                        Style = (Style)Application.Current.Resources[enabled ? "HavenDangerButtonStyle" : "HavenSecondaryButtonStyle"],
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                    };
+                    toggle.Click += async (_, _) =>
+                    {
+                        try
+                        {
+                            await _client!.SetExportConsumerEnabledAsync(pluginId, !enabled);
+                            SettingsErrorText.Text = "";
+                            await LoadSettingsAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            SettingsErrorText.Text = ex.Message;
+                        }
+                    };
+                    row.Children.Add(toggle);
+                }
+                card.Children.Add(WrapCard(row));
+            }
+            ExtensionsHost.Children.Add(card);
         }
     }
 
