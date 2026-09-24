@@ -125,7 +125,7 @@
                                    Foreground="{ThemeResource HavenAccentBrush}"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
-                    <StackPanel VerticalAlignment="Center">
+                    <StackPanel x:Name="ProfileText" VerticalAlignment="Center">
                         <TextBlock Text="Personal" FontSize="13" FontWeight="SemiBold"
                                    Foreground="{ThemeResource HavenTextBrush}" />
                         <TextBlock x:Name="ConnectionText" Text="Connecting…" FontSize="11"
@@ -141,7 +141,7 @@
         <Rectangle Grid.Column="1" Grid.RowSpan="3" Width="1" Margin="0,10"
                    Fill="{ThemeResource HavenStrokeBrush}" />
 
-        <ScrollViewer Grid.Row="1" Grid.Column="2" Padding="30,16,30,24">
+        <ScrollViewer x:Name="ContentScroll" Grid.Row="1" Grid.Column="2" Padding="30,16,30,24">
             <StackPanel MaxWidth="1120" Spacing="16">
                 <StackPanel Spacing="2">
                     <TextBlock x:Name="PageTitle" Style="{StaticResource HavenPageTitleTextStyle}" Text="Today" />
@@ -292,14 +292,14 @@
                         <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="What HAVEN knows" />
                         <TextBlock Text="Inspect what was remembered, where it came from, and how certain it is." TextWrapping="Wrap" Style="{StaticResource HavenMetadataTextStyle}" />
                     </StackPanel>
-                    <Grid ColumnSpacing="18">
+                    <Grid x:Name="MemorySplit" ColumnSpacing="18">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="1.2*" />
                         </Grid.ColumnDefinitions>
                         <ListView x:Name="MemoryClaims" SelectionChanged="OnMemorySelectionChanged" MaxHeight="560"
                                   ItemContainerStyle="{StaticResource HavenListItemStyle}" />
-                        <Border Grid.Column="1" Style="{StaticResource HavenCardStyle}" Padding="18">
+                        <Border x:Name="MemoryInspector" Grid.Column="1" Style="{StaticResource HavenCardStyle}" Padding="18">
                             <StackPanel Spacing="12">
                                 <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="470">
                                     <TextBlock x:Name="MemoryDetailText" Text="Select a memory to inspect its evidence." TextWrapping="Wrap" />

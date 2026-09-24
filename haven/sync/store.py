@@ -19,6 +19,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sync_events (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id TEXT NOT NULL UNIQUE,
+    origin_device_id TEXT NOT NULL DEFAULT 'self',
     object_id TEXT NOT NULL,
     kind TEXT NOT NULL,
     scope_id TEXT NOT NULL,
@@ -57,12 +58,13 @@ class SyncEventStore:
             conn = self._connect()
             try:
                 conn.execute(
-                    "INSERT OR IGNORE INTO sync_events(seq, event_id, object_id, kind, scope_id, "
+                    "INSERT OR IGNORE INTO sync_events(seq, event_id, origin_device_id, object_id, kind, scope_id, "
                     "revision, causal_parents, payload, occurred_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         event.seq if event.seq > 0 else None,
                         event.event_id,
+                        event.origin_device_id,
                         event.object_id,
                         event.kind,
                         event.scope_id,
@@ -81,7 +83,7 @@ class SyncEventStore:
             conn = self._connect()
             try:
                 rows = conn.execute(
-                    "SELECT seq, event_id, object_id, kind, scope_id, revision, causal_parents, "
+                    "SELECT seq, event_id, origin_device_id, object_id, kind, scope_id, revision, causal_parents, "
                     "payload, occurred_at FROM sync_events WHERE seq > ? ORDER BY seq LIMIT ?",
                     (seq, limit),
                 ).fetchall()
@@ -91,14 +93,14 @@ class SyncEventStore:
             SyncEvent(
                 event_id=row[1],
                 seq=row[0],
-                origin_device_id="self",
-                object_id=row[2],
-                kind=row[3],
-                scope_id=row[4],
-                revision=row[5],
-                causal_parents=tuple(json.loads(row[6])),
-                payload=tuple(json.loads(row[7]).items()),
-                occurred_at=datetime.fromisoformat(row[8]),
+                origin_device_id=row[2],
+                object_id=row[3],
+                kind=row[4],
+                scope_id=row[5],
+                revision=row[6],
+                causal_parents=tuple(json.loads(row[7])),
+                payload=tuple(json.loads(row[8]).items()),
+                occurred_at=datetime.fromisoformat(row[9]),
             )
             for row in rows
         )
@@ -108,7 +110,7 @@ class SyncEventStore:
             conn = self._connect()
             try:
                 row = conn.execute(
-                    "SELECT seq, event_id, object_id, kind, scope_id, revision, causal_parents, "
+                    "SELECT seq, event_id, origin_device_id, object_id, kind, scope_id, revision, causal_parents, "
                     "payload, occurred_at FROM sync_events WHERE object_id = ? ORDER BY seq DESC LIMIT 1",
                     (object_id,),
                 ).fetchone()
@@ -119,14 +121,14 @@ class SyncEventStore:
         return SyncEvent(
             event_id=row[1],
             seq=row[0],
-            origin_device_id="self",
-            object_id=row[2],
-            kind=row[3],
-            scope_id=row[4],
-            revision=row[5],
-            causal_parents=tuple(json.loads(row[6])),
-            payload=tuple(json.loads(row[7]).items()),
-            occurred_at=datetime.fromisoformat(row[8]),
+            origin_device_id=row[2],
+            object_id=row[3],
+            kind=row[4],
+            scope_id=row[5],
+            revision=row[6],
+            causal_parents=tuple(json.loads(row[7])),
+            payload=tuple(json.loads(row[8]).items()),
+            occurred_at=datetime.fromisoformat(row[9]),
         )
 
     def next_seq(self) -> int:

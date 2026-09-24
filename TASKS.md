@@ -173,11 +173,16 @@ Source: spec pages 19, 40, 42 (scope sharing, sync, tablet strategy).
 
 **Exit condition:** One personal state across native devices.
 
-- [ ] Sync event envelope: `origin_device_id`, `object_id`, revision/causal parents, `scope_id`, `event_id`.
-- [ ] Sync policy: user-authored projects/tasks/people/claims sync; raw file content, model weights, provider credentials, home secrets do not sync by default.
-- [ ] Conflict state requiring merge/review — never silent last-write-wins on high-value records; provider-return recovery reconciles rather than assumes.
-- [ ] Transport behind an interface (peer-to-peer or encrypted relay; Hub relay, if used, is never authority).
-- [ ] Tablet-adaptive layouts: same WinUI app, touch targets, NavigationView/master-detail collapse (page 42 phase 1).
+- [x] Sync event envelope: `origin_device_id`, `object_id`, revision/causal parents, `scope_id`, `event_id`.
+  - `haven/sync/events.py`: `SyncEvent` carries the full envelope (event_id, monotonic seq, origin device id minted per installation, object id, kind, scope id, revision, causal parents, payload, occurred_at); `SyncEventStore` (SQLite house idiom) persists it with the seq as the watermark.
+- [x] Sync policy: user-authored projects/tasks/people/claims sync; raw file content, model weights, provider credentials, home secrets do not sync by default.
+  - Explicit `SYNCABLE_KINDS` table (project/task/claim/person — person export lands with the household-sync applier in a later slice); `record_mutation` refuses excluded kinds at the door and `pull` rejects excluded kinds on arrival. **Tested both directions**: a provider-credential-shaped record is refused export, and a hand-crafted credential event in the inbox is rejected without applying.
+- [x] Conflict state requiring merge/review — never silent last-write-wins on high-value records; provider-return recovery reconciles rather than assumes.
+  - Divergent revisions become durable `SyncConflict` rows (one open conflict per object; later divergent events fold in rather than stack). `sync.resolve` chooses local / remote / **merge fields where legal** (unknown fields refused; merge bumps revision past both sides). Resolutions sync onward like any mutation. Echoed events are recognized by origin device and skipped, not re-conflicted.
+- [x] Transport behind an interface (peer-to-peer or encrypted relay; Hub relay, if used, is never authority).
+  - `FolderSyncTransport` (export/import directory pair, stdlib JSONL) behind the two-method send/fetch seam — the concrete first transport; P2P/encrypted relay implements the same seam. Scope mapping for a same-user device pair is an explicit `sync.scope_aliases` map (fail-closed without it). Sync is **off by default**, fully functional single-device; enabled state, transport dirs, and both watermarks persist in `sync_state.json` (restart-durable, tested). IPC: `sync.status/set/transport.set/scope_aliases.set/push/pull/conflicts/resolve`. Producers wire through mutation listeners on ProjectService/TaskService/KnowledgeService (survives `rebuild_director`).
+- [x] Tablet-adaptive layouts: same WinUI app, touch targets, NavigationView/master-detail collapse (page 42 phase 1).
+  - `MainWindow.ApplyAdaptiveLayout`: below 900px the rail collapses to 72px icon-only (labels and profile text hidden), nav rows grow to 44px touch targets, content padding tightens, and the Memory master/detail collapses from a two-column pane to a stacked single column (detail navigates in below the list); desktop layout untouched above 900px. Compile-verified 0/0 — **pixel verification blocked**: compositing went black again mid-milestone (intermittent; the G screenshot proves the loop works when DWM cooperates). Rerun: `launch.py` with `HAVEN_START_PAGE=memory`, then `shot.ps1 -W 1380` and `-W 700`.
 
 # Milestone I — Extensions
 

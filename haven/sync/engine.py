@@ -57,11 +57,22 @@ class LocalSyncEngine:
         self._outbox = outbox or SyncEventStore(self._data_dir / "sync_events.db")
         self._clock = clock
         self._device_id = device_id_for(self._data_dir)
-        self._enabled = False
-        self._transport: Any = None
         self._state_path = self._data_dir / "sync_state.json"
         self._state = self._load_state()
+        self._enabled = bool(self._state.get("enabled", False))
+        self._transport: Any = None
+        if self._state.get("transport"):
+            from .transport import FolderSyncTransport
+
+            self._transport = FolderSyncTransport(
+                export_dir=self._state["transport"]["export_dir"],
+                import_dir=self._state["transport"]["import_dir"],
+            )
         self._appliers: dict[str, Callable[[dict[str, Any], SyncEvent], dict]] = {}
+        # Explicit foreign->local scope aliases (a same-user device pair maps
+        # the origin's personal scope onto this installation's). Without an
+        # alias an invisible scope stays rejected: fail closed by default.
+        self._scope_aliases: dict[str, str] = {}
         self._lock = threading.Lock()
         self._conflicts_path = self._data_dir / "sync_conflicts.db"
         conn = sqlite3.connect(str(self._conflicts_path))
@@ -83,13 +94,40 @@ class LocalSyncEngine:
 
     def set_enabled(self, enabled: bool) -> dict:
         self._enabled = bool(enabled)
+        self._state["enabled"] = self._enabled
+        self._save_state()
         return {"ok": True, "enabled": self._enabled}
 
     def set_transport(self, transport) -> dict:
         """The transport seam: FolderSyncTransport today, P2P/relay later."""
 
         self._transport = transport
+        self._state["transport"] = (
+            {
+                "export_dir": str(transport.export_dir),
+                "import_dir": str(transport.import_dir),
+            }
+            if transport is not None and hasattr(transport, "export_dir")
+            else None
+        )
+        self._save_state()
         return {"ok": True, "transport": type(transport).__name__ if transport else None}
+
+    def set_scope_aliases(self, aliases: dict[str, str]) -> dict:
+        """Map foreign scope ids onto local ones for applied records."""
+
+        if not isinstance(aliases, dict):
+            return {"ok": False, "error": "aliases must be a mapping"}
+        cleaned = {}
+        for foreign, local in aliases.items():
+            if not isinstance(foreign, str) or not isinstance(local, str):
+                return {"ok": False, "error": "alias keys and values must be strings"}
+            cleaned[foreign] = local
+        self._scope_aliases = cleaned
+        return {"ok": True, "aliases": dict(cleaned)}
+
+    def _aliased_scope(self, scope_id: str) -> str:
+        return self._scope_aliases.get(scope_id, scope_id)
 
     def register_applier(self, kind: str, applier: Callable[[dict[str, Any], SyncEvent], dict]) -> None:
         """The apply seam: kind -> (payload_dict, event) -> result envelope."""
@@ -103,10 +141,10 @@ class LocalSyncEngine:
             data = {}
         if not isinstance(data, dict):
             data = {}
-        return {
-            "outbound_seq": int(data.get("outbound_seq", 0)),
-            "inbound_seq": int(data.get("inbound_seq", 0)),
-        }
+        state = dict(data)
+        state["outbound_seq"] = int(data.get("outbound_seq", 0))
+        state["inbound_seq"] = int(data.get("inbound_seq", 0))
+        return state
 
     def _save_state(self) -> None:
         self._state_path.write_text(json.dumps(self._state, indent=2), encoding="utf-8")
@@ -197,6 +235,7 @@ class LocalSyncEngine:
         if applier is None:
             return {"rejected": 1}
         payload = dict(event.payload)
+        payload["scope_id"] = self._aliased_scope(str(payload.get("scope_id", event.scope_id)))
         local = self._outbox.latest_for(event.object_id)
         local_payload = dict(local.payload) if local is not None else None
         if (
@@ -204,8 +243,12 @@ class LocalSyncEngine:
             and local.revision >= event.revision
             and local_payload != payload
         ):
-            # Divergent histories: durable conflict, never silent LWW.
-            conflict_id = self._raise_conflict(event, local)
+            # Divergent histories: durable conflict, never silent LWW. One
+            # open conflict per object -- later divergent events fold into
+            # the existing review instead of stacking duplicates.
+            if self._has_open_conflict(event.object_id):
+                return {"skipped": 1}
+            conflict_id = self._raise_conflict(event, local, payload)
             return {"conflict_id": conflict_id}
         if local is not None and local.revision == event.revision and local_payload == payload:
             return {"skipped": 1}
@@ -213,12 +256,15 @@ class LocalSyncEngine:
         if not result.get("ok"):
             return {"rejected": 1}
         # Record the application in our own outbox (with correct lineage) so
-        # the object converges and third devices see the causal chain.
+        # the object converges and third devices see the causal chain. The
+        # echo keeps the ORIGINAL origin device: it is the same event, and a
+        # device must recognize its own events echoed back (skip, not
+        # conflict).
         self._outbox.append(
             SyncEvent(
                 event_id=f"evt-{uuid4()}",
                 seq=self._outbox.next_seq(),
-                origin_device_id=self._device_id,
+                origin_device_id=event.origin_device_id,
                 object_id=event.object_id,
                 kind=event.kind,
                 scope_id=event.scope_id,
@@ -232,7 +278,18 @@ class LocalSyncEngine:
 
     # -- conflicts -----------------------------------------------------------------------
 
-    def _raise_conflict(self, event: SyncEvent, local: SyncEvent) -> str:
+    def _has_open_conflict(self, object_id: str) -> bool:
+        conn = sqlite3.connect(str(self._conflicts_path))
+        try:
+            (count,) = conn.execute(
+                "SELECT COUNT(*) FROM sync_conflicts WHERE object_id = ? AND resolved = 0",
+                (object_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        return int(count) > 0
+
+    def _raise_conflict(self, event: SyncEvent, local: SyncEvent, payload: dict) -> str:
         conflict_id = f"conflict-{uuid4()}"
         conn = sqlite3.connect(str(self._conflicts_path))
         try:
@@ -248,7 +305,7 @@ class LocalSyncEngine:
                     local.revision,
                     event.revision,
                     json.dumps(dict(local.payload)),
-                    json.dumps(dict(event.payload)),
+                    json.dumps(payload),
                     json.dumps([local.event_id, event.event_id]),
                     self._clock().isoformat(),
                 ),
@@ -313,9 +370,9 @@ class LocalSyncEngine:
             return {"ok": False, "error": f"no applier registered for {kind!r}"}
 
         if choice == "local":
-            chosen, revision, source = local_payload, local_rev, "local"
+            chosen, revision, source = dict(local_payload), local_rev, "local"
         elif choice == "remote":
-            chosen, revision, source = remote_payload, remote_rev, "remote"
+            chosen, revision, source = dict(remote_payload), remote_rev, "remote"
         else:
             if not isinstance(merge_fields, dict) or not merge_fields:
                 return {"ok": False, "error": "merge requires a non-empty 'merge_fields' object"}
@@ -325,6 +382,7 @@ class LocalSyncEngine:
                 return {"ok": False, "error": f"merge fields are not part of the record: {sorted(unknown)}"}
             chosen = {**remote_payload, **local_payload, **merge_fields}
             revision = max(local_rev, remote_rev) + 1
+            chosen["revision"] = revision
             source = "merge"
 
         result = applier(chosen, None)
