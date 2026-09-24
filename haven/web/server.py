@@ -297,7 +297,7 @@ class HavenWebServer(ThreadingHTTPServer):
             ):
                 raise ValueError("scope_ids must be a list of non-empty strings")
             requested_ids = tuple(requested)
-            visible = self.scope_store.visible_scope_ids(self.identity.principal_id)
+            visible = self.identity.visible_scope_ids()
             if requested_ids and not set(requested_ids) <= set(visible):
                 # Fail closed: no caller-supplied scope may widen visibility
                 # beyond the principal's memberships.
@@ -1032,6 +1032,17 @@ class HavenWebServer(ThreadingHTTPServer):
         self.knowledge = KnowledgeService(resources=self.resources, claims=self.claims, clock=self._director_clock)
         self.search = HavenSearchService(resources=self.resources, ontology=self.ontology, claims=self.claims)
         self.action_ledger = ActionLedgerStore(data_dir / "action_ledger.db")
+        # The scope layer rides the same move: scopes.db and identity.json
+        # are installation files, so a data-dir change finds them at the new
+        # root; without this rebind the authority boundary would keep
+        # reading the old (now moved-away) location.
+        self.scope_store = ScopeStore(data_dir / "scopes.db")
+        self.identity = LocalIdentityProvider(
+            path=data_dir / "identity.json",
+            household_id=new.household_id,
+            scope_store=self.scope_store,
+            clock=self._director_clock or (lambda: datetime.now(timezone.utc)),
+        )
         # These objects hold the installation root themselves; reconstruct
         # them too, otherwise a data-dir move would rebind the stores while
         # backup/service actions continued operating on the old directory.

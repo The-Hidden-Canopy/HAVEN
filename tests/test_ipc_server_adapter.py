@@ -57,7 +57,7 @@ def test_native_search_is_bounded_to_the_authenticated_household_scope():
             assert visible["ok"] is True
             assert [hit["resource_id"] for hit in visible["result"]["hits"]] == ["file:visible"]
             assert blocked["ok"] is False
-            assert "authenticated household scope" in blocked["error"]
+            assert "not visible" in blocked["error"]
         finally:
             server.server_close()
 

@@ -30,4 +30,3 @@ scripts/*.wav
 # Per-run output of scripts/verify.py -- a local verification record, not a repo artifact.
 verification.json
 TASKS.md
-TASKS.md
