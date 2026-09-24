@@ -249,6 +249,83 @@ public sealed class HavenCoreClient : IAsyncDisposable
         CancellationToken cancellationToken = default) =>
         RequestResultAsync("contexts.remove", new { context_id = contextId }, cancellationToken);
 
+    public Task<JsonElement> GetAutomationsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("automations.list", new { }, cancellationToken);
+
+    public Task<JsonElement> GetAutomationOptionsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("automations.options", new { }, cancellationToken);
+
+    public Task<JsonElement> CreateAutomationAsync(
+        string sourceText,
+        string timeOfDay,
+        IReadOnlyList<int> weekdays,
+        string targetDeviceId,
+        string capability,
+        string service,
+        string? interpretation = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "automations.create",
+            new
+            {
+                source_text = sourceText,
+                time_of_day = timeOfDay,
+                weekdays,
+                target_device_id = targetDeviceId,
+                capability,
+                service,
+                interpretation,
+            },
+            cancellationToken);
+
+    public Task<JsonElement> UpdateAutomationAsync(
+        string ruleId,
+        string sourceText,
+        string timeOfDay,
+        IReadOnlyList<int> weekdays,
+        string? interpretation = null,
+        string? justification = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "automations.update",
+            new
+            {
+                rule_id = ruleId,
+                source_text = sourceText,
+                time_of_day = timeOfDay,
+                weekdays,
+                interpretation,
+                justification,
+            },
+            cancellationToken);
+
+    public Task<JsonElement> SetAutomationEnabledAsync(
+        string ruleId,
+        bool enabled,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "automations.enable",
+            new { rule_id = ruleId, enabled },
+            cancellationToken);
+
+    public Task<JsonElement> ApproveAutomationAsync(
+        string ruleId,
+        string? justification = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "automations.approve",
+            new { rule_id = ruleId, justification },
+            cancellationToken);
+
+    public Task<JsonElement> RevokeAutomationAsync(
+        string ruleId,
+        string justification,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "automations.revoke",
+            new { rule_id = ruleId, justification },
+            cancellationToken);
+
     private async Task<JsonElement> RequestResultAsync(
         string method,
         object parameters,
