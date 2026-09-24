@@ -1088,7 +1088,9 @@ class SetupService:
             if self._knowledge_service is not None:
                 # The knowledge service compares against the previous
                 # resource row, so ingest happens before this scan's upsert.
-                self._knowledge_service.ingest_resource(record, reader=provider.read_text)
+                self._knowledge_service.ingest_resource(
+                    record, reader=provider.read_text, bytes_reader=provider.read_bytes
+                )
             self._resource_store.save(record)
         staled = self._resource_store.reconcile(
             provider_id=provider.provider_id,

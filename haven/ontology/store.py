@@ -213,5 +213,19 @@ class OntologyStore:
                 continue
         return tuple(assertions)
 
+    def remove(self, assertion_id: str) -> bool:
+        """Delete one assertion (relationship revocation); True if it existed."""
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                cursor = conn.execute(
+                    "DELETE FROM assertions WHERE assertion_id = ?", (assertion_id,)
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return cursor.rowcount > 0
+
 
 __all__ = ["OntologyStore", "assertion_from_dict", "assertion_to_dict"]

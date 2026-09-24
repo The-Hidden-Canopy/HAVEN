@@ -59,6 +59,17 @@ from ..search import HavenSearchService, SearchQuery
 from ..identity import LocalIdentityProvider, provision_identity
 from ..scopes.migration import migrate_household_first_installation
 from ..scopes.store import ScopeStore
+from ..application import ProjectService, TaskService
+from ..domains.projects import ProjectStore
+from ..domains.tasks import TaskStore
+from ..graph import Correlator, RelationshipAdmissionPolicy, RelationshipProjector, RelationshipService
+from ..sync import FolderSyncTransport, LocalSyncEngine
+from ..integrations.browser import BrowserHub, BrowserObservationProvider, domain_of
+from ..today import TodayService
+from ..integrations.computer.windows import WindowObservationProvider
+from .browser_actions import BrowserActionService
+from .comms_service import CommsService
+from .window_actions import WindowActionService
 
 HEARTBEAT_SECONDS = 15
 
@@ -202,6 +213,133 @@ class HavenWebServer(ThreadingHTTPServer):
             claims=self.claims,
             clock=scope_clock,
         )
+        # Projects + tasks (milestone D): scope-keyed life domains hosted by
+        # application services, projected into the resource/ontology
+        # substrate so search and relationships see them.
+        # Sync (milestone H): off by default; producers emit through the
+        # listener seam, appliers land pulled records of the allowed kinds.
+        self.sync_engine = LocalSyncEngine(data_dir=Path(resolved_data_dir), clock=scope_clock)
+
+        def _sync_listener(kind: str, record) -> None:
+            from ..domains.projects.store import project_to_dict
+            from ..domains.tasks.store import task_to_dict
+            from ..knowledge.store import claim_to_dict
+
+            codec = {"project": project_to_dict, "task": task_to_dict, "claim": claim_to_dict}.get(kind)
+            if codec is None:
+                return
+            payload = codec(record)
+            revision = int(payload.get("revision", 0))
+            self.sync_engine.record_mutation(
+                object_id=str(payload.get(f"{kind}_id") or payload.get("claim_id")),
+                kind=kind,
+                scope_id=str(payload.get("scope_id")),
+                revision=revision,
+                payload=payload,
+            )
+
+        self.projects_store = ProjectStore(Path(resolved_data_dir) / "projects.db")
+        self.tasks_store = TaskStore(Path(resolved_data_dir) / "tasks.db")
+        self.projects_service = ProjectService(
+            store=self.projects_store,
+            tasks=self.tasks_store,
+            resources=self.resources,
+            ontology=self.ontology,
+            clock=scope_clock,
+            mutation_listener=_sync_listener,
+        )
+        self.tasks_service = TaskService(
+            store=self.tasks_store,
+            projects=self.projects_store,
+            resources=self.resources,
+            ontology=self.ontology,
+            clock=scope_clock,
+            mutation_listener=_sync_listener,
+        )
+        self.knowledge.set_mutation_listener(_sync_listener)
+        self._register_sync_appliers()
+        # Application/window awareness (milestone E): observation-only
+        # provider over win32, projected into the personal scope; the one
+        # write-side capability (window focus) is governed separately.
+        self.windows_provider = WindowObservationProvider(
+            resource_store=self.resources,
+            scope_id=self.identity.personal_scope_id,
+            clock=scope_clock,
+        )
+        self.window_actions = WindowActionService(
+            director=self.director,
+            provider=self.windows_provider,
+            resource_store=self.resources,
+            ledger=self.action_ledger,
+            clock=scope_clock,
+        )
+        # Browser context (milestone F): connector seam + observation. The
+        # runtime boots with no browser connected; every browser capability
+        # reports explicit unavailability until a connector binds.
+        self.browser_hub = BrowserHub(clock=scope_clock)
+        self.browser_provider = BrowserObservationProvider(
+            hub=self.browser_hub,
+            resource_store=self.resources,
+            scope_id=self.identity.personal_scope_id,
+            clock=scope_clock,
+        )
+        self.browser_actions = BrowserActionService(
+            director=self.director,
+            provider=self.browser_provider,
+            resource_store=self.resources,
+            ledger=self.action_ledger,
+            clock=scope_clock,
+        )
+        # Relationship graph (milestone G): deterministic projections plus
+        # the learned-candidate pipeline, admitted only through policy.
+        def _rooms_payload() -> tuple[dict, ...]:
+            rows = []
+            for room in self.director.state().get("rooms", []):
+                rows.append(
+                    {
+                        "scope_id": self.identity.personal_scope_id,
+                        "room_id": room["id"],
+                        "devices": [device["id"] for device in room.get("devices", [])],
+                    }
+                )
+            return tuple(rows)
+
+        self.relationships = RelationshipService(
+            projector=RelationshipProjector(
+                resources=self.resources,
+                ontology=self.ontology,
+                tasks_store=self.tasks_store,
+                projects_store=self.projects_store,
+                claims_store=self.claims,
+                rooms_provider=_rooms_payload,
+                clock=scope_clock,
+            ),
+            correlator=Correlator(resources=self.resources, clock=scope_clock),
+            policy=RelationshipAdmissionPolicy(ontology=self.ontology, clock=scope_clock),
+            ontology=self.ontology,
+            state_path=Path(resolved_data_dir) / "graph.json",
+        )
+        self.today = TodayService(
+            director=self.director,
+            identity=self.identity,
+            tasks_store=self.tasks_store,
+            projects_store=self.projects_store,
+            comms=None,  # rebound below (comms is constructed after this block)
+            model_jobs=self.model_jobs,
+            dismiss_path=Path(resolved_data_dir) / "today.json",
+            clock=scope_clock,
+        )
+        self.comms = CommsService(
+            config_path=Path(resolved_data_dir) / "comms.json",
+            resource_store=self.resources,
+            ledger=self.action_ledger,
+            tasks_service=self.tasks_service,
+            identity=self.identity,
+            scope_id=self.identity.personal_scope_id,
+            clock=scope_clock,
+        )
+        # Today reads calendar commitments through the comms façade.
+        self.today._comms = self.comms  # noqa: SLF001 -- same-package composition seam
         self.setup = SetupService(
             store=self.setup_store,
             director=self.director,
@@ -250,6 +388,91 @@ class HavenWebServer(ThreadingHTTPServer):
         # model pair are available; a no-op (returns False) otherwise, so
         # boot never fails or blocks on missing hardware/models.
         self.director.start_voice()
+
+    def _register_sync_appliers(self) -> None:
+        from ..domains.projects.models import ProjectRecord
+        from ..domains.projects.store import project_from_dict
+        from ..domains.tasks.models import TaskRecord
+        from ..domains.tasks.store import task_from_dict
+
+        def _visible(scope_id: str) -> bool:
+            return scope_id in self.identity.visible_scope_ids()
+
+        def apply_project(payload: dict, event) -> dict:
+            if not _visible(str(payload.get("scope_id"))):
+                return {"ok": False, "error": "scope is not visible"}
+            try:
+                record = project_from_dict(payload)
+                record = ProjectRecord(
+                    project_id=record.project_id,
+                    scope_id=record.scope_id,
+                    title=record.title,
+                    description=record.description,
+                    status=record.status,
+                    created_at=record.created_at,
+                    updated_at=record.updated_at,
+                    owner_principal_id=record.owner_principal_id,
+                    parent_project_id=record.parent_project_id,
+                    source=record.source,
+                    revision=record.revision,
+                    archived_at=record.archived_at,
+                )
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            self.projects_store.save(record)
+            self.projects_service._project(record)
+            return {"ok": True}
+
+        def apply_task(payload: dict, event) -> dict:
+            if not _visible(str(payload.get("scope_id"))):
+                return {"ok": False, "error": "scope is not visible"}
+            try:
+                record = task_from_dict(payload)
+                record = TaskRecord(
+                    task_id=record.task_id,
+                    scope_id=record.scope_id,
+                    title=record.title,
+                    detail=record.detail,
+                    state=record.state,
+                    created_at=record.created_at,
+                    updated_at=record.updated_at,
+                    created_by=record.created_by,
+                    revision=record.revision,
+                    project_id=record.project_id,
+                    priority=record.priority,
+                    due_at=record.due_at,
+                    recurrence=record.recurrence,
+                    assignee_person_id=record.assignee_person_id,
+                    dependency_ids=record.dependency_ids,
+                    source_refs=record.source_refs,
+                    completed_at=record.completed_at,
+                    completion_evidence_refs=record.completion_evidence_refs,
+                    completion_evidence_source=record.completion_evidence_source,
+                )
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            self.tasks_store.save(record)
+            self.tasks_service._project(record)
+            self.tasks_service._recompute_dependents(
+                self.identity.visible_scope_ids(), record.task_id
+            )
+            return {"ok": True}
+
+        def apply_claim(payload: dict, event) -> dict:
+            if not _visible(str(payload.get("scope_id"))):
+                return {"ok": False, "error": "scope is not visible"}
+            from ..knowledge.store import claim_from_dict
+
+            try:
+                record = claim_from_dict(payload)
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            self.claims.save(record)
+            return {"ok": True}
+
+        self.sync_engine.register_applier("project", apply_project)
+        self.sync_engine.register_applier("task", apply_task)
+        self.sync_engine.register_applier("claim", apply_claim)
 
     def host_capabilities(self) -> dict:
         """Describe the native host surface available to the renderer.
@@ -779,6 +1002,516 @@ class HavenWebServer(ThreadingHTTPServer):
         def _system_backup_delete(params: dict) -> dict:
             return {"ok": True, "result": self.backups.delete(_system_backup_id(params))}
 
+        # -- projects & tasks ------------------------------------------------
+        # The adapter derives visible scopes from the authenticated
+        # principal's memberships and passes them into the services, which
+        # fail closed on anything outside. Mutations are revision-bound;
+        # validation lives in the services, never here.
+
+        def _authoring_scope() -> str:
+            return self.identity.personal_scope_id
+
+        def _tasks_parse_due(params: dict):
+            raw = params.get("due_at")
+            if raw is None:
+                return None, None
+            if not isinstance(raw, str) or not raw.strip():
+                return "due_at must be an ISO datetime string or null", None
+            try:
+                parsed = datetime.fromisoformat(raw.strip())
+            except ValueError:
+                return "due_at must be an ISO datetime string", None
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                return "due_at must be timezone-aware", None
+            return None, parsed
+
+        def _tasks_require_revision(params: dict) -> int | None:
+            revision = params.get("revision")
+            if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+                return None
+            return revision
+
+        def _projects_list(params: dict) -> dict:
+            status = params.get("status")
+            return self.projects_service.list(
+                self.identity.visible_scope_ids(),
+                status=status if isinstance(status, str) and status.strip() else None,
+            )
+
+        def _projects_get(params: dict) -> dict:
+            project_id = params.get("project_id")
+            if not isinstance(project_id, str) or not project_id.strip():
+                raise ValueError("a non-empty 'project_id' is required")
+            return self.projects_service.get(self.identity.visible_scope_ids(), project_id.strip())
+
+        def _projects_create(params: dict) -> dict:
+            title = params.get("title")
+            if not isinstance(title, str) or not title.strip():
+                raise ValueError("a non-empty 'title' is required")
+            description = params.get("description")
+            status = params.get("status")
+            parent = params.get("parent_project_id")
+            return self.projects_service.create(
+                self.identity.visible_scope_ids(),
+                scope_id=_authoring_scope(),
+                title=title,
+                description=description if isinstance(description, str) else "",
+                status=status.strip() if isinstance(status, str) and status.strip() else "active",
+                parent_project_id=parent.strip() if isinstance(parent, str) and parent.strip() else None,
+                owner_principal_id=self.identity.principal_id,
+            )
+
+        def _projects_update(params: dict) -> dict:
+            project_id = params.get("project_id")
+            if not isinstance(project_id, str) or not project_id.strip():
+                raise ValueError("a non-empty 'project_id' is required")
+            revision = _tasks_require_revision(params)
+            if revision is None:
+                raise ValueError("a non-negative integer 'revision' is required")
+            return self.projects_service.update(
+                self.identity.visible_scope_ids(),
+                project_id.strip(),
+                expected_revision=revision,
+                title=params.get("title") if isinstance(params.get("title"), str) else None,
+                description=params.get("description") if isinstance(params.get("description"), str) else None,
+                status=params.get("status") if isinstance(params.get("status"), str) else None,
+            )
+
+        def _projects_archive(params: dict) -> dict:
+            project_id = params.get("project_id")
+            if not isinstance(project_id, str) or not project_id.strip():
+                raise ValueError("a non-empty 'project_id' is required")
+            return self.projects_service.archive(self.identity.visible_scope_ids(), project_id.strip())
+
+        def _projects_attach(params: dict) -> dict:
+            project_id = params.get("project_id")
+            resource_id = params.get("resource_id")
+            if not isinstance(project_id, str) or not project_id.strip():
+                raise ValueError("a non-empty 'project_id' is required")
+            if not isinstance(resource_id, str) or not resource_id.strip():
+                raise ValueError("a non-empty 'resource_id' is required")
+            return self.projects_service.attach(
+                self.identity.visible_scope_ids(), project_id.strip(), resource_id.strip()
+            )
+
+        def _projects_detach(params: dict) -> dict:
+            project_id = params.get("project_id")
+            resource_id = params.get("resource_id")
+            if not isinstance(project_id, str) or not project_id.strip():
+                raise ValueError("a non-empty 'project_id' is required")
+            if not isinstance(resource_id, str) or not resource_id.strip():
+                raise ValueError("a non-empty 'resource_id' is required")
+            return self.projects_service.detach(
+                self.identity.visible_scope_ids(), project_id.strip(), resource_id.strip()
+            )
+
+        def _projects_attached(params: dict) -> dict:
+            project_id = params.get("project_id")
+            if not isinstance(project_id, str) or not project_id.strip():
+                raise ValueError("a non-empty 'project_id' is required")
+            return self.projects_service.attached_resources(
+                self.identity.visible_scope_ids(), project_id.strip()
+            )
+
+        def _tasks_list(params: dict) -> dict:
+            view = params.get("view")
+            return self.tasks_service.list(
+                self.identity.visible_scope_ids(),
+                view=view.strip() if isinstance(view, str) and view.strip() else "all",
+            )
+
+        def _tasks_get(params: dict) -> dict:
+            task_id = params.get("task_id")
+            if not isinstance(task_id, str) or not task_id.strip():
+                raise ValueError("a non-empty 'task_id' is required")
+            return self.tasks_service.get(self.identity.visible_scope_ids(), task_id.strip())
+
+        def _tasks_create(params: dict) -> dict:
+            title = params.get("title")
+            if not isinstance(title, str) or not title.strip():
+                raise ValueError("a non-empty 'title' is required")
+            due_error, due_at = _tasks_parse_due(params)
+            if due_error is not None:
+                raise ValueError(due_error)
+            dependencies = params.get("dependency_ids", ())
+            if not isinstance(dependencies, (list, tuple)) or any(
+                not isinstance(item, str) or not item.strip() for item in dependencies
+            ):
+                raise ValueError("dependency_ids must be a list of non-empty strings")
+            source_refs = params.get("source_refs", ())
+            if not isinstance(source_refs, (list, tuple)) or any(
+                not isinstance(item, str) or not item.strip() for item in source_refs
+            ):
+                raise ValueError("source_refs must be a list of non-empty strings")
+            project_id = params.get("project_id")
+            priority = params.get("priority")
+            state = params.get("state")
+            return self.tasks_service.create(
+                self.identity.visible_scope_ids(),
+                scope_id=_authoring_scope(),
+                title=title,
+                created_by=self.identity.principal_id,
+                detail=params.get("detail") if isinstance(params.get("detail"), str) else "",
+                project_id=project_id.strip() if isinstance(project_id, str) and project_id.strip() else None,
+                priority=priority.strip() if isinstance(priority, str) and priority.strip() else None,
+                due_at=due_at,
+                recurrence=params.get("recurrence") if isinstance(params.get("recurrence"), str) else None,
+                assignee_person_id=(
+                    params.get("assignee_person_id")
+                    if isinstance(params.get("assignee_person_id"), str)
+                    else None
+                ),
+                dependency_ids=tuple(item.strip() for item in dependencies),
+                source_refs=tuple(item.strip() for item in source_refs),
+                state=state.strip() if isinstance(state, str) and state.strip() else "open",
+            )
+
+        def _tasks_update(params: dict) -> dict:
+            task_id = params.get("task_id")
+            if not isinstance(task_id, str) or not task_id.strip():
+                raise ValueError("a non-empty 'task_id' is required")
+            revision = _tasks_require_revision(params)
+            if revision is None:
+                raise ValueError("a non-negative integer 'revision' is required")
+            due_error, due_at = _tasks_parse_due(params)
+            if due_error is not None:
+                raise ValueError(due_error)
+            return self.tasks_service.update(
+                self.identity.visible_scope_ids(),
+                task_id.strip(),
+                expected_revision=revision,
+                title=params.get("title") if isinstance(params.get("title"), str) else None,
+                detail=params.get("detail") if isinstance(params.get("detail"), str) else None,
+                state=params.get("state") if isinstance(params.get("state"), str) else None,
+                priority=params.get("priority") if isinstance(params.get("priority"), str) else None,
+                due_at=due_at,
+                assignee_person_id=(
+                    params.get("assignee_person_id")
+                    if isinstance(params.get("assignee_person_id"), str)
+                    else None
+                ),
+                project_id=params.get("project_id") if isinstance(params.get("project_id"), str) else None,
+            )
+
+        def _tasks_complete(params: dict) -> dict:
+            task_id = params.get("task_id")
+            if not isinstance(task_id, str) or not task_id.strip():
+                raise ValueError("a non-empty 'task_id' is required")
+            revision = _tasks_require_revision(params)
+            if revision is None:
+                raise ValueError("a non-negative integer 'revision' is required")
+            evidence_refs = params.get("evidence_refs", ())
+            if not isinstance(evidence_refs, (list, tuple)) or any(
+                not isinstance(item, str) or not item.strip() for item in evidence_refs
+            ):
+                raise ValueError("evidence_refs must be a list of non-empty strings")
+            evidence_source = params.get("evidence_source")
+            return self.tasks_service.complete(
+                self.identity.visible_scope_ids(),
+                task_id.strip(),
+                expected_revision=revision,
+                evidence_refs=tuple(item.strip() for item in evidence_refs),
+                evidence_source=(
+                    evidence_source.strip()
+                    if isinstance(evidence_source, str) and evidence_source.strip()
+                    else "user_declared"
+                ),
+            )
+
+        def _tasks_add_dependency(params: dict) -> dict:
+            task_id = params.get("task_id")
+            depends_on = params.get("depends_on_task_id")
+            if not isinstance(task_id, str) or not task_id.strip():
+                raise ValueError("a non-empty 'task_id' is required")
+            if not isinstance(depends_on, str) or not depends_on.strip():
+                raise ValueError("a non-empty 'depends_on_task_id' is required")
+            return self.tasks_service.add_dependency(
+                self.identity.visible_scope_ids(), task_id.strip(), depends_on.strip()
+            )
+
+        def _tasks_remove_dependency(params: dict) -> dict:
+            task_id = params.get("task_id")
+            depends_on = params.get("depends_on_task_id")
+            if not isinstance(task_id, str) or not task_id.strip():
+                raise ValueError("a non-empty 'task_id' is required")
+            if not isinstance(depends_on, str) or not depends_on.strip():
+                raise ValueError("a non-empty 'depends_on_task_id' is required")
+            return self.tasks_service.remove_dependency(
+                self.identity.visible_scope_ids(), task_id.strip(), depends_on.strip()
+            )
+
+        def _computer_apps(_params: dict) -> dict:
+            return {
+                "ok": True,
+                "apps": [
+                    {**row, "titles": row["titles"][:4]}
+                    for row in self.windows_provider.apps()
+                ],
+            }
+
+        def _computer_windows(_params: dict) -> dict:
+            windows = self.windows_provider.observe_and_project()
+            return {
+                "ok": True,
+                "windows": [
+                    {
+                        "resource_id": f"window:{snapshot.hwnd}",
+                        "hwnd": snapshot.hwnd,
+                        "title": snapshot.title,
+                        "process": snapshot.process_name,
+                    }
+                    for snapshot in windows
+                ],
+            }
+
+        def _computer_window_focus(params: dict) -> dict:
+            return self.window_actions.request_focus(
+                resource_id=params.get("resource_id"),
+                justification=params.get("justification"),
+            )
+
+        def _computer_activity(_params: dict) -> dict:
+            return {
+                "ok": True,
+                "observation": self.windows_provider.status(),
+                "events": list(self.windows_provider.activity()),
+            }
+
+        def _computer_observation_set(params: dict) -> dict:
+            enabled = params.get("enabled")
+            if not isinstance(enabled, bool):
+                raise ValueError("enabled must be a boolean")
+            return self.windows_provider.set_observation(enabled)
+
+        def _computer_observation_suppress(params: dict) -> dict:
+            suppressed = params.get("suppressed", True)
+            return self.windows_provider.set_suppressed(
+                app=params.get("app") if isinstance(params.get("app"), str) else "",
+                suppressed=bool(suppressed),
+            )
+
+
+        def _browser_tabs(_params: dict) -> dict:
+            tabs = self.browser_provider.observe_and_project()
+            return {
+                "ok": True,
+                "status": self.browser_provider.status(),
+                "tabs": [
+                    {
+                        "resource_id": f"browsertab:{tab.tab_id}",
+                        "tab_id": tab.tab_id,
+                        "browser": tab.browser,
+                        "title": tab.title,
+                        "url": tab.url,
+                        "domain": domain_of(tab.url),
+                        "last_active_at": tab.last_active_at.isoformat(),
+                        "loading": tab.loading,
+                    }
+                    for tab in tabs
+                ],
+            }
+
+        def _browser_focus(params: dict) -> dict:
+            return self.browser_actions.focus_tab(resource_id=params.get("resource_id"))
+
+        def _browser_open(params: dict) -> dict:
+            return self.browser_actions.open_url(
+                browser=params.get("browser"), url=params.get("url")
+            )
+
+        def _browser_close(params: dict) -> dict:
+            return self.browser_actions.close_tab(resource_id=params.get("resource_id"))
+
+        def _browser_close_confirm(params: dict) -> dict:
+            return self.browser_actions.confirm_close(request_id=params.get("request_id"))
+
+        def _browser_close_deny(params: dict) -> dict:
+            return self.browser_actions.deny_close(request_id=params.get("request_id"))
+
+        def _calendar_events(_params: dict) -> dict:
+            return self.comms.list_events()
+
+        def _calendar_sources_add(params: dict) -> dict:
+            return self.comms.add_calendar_source(
+                params.get("path") if isinstance(params.get("path"), str) else ""
+            )
+
+        def _calendar_sources_remove(params: dict) -> dict:
+            return self.comms.remove_calendar_source(
+                params.get("path") if isinstance(params.get("path"), str) else ""
+            )
+
+        def _calendar_event_attach(params: dict) -> dict:
+            project_id = params.get("project_id")
+            resource_id = params.get("resource_id")
+            if not isinstance(project_id, str) or not project_id.strip():
+                raise ValueError("a non-empty 'project_id' is required")
+            if not isinstance(resource_id, str) or not resource_id.strip():
+                raise ValueError("a non-empty 'resource_id' is required")
+            return self.projects_service.attach(
+                self.identity.visible_scope_ids(), project_id.strip(), resource_id.strip()
+            )
+
+        def _calendar_event_propose_task(params: dict) -> dict:
+            return self.comms.propose_task(
+                event_id=params.get("event_id"),
+                visible=self.identity.visible_scope_ids(),
+            )
+
+        def _comms_parse_dt(value, *, name: str):
+            if value is None:
+                return None, None
+            if not isinstance(value, str) or not value.strip():
+                return f"{name} must be an ISO datetime string or null", None
+            try:
+                parsed = datetime.fromisoformat(value.strip())
+            except ValueError:
+                return f"{name} must be an ISO datetime string", None
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                return f"{name} must be timezone-aware", None
+            return None, parsed
+
+        def _calendar_event_create(params: dict) -> dict:
+            start_error, start_at = _comms_parse_dt(params.get("start_at"), name="start_at")
+            if start_error is not None:
+                raise ValueError(start_error)
+            end_error, end_at = _comms_parse_dt(params.get("end_at"), name="end_at")
+            if end_error is not None:
+                raise ValueError(end_error)
+            attendees = params.get("attendees", [])
+            if not isinstance(attendees, list) or any(not isinstance(a, str) for a in attendees):
+                raise ValueError("attendees must be a list of strings")
+            return self.comms.create_event(
+                title=params.get("title"),
+                start_at=start_at,
+                end_at=end_at,
+                location=params.get("location") if isinstance(params.get("location"), str) else "",
+                attendees=attendees,
+            )
+
+        def _calendar_event_update(params: dict) -> dict:
+            changes: dict = {}
+            for key in ("title", "location"):
+                if isinstance(params.get(key), str):
+                    changes[key] = params[key]
+            for key in ("start_at", "end_at"):
+                if params.get(key) is not None:
+                    error, parsed = _comms_parse_dt(params.get(key), name=key)
+                    if error is not None:
+                        raise ValueError(error)
+                    changes[key] = parsed
+            if isinstance(params.get("attendees"), list):
+                changes["attendees"] = params["attendees"]
+            return self.comms.update_event(event_id=params.get("event_id"), **changes)
+
+        def _calendar_event_delete(params: dict) -> dict:
+            return self.comms.delete_event(event_id=params.get("event_id"))
+
+        def _calendar_event_confirm(params: dict) -> dict:
+            return self.comms.confirm(request_id=params.get("request_id"))
+
+        def _calendar_event_deny(params: dict) -> dict:
+            return self.comms.deny(request_id=params.get("request_id"))
+
+        def _email_status(_params: dict) -> dict:
+            return self.comms.email_status()
+
+        def _email_messages(_params: dict) -> dict:
+            return self.comms.list_messages()
+
+        def _email_maildir_set(params: dict) -> dict:
+            return self.comms.set_maildir(
+                params.get("path") if isinstance(params.get("path"), str) else None
+            )
+
+
+        def _relationships_candidates(_params: dict) -> dict:
+            return self.relationships.candidates(visible_scopes=self.identity.visible_scope_ids())
+
+        def _relationships_admit(params: dict) -> dict:
+            return self.relationships.admit(
+                candidate_id_value=params.get("candidate_id"),
+                visible_scopes=self.identity.visible_scope_ids(),
+            )
+
+        def _relationships_reject(params: dict) -> dict:
+            return self.relationships.reject(
+                candidate_id_value=params.get("candidate_id"),
+                visible_scopes=self.identity.visible_scope_ids(),
+            )
+
+        def _relationships_for(params: dict) -> dict:
+            resource_id = params.get("resource_id")
+            if not isinstance(resource_id, str) or not resource_id.strip():
+                raise ValueError("a non-empty 'resource_id' is required")
+            return self.relationships.edges_for(
+                resource_id.strip(), visible_scopes=self.identity.visible_scope_ids()
+            )
+
+        def _today_cards(_params: dict) -> dict:
+            return self.today.cards()
+
+        def _today_dismiss(params: dict) -> dict:
+            return self.today.dismiss(card_id=params.get("card_id"))
+
+
+        def _sync_status(_params: dict) -> dict:
+            return self.sync_engine.status()
+
+        def _sync_set(params: dict) -> dict:
+            enabled = params.get("enabled")
+            if not isinstance(enabled, bool):
+                raise ValueError("enabled must be a boolean")
+            return self.sync_engine.set_enabled(enabled)
+
+        def _sync_transport_set(params: dict) -> dict:
+            export_dir = params.get("export_dir")
+            import_dir = params.get("import_dir")
+            if not isinstance(export_dir, str) or not export_dir.strip():
+                raise ValueError("a non-empty 'export_dir' is required")
+            if not isinstance(import_dir, str) or not import_dir.strip():
+                raise ValueError("a non-empty 'import_dir' is required")
+            return self.sync_engine.set_transport(
+                FolderSyncTransport(
+                    export_dir=export_dir.strip(), import_dir=import_dir.strip()
+                )
+            )
+
+        def _sync_push(_params: dict) -> dict:
+            return self.sync_engine.push()
+
+        def _sync_pull(_params: dict) -> dict:
+            return self.sync_engine.pull()
+
+        def _sync_conflicts(_params: dict) -> dict:
+            return self.sync_engine.conflicts()
+
+        def _sync_resolve(params: dict) -> dict:
+            return self.sync_engine.resolve(
+                conflict_id=params.get("conflict_id"),
+                choice=params.get("choice"),
+                merge_fields=params.get("merge_fields")
+                if isinstance(params.get("merge_fields"), dict)
+                else None,
+            )
+
+        def _computer_files(_params: dict) -> dict:
+            visible = self.identity.visible_scope_ids()
+            rows = [
+                {
+                    "resource_id": record.resource_id,
+                    "title": record.title,
+                    "resource_type": record.resource_type,
+                    "locator": record.locator,
+                    "stale": record.stale,
+                    "scope_id": record.scope_id,
+                }
+                for scope_id in visible
+                for record in self.resources.list_by_scope(scope_id)
+                if record.resource_type == "file"
+            ]
+            return {"ok": True, "files": rows}
+
         def _computer_action(params: dict) -> dict:
             action = params.get("action")
             parameters = params.get("parameters", {})
@@ -974,6 +1707,60 @@ class HavenWebServer(ThreadingHTTPServer):
                 "system.service": lambda _params: {"ok": True, "service": self.service.status()},
                 "system.service.install": lambda _params: self.service.install(),
                 "system.service.uninstall": lambda _params: self.service.uninstall(),
+                "projects.list": _projects_list,
+                "projects.get": _projects_get,
+                "projects.create": _projects_create,
+                "projects.update": _projects_update,
+                "projects.archive": _projects_archive,
+                "projects.attach": _projects_attach,
+                "projects.detach": _projects_detach,
+                "projects.attached": _projects_attached,
+                "tasks.list": _tasks_list,
+                "tasks.get": _tasks_get,
+                "tasks.create": _tasks_create,
+                "tasks.update": _tasks_update,
+                "tasks.complete": _tasks_complete,
+                "tasks.add_dependency": _tasks_add_dependency,
+                "tasks.remove_dependency": _tasks_remove_dependency,
+                "computer.apps.list": _computer_apps,
+                "computer.windows.list": _computer_windows,
+                "computer.window.focus": _computer_window_focus,
+                "computer.activity.list": _computer_activity,
+                "computer.observation.set": _computer_observation_set,
+                "computer.observation.suppress": _computer_observation_suppress,
+                "computer.files.list": _computer_files,
+                "sync.status": _sync_status,
+                "sync.set": _sync_set,
+                "sync.transport.set": _sync_transport_set,
+                "sync.push": _sync_push,
+                "sync.pull": _sync_pull,
+                "sync.conflicts": _sync_conflicts,
+                "sync.resolve": _sync_resolve,
+                "relationships.candidates": _relationships_candidates,
+                "relationships.admit": _relationships_admit,
+                "relationships.reject": _relationships_reject,
+                "relationships.for": _relationships_for,
+                "today.cards": _today_cards,
+                "today.dismiss": _today_dismiss,
+                "browser.tabs.list": _browser_tabs,
+                "browser.tab.focus": _browser_focus,
+                "browser.tab.open": _browser_open,
+                "browser.tab.close": _browser_close,
+                "browser.tab.close.confirm": _browser_close_confirm,
+                "browser.tab.close.deny": _browser_close_deny,
+                "calendar.events.list": _calendar_events,
+                "calendar.sources.add": _calendar_sources_add,
+                "calendar.sources.remove": _calendar_sources_remove,
+                "calendar.event.attach": _calendar_event_attach,
+                "calendar.event.propose_task": _calendar_event_propose_task,
+                "calendar.event.create": _calendar_event_create,
+                "calendar.event.update": _calendar_event_update,
+                "calendar.event.delete": _calendar_event_delete,
+                "calendar.event.confirm": _calendar_event_confirm,
+                "calendar.event.deny": _calendar_event_deny,
+                "email.status": _email_status,
+                "email.messages.list": _email_messages,
+                "email.maildir.set": _email_maildir_set,
             }
         )
 
@@ -1043,6 +1830,34 @@ class HavenWebServer(ThreadingHTTPServer):
             scope_store=self.scope_store,
             clock=self._director_clock or (lambda: datetime.now(timezone.utc)),
         )
+        self.projects_store = ProjectStore(data_dir / "projects.db")
+        self.tasks_store = TaskStore(data_dir / "tasks.db")
+        self.projects_service = ProjectService(
+            store=self.projects_store,
+            tasks=self.tasks_store,
+            resources=self.resources,
+            ontology=self.ontology,
+            clock=self._director_clock or (lambda: datetime.now(timezone.utc)),
+        )
+        self.tasks_service = TaskService(
+            store=self.tasks_store,
+            projects=self.projects_store,
+            resources=self.resources,
+            ontology=self.ontology,
+            clock=self._director_clock or (lambda: datetime.now(timezone.utc)),
+        )
+        self.windows_provider = WindowObservationProvider(
+            resource_store=self.resources,
+            scope_id=self.identity.personal_scope_id,
+            clock=self._director_clock or (lambda: datetime.now(timezone.utc)),
+        )
+        self.window_actions.set_director(new)
+        self.window_actions.set_resource_store(self.resources)
+        self.window_actions.set_ledger(self.action_ledger)
+        self.browser_actions.set_director(new)
+        self.browser_actions.set_resource_store(self.resources)
+        self.browser_actions.set_ledger(self.action_ledger)
+        self.today.set_director(new)
         # These objects hold the installation root themselves; reconstruct
         # them too, otherwise a data-dir move would rebind the stores while
         # backup/service actions continued operating on the old directory.

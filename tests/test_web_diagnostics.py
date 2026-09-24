@@ -283,6 +283,8 @@ def test_backup_lifecycle_create_list_restore_delete() -> None:
                 "action_ledger.db",
                 "scopes.db",
                 "identity.json",
+                "projects.db",
+                "tasks.db",
             }
 
             # Era two: voice off.

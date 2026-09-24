@@ -12,16 +12,33 @@ public sealed partial class MainWindow : Window
 {
     private HavenCoreClient? _client;
     private string? _selectedClaimId;
+    private string _currentTag = "today";
 
     public MainWindow()
     {
         InitializeComponent();
+        // The shell draws its own title bar: system caption buttons stay,
+        // everything else is HAVEN's canvas (mockup 3's seamless chrome).
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(DragStrip);
+        var titleBar = AppWindow.TitleBar;
+        titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
+        titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+        titleBar.ButtonHoverBackgroundColor = Microsoft.UI.ColorHelper.FromArgb(0x33, 0xFF, 0xFF, 0xFF);
+        titleBar.ButtonForegroundColor = Microsoft.UI.Colors.White;
         UpdateLogo();
         _modelsPollTimer.Tick += OnModelsPollTick;
         RootGrid().ActualThemeChanged += (_, _) => UpdateLogo();
         RootGrid().Loaded += OnLoaded;
         SelectHomeTab("rooms");
         SelectModelsTab("local");
+        SelectNavigation("today");
+        // Debug/screenshot affordance: open a specific page at launch.
+        var startPage = Environment.GetEnvironmentVariable("HAVEN_START_PAGE");
+        if (!string.IsNullOrWhiteSpace(startPage))
+        {
+            SelectNavigation(startPage.Trim());
+        }
         var searchAccelerator = new KeyboardAccelerator
         {
             Key = VirtualKey.K,
@@ -35,13 +52,27 @@ public sealed partial class MainWindow : Window
 
     private void UpdateLogo()
     {
-        LogoImage.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(
+        var source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(
             new Uri(RootGrid().ActualTheme == ElementTheme.Dark
-                ? "ms-appx:///Assets/haven-logo-dark.png"
-                : "ms-appx:///Assets/haven-logo-light.png"));
+                ? "ms-appx:///Assets/haven-logo-light.png"
+                : "ms-appx:///Assets/haven-logo-dark.png"));
+        LogoImage.Source = source;
+        SplashLogo.Source = source;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs args)
+    {
+        try
+        {
+            await ConnectAsync();
+        }
+        finally
+        {
+            SplashOverlay.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private async Task ConnectAsync()
     {
         var pipeName = CommandLineValue("--pipe-name") ?? Environment.GetEnvironmentVariable("HAVEN_IPC_PIPE");
         var token = await ResolveAuthTokenAsync();
@@ -58,7 +89,7 @@ public sealed partial class MainWindow : Window
             await client.ConnectAsync();
             _client = client;
             ConnectionText.Text = "Connected";
-            await LoadTodayAsync();
+            ShowPage(_currentTag);
             await EnsureSetupAsync();
         }
         catch (Exception ex)
@@ -462,7 +493,6 @@ public sealed partial class MainWindow : Window
         var text = ComposerInput.Text.Trim();
         _composerBusy = true;
         ComposerSendButton.IsEnabled = false;
-        ComposerSendContent.Visibility = Visibility.Collapsed;
         ComposerThinking.Visibility = Visibility.Visible;
         ComposerStatus.Text = "";
         try
@@ -481,7 +511,6 @@ public sealed partial class MainWindow : Window
             // request ended (spec 12).
             _composerBusy = false;
             ComposerSendButton.IsEnabled = true;
-            ComposerSendContent.Visibility = Visibility.Visible;
             ComposerThinking.Visibility = Visibility.Collapsed;
         }
     }
@@ -586,18 +615,30 @@ public sealed partial class MainWindow : Window
         return (await reader.ReadLineAsync())?.Trim();
     }
 
-    private void OnNavigationChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
+    private void OnNavItemClicked(object sender, RoutedEventArgs args)
     {
-        var tag = (args.SelectedItem as NavigationViewItem)?.Tag?.ToString() ?? "today";
-        ShowPage(tag);
+        if (sender is Button button && button.Tag is string tag)
+        {
+            SelectNavigation(tag);
+        }
     }
 
     private void SelectNavigation(string tag)
     {
-        var item = NavView.MenuItems.OfType<NavigationViewItem>().FirstOrDefault(entry => entry.Tag?.ToString() == tag);
-        if (item is not null)
+        _currentTag = tag;
+        // Rail selected state: filled blue rounded pill (spec 08).
+        foreach (var button in NavItems.Children.OfType<Button>())
         {
-            NavView.SelectedItem = item;
+            var selected = button.Tag?.ToString() == tag;
+            button.Background = selected
+                ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenAccentBrush"]
+                : new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            button.Foreground = selected
+                ? new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.White)
+                : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenMutedTextBrush"];
+            button.FontWeight = selected
+                ? Microsoft.UI.Text.FontWeights.SemiBold
+                : Microsoft.UI.Text.FontWeights.Normal;
         }
         ShowPage(tag);
     }
@@ -625,8 +666,8 @@ public sealed partial class MainWindow : Window
             "memory" => ("Memory", "What HAVEN knows, where it came from, and how certain it is."),
             "computer" => ("Computer", "Your files, applications, windows and activity."),
             "communications" => ("Communications", "Email, messages and threads with their context."),
-            "home" => ("Home", "Rooms, devices, automations and contexts."),
-            "models" => ("Models", "Local, downloaded and external intelligence."),
+            "home" => ("Home", "Rooms, devices, automations and contexts. Rooms are yours even without a smart-home provider."),
+            "models" => ("Models", "Local, downloaded and external intelligence. HAVEN runs on any mix of them."),
             "settings" => ("Settings", "Control boundaries: startup, storage, privacy, connections, about."),
             _ => ("HAVEN", ""),
         };
@@ -650,8 +691,24 @@ public sealed partial class MainWindow : Window
                 PeopleStatusText.Text = "Loading…";
                 _ = LoadPeopleAsync();
                 break;
+            case "projects":
+                ProjectsStatusText.Text = "Loading…";
+                _ = LoadProjectsAsync();
+                break;
+            case "tasks":
+                TasksStatusText.Text = "Loading…";
+                _ = LoadTasksAsync();
+                break;
             case "memory":
                 _ = LoadMemoryAsync();
+                break;
+            case "computer":
+                ComputerStatusText.Text = "Loading…";
+                _ = LoadComputerTabAsync();
+                break;
+            case "communications":
+                CommsStatusText.Text = "Loading…";
+                _ = LoadCommsTabAsync();
                 break;
             case "home":
                 HomeStatusText.Text = "Loading…";
@@ -694,7 +751,185 @@ public sealed partial class MainWindow : Window
         {
             TodayStatus.Text = $"Could not load today's summary: {ex.Message}";
         }
+        await LoadTodayCardsAsync();
     }
+
+    // -- today cards (spec page 25) ------------------------------------------------
+
+    private async Task LoadTodayCardsAsync()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.GetTodayCardsAsync();
+            RenderTodayCards(result.GetProperty("cards"));
+        }
+        catch (Exception ex)
+        {
+            TodayCardsHost.Children.Clear();
+            TodayCardsHost.Children.Add(new TextBlock
+            {
+                Text = $"Could not load Today: {ex.Message}",
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenDangerBrush"],
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+    }
+
+    private void RenderTodayCards(JsonElement cards)
+    {
+        TodayCardsHost.Children.Clear();
+        var rows = Enumerate(cards).ToList();
+        if (rows.Count == 0)
+        {
+            TodayCardsHost.Children.Add(new Border
+            {
+                Style = (Style)Application.Current.Resources["HavenCardStyle"],
+                Child = new TextBlock
+                {
+                    Text = "Nothing needs you right now. Tasks with due dates, pending decisions, and upcoming commitments will appear here.",
+                    TextWrapping = TextWrapping.Wrap,
+                    Style = (Style)Application.Current.Resources["HavenBodyTextStyle"],
+                },
+            });
+            return;
+        }
+
+        var focus = rows[0];
+        var rest = rows.Skip(1).ToList();
+        TodayCardsHost.Children.Add(MakeTodaySection("Focus", new List<JsonElement> { focus }, focusStyle: true));
+        foreach (var (title, group) in new[]
+        {
+            ("Decisions", "authority"),
+            ("Upcoming", "deadline"),
+            ("Commitments", "commitment"),
+            ("Suggestions", "suggestion"),
+        })
+        {
+            var sectionCards = rest.Where(card => GetString(card, "group") == group).ToList();
+            if (sectionCards.Count > 0)
+            {
+                TodayCardsHost.Children.Add(MakeTodaySection(title, sectionCards));
+            }
+        }
+    }
+
+    private Border MakeTodaySection(string title, List<JsonElement> cards, bool focusStyle = false)
+    {
+        var section = new StackPanel { Spacing = 8 };
+        section.Children.Add(new TextBlock
+        {
+            Text = title,
+            Style = (Style)Application.Current.Resources["HavenSectionTextStyle"],
+        });
+        foreach (var card in cards)
+        {
+            section.Children.Add(MakeTodayCard(card, focusStyle));
+        }
+        return new Border
+        {
+            Style = (Style)Application.Current.Resources["HavenCardStyle"],
+            Child = section,
+        };
+    }
+
+    private Border MakeTodayCard(JsonElement card, bool focusStyle)
+    {
+        var suggestion = card.TryGetProperty("suggestion", out var s) && s.GetBoolean();
+        var group = GetString(card, "group") ?? "commitment";
+        var cardId = GetString(card, "card_id") ?? "";
+        var route = GetString(card, "next_action", "route") ?? "today";
+
+        var layout = new StackPanel { Spacing = 6 };
+        var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        head.Children.Add(new TextBlock
+        {
+            Text = GetString(card, "title") ?? "Untitled",
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            FontSize = focusStyle ? 16 : 13.5,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        var (chipTint, chipForeground, chipLabel) = group switch
+        {
+            "authority" => ("HavenOrangeTintBrush", "HavenOrangeBrush", "Needs your decision"),
+            "deadline" => ("HavenDangerTintBrush", "HavenDangerBrush", GetString(card, "why_now") ?? "Deadline"),
+            "suggestion" => ("HavenVioletTintBrush", "HavenVioletBrush", "Suggestion"),
+            _ => ("HavenAccentTintBrush", "HavenAccentBrush", "Why now"),
+        };
+        head.Children.Add(MakeChip(chipLabel, chipTint, chipForeground));
+        layout.Children.Add(head);
+
+        if (group is not ("deadline"))
+        {
+            layout.Children.Add(new TextBlock
+            {
+                Text = GetString(card, "why_now") ?? "",
+                Style = (Style)Application.Current.Resources["HavenBodyTextStyle"],
+                TextWrapping = TextWrapping.Wrap,
+                Opacity = 0.85,
+            });
+        }
+        var evidenceCount = Enumerate(card, "evidence_refs").Count();
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var open = new Button
+        {
+            Content = GetString(card, "next_action", "label") ?? "Open",
+            Style = (Style)Application.Current.Resources[suggestion ? "HavenSecondaryButtonStyle" : "HavenPrimaryButtonStyle"],
+        };
+        open.Click += (_, _) => SelectNavigation(route);
+        actions.Children.Add(open);
+        if (suggestion)
+        {
+            var dismiss = new Button
+            {
+                Content = "Dismiss",
+                Style = (Style)Application.Current.Resources["HavenQuietButtonStyle"],
+            };
+            dismiss.Click += async (_, _) =>
+            {
+                if (_client is null || string.IsNullOrWhiteSpace(cardId))
+                {
+                    return;
+                }
+                try
+                {
+                    await _client.DismissTodayCardAsync(cardId);
+                    await LoadTodayCardsAsync();
+                }
+                catch (Exception ex)
+                {
+                    TodayStatus.Text = ex.Message;
+                }
+            };
+            actions.Children.Add(dismiss);
+        }
+        if (evidenceCount > 0)
+        {
+            actions.Children.Add(new TextBlock
+            {
+                Text = $"{evidenceCount} evidence ref(s)",
+                VerticalAlignment = VerticalAlignment.Center,
+                Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+            });
+        }
+        layout.Children.Add(actions);
+        if (suggestion)
+        {
+            layout.Opacity = 0.9;
+        }
+        return new Border
+        {
+            Style = (Style)Application.Current.Resources["HavenCardStyle"],
+            BorderBrush = suggestion
+                ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenVioletTintBrush"]
+                : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenStrokeBrush"],
+            Child = layout,
+        };
+    }
+
 
     private void OnTodayPendingClicked(object sender, RoutedEventArgs args)
     {
@@ -733,6 +968,1311 @@ public sealed partial class MainWindow : Window
     private void OnLensAskClicked(object sender, RoutedEventArgs args)
     {
         ComposerInput.Focus(FocusState.Programmatic);
+    }
+
+    // -- projects & tasks --------------------------------------------------------
+
+    private string _projectFilter = "";
+    private string _taskView = "today";
+    private JsonElement _projects = default;
+    private string? _openProjectId;
+
+    private async Task LoadProjectsAsync()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.GetProjectsAsync(
+                string.IsNullOrWhiteSpace(_projectFilter) ? null : _projectFilter);
+            _projects = result.GetProperty("projects").Clone();
+            ProjectsErrorText.Text = "";
+            ProjectsStatusText.Text = "";
+            RenderProjectGallery();
+            if (_openProjectId is not null)
+            {
+                await RenderProjectDetailAsync(_openProjectId);
+            }
+        }
+        catch (Exception ex)
+        {
+            ProjectsStatusText.Text = "";
+            ProjectsErrorText.Text = $"Could not load projects: {ex.Message} Use Refresh to retry.";
+        }
+    }
+
+    private void RenderProjectGallery()
+    {
+        var selected = _openProjectId;
+        ProjectGallery.Items.Clear();
+        foreach (var project in Enumerate(_projects))
+        {
+            var projectId = GetString(project, "project_id") ?? "";
+            var card = new StackPanel { Spacing = 6, MinWidth = 220 };
+            var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            head.Children.Add(new TextBlock
+            {
+                Text = GetString(project, "title") ?? projectId,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            });
+            head.Children.Add(ProjectStatusChip(GetString(project, "status") ?? "active"));
+            card.Children.Add(head);
+            var description = GetString(project, "description");
+            if (!string.IsNullOrWhiteSpace(description))
+            {
+                card.Children.Add(new TextBlock
+                {
+                    Text = description,
+                    Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                    TextWrapping = TextWrapping.Wrap,
+                    MaxWidth = 260,
+                });
+            }
+            var done = GetInt(project, "tasks_done");
+            var total = GetInt(project, "tasks_total");
+            if (total > 0)
+            {
+                card.Children.Add(new ProgressBar
+                {
+                    Value = total == 0 ? 0 : done * 100.0 / total,
+                    Maximum = 100,
+                    MinHeight = 4,
+                    MaxHeight = 4,
+                });
+            }
+            var counts = new List<string>
+            {
+                $"{GetInt(project, "files_count")} files",
+                total == 1 ? "1 task" : $"{total} tasks",
+            };
+            if (GetInt(project, "tasks_blocked") > 0)
+            {
+                counts.Add($"{GetInt(project, "tasks_blocked")} blocked");
+            }
+            card.Children.Add(new TextBlock
+            {
+                Text = string.Join(" · ", counts),
+                Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+            });
+            ProjectGallery.Items.Add(new ListViewItem
+            {
+                Tag = projectId,
+                IsSelected = projectId == selected,
+                Content = new Border
+                {
+                    Style = (Style)Application.Current.Resources["HavenCardStyle"],
+                    MinWidth = 240,
+                    Child = card,
+                },
+            });
+        }
+        if (ProjectGallery.Items.Count == 0)
+        {
+            ProjectGallery.Items.Add(new TextBlock
+            {
+                Text = "No projects here yet. New project starts one.",
+                Opacity = 0.72,
+            });
+        }
+    }
+
+    private static Border ProjectStatusChip(string status)
+    {
+        var (tint, foreground, label) = status switch
+        {
+            "completed" => ("HavenSuccessTintBrush", "HavenSuccessBrush", "Completed"),
+            "planning" => ("HavenVioletTintBrush", "HavenVioletBrush", "Planning"),
+            "on_hold" => ("HavenWarningTintBrush", "HavenWarningBrush", "On hold"),
+            "archived" => ("HavenStrokeBrush", "HavenMutedTextBrush", "Archived"),
+            _ => ("HavenAccentTintBrush", "HavenAccentBrush", "Active"),
+        };
+        return MakeChip(label, tint, foreground);
+    }
+
+    private void OnProjectFilterClicked(object sender, RoutedEventArgs args)
+    {
+        if (sender is Button button)
+        {
+            _projectFilter = button.Tag?.ToString() ?? "";
+            foreach (var item in ((StackPanel)button.Parent).Children.OfType<Button>())
+            {
+                item.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                    item == button ? "HavenAccentBrush" : "HavenMutedTextBrush"];
+                item.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                    item == button ? "HavenAccentBrush" : "HavenStrokeBrush"];
+            }
+            _ = LoadProjectsAsync();
+        }
+    }
+
+    private async void OnProjectSelected(object sender, SelectionChangedEventArgs args)
+    {
+        if (ProjectGallery.SelectedItem is ListViewItem item && item.Tag is string projectId)
+        {
+            _openProjectId = projectId;
+            await RenderProjectDetailAsync(projectId);
+        }
+    }
+
+    private void OnCloseProjectDetailClicked(object sender, RoutedEventArgs args)
+    {
+        _openProjectId = null;
+        ProjectDetailHost.Visibility = Visibility.Collapsed;
+        ProjectGallery.Visibility = Visibility.Visible;
+    }
+
+    private async Task RenderProjectDetailAsync(string projectId)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.GetProjectAsync(projectId);
+            if (result.ValueKind == JsonValueKind.Object
+                && result.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                ProjectsErrorText.Text = result.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+                    ? error.GetString() ?? "HAVEN Core refused the request."
+                    : "HAVEN Core refused the request.";
+                return;
+            }
+            var project = result.GetProperty("project");
+            ProjectGallery.Visibility = Visibility.Collapsed;
+            ProjectDetailHost.Visibility = Visibility.Visible;
+            ProjectDetailHost.Children.Clear();
+
+            var head = new StackPanel { Spacing = 4 };
+            var back = new Button
+            {
+                Content = "← All projects",
+                Style = (Style)Application.Current.Resources["HavenQuietButtonStyle"],
+                HorizontalAlignment = HorizontalAlignment.Left,
+            };
+            back.Click += OnCloseProjectDetailClicked;
+            head.Children.Add(back);
+            var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+            titleRow.Children.Add(new TextBlock
+            {
+                Text = GetString(project, "title") ?? projectId,
+                FontSize = 20,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            });
+            titleRow.Children.Add(ProjectStatusChip(GetString(project, "status") ?? "active"));
+            head.Children.Add(titleRow);
+            var description = GetString(project, "description");
+            if (!string.IsNullOrWhiteSpace(description))
+            {
+                head.Children.Add(new TextBlock
+                {
+                    Text = description,
+                    Style = (Style)Application.Current.Resources["HavenBodyTextStyle"],
+                    TextWrapping = TextWrapping.Wrap,
+                });
+            }
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            var addTask = new Button
+            {
+                Content = "Add task",
+                Style = (Style)Application.Current.Resources["HavenPrimaryButtonStyle"],
+            };
+            addTask.Click += async (_, _) => await EditTaskDialogAsync(default, projectId);
+            var edit = new Button
+            {
+                Content = "Edit",
+                Style = (Style)Application.Current.Resources["HavenQuietButtonStyle"],
+            };
+            edit.Click += async (_, _) => await EditProjectDialogAsync(project);
+            var archive = new Button
+            {
+                Content = "Archive",
+                Style = (Style)Application.Current.Resources["HavenDangerButtonStyle"],
+            };
+            archive.Click += async (_, _) => await ArchiveProjectAsync(project);
+            actions.Children.Add(addTask);
+            actions.Children.Add(edit);
+            actions.Children.Add(archive);
+            head.Children.Add(actions);
+            ProjectDetailHost.Children.Add(head);
+
+            var tabs = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+            foreach (var (label, key) in new[] { ("Tasks", "tasks"), ("Files", "files"), ("People", "people") })
+            {
+                var tab = new Button
+                {
+                    Content = label,
+                    Tag = key,
+                    Style = (Style)Application.Current.Resources["HavenTabButtonStyle"],
+                };
+                tab.Click += async (_, _) => await RenderProjectTabAsync(project, key);
+                tabs.Children.Add(tab);
+            }
+            ProjectDetailHost.Children.Add(tabs);
+
+            var body = new StackPanel { Spacing = 8 };
+            ProjectDetailHost.Children.Add(body);
+            await RenderProjectTabAsync(project, "tasks");
+        }
+        catch (Exception ex)
+        {
+            ProjectsErrorText.Text = ex.Message;
+        }
+    }
+
+    private async Task RenderProjectTabAsync(JsonElement project, string tab)
+    {
+        var body = ProjectDetailHost.Children.OfType<StackPanel>().LastOrDefault();
+        if (body is null || _client is null)
+        {
+            return;
+        }
+        body.Children.Clear();
+        var projectId = GetString(project, "project_id") ?? "";
+        if (tab == "tasks")
+        {
+            var tasks = await _client.GetTasksAsync("all");
+            foreach (var task in Enumerate(tasks.GetProperty("tasks")))
+            {
+                if (GetString(task, "project_id") == projectId)
+                {
+                    body.Children.Add(MakeTaskRow(task));
+                }
+            }
+            if (body.Children.Count == 0)
+            {
+                body.Children.Add(new TextBlock { Text = "No tasks in this project yet.", Opacity = 0.72 });
+            }
+        }
+        else if (tab == "files")
+        {
+            var attached = await _client.GetProjectResourcesAsync(projectId);
+            foreach (var resource in Enumerate(attached.GetProperty("resources")))
+            {
+                var resourceId = GetString(resource, "resource_id") ?? "";
+                var resourcePanel = new StackPanel { Spacing = 2 };
+                var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                row.Children.Add(new TextBlock
+                {
+                    Text = GetString(resource, "title") ?? resourceId,
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+                var detach = new Button { Content = "Detach", VerticalAlignment = VerticalAlignment.Center };
+                detach.Click += async (_, _) =>
+                {
+                    await RunProjectsMutationAsync(() => _client!.DetachProjectResourceAsync(projectId, resourceId));
+                    await RenderProjectDetailAsync(projectId);
+                };
+                row.Children.Add(detach);
+                resourcePanel.Children.Add(row);
+                resourcePanel.Children.Add(new TextBlock
+                {
+                    Text = $"{GetString(resource, "resource_type")} · {resourceId}",
+                    Style = (Style)Application.Current.Resources["HavenMonoTextStyle"],
+                });
+                body.Children.Add(WrapCard(resourcePanel));
+            }
+            var attachBox = new TextBox { PlaceholderText = "Resource id to attach, e.g. file:proposal.docx", MinWidth = 320 };
+            var attach = new Button { Content = "Attach" };
+            attach.Click += async (_, _) =>
+            {
+                if (string.IsNullOrWhiteSpace(attachBox.Text))
+                {
+                    return;
+                }
+                await RunProjectsMutationAsync(() => _client!.AttachProjectResourceAsync(projectId, attachBox.Text.Trim()));
+                await RenderProjectDetailAsync(projectId);
+            };
+            var attachRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            attachRow.Children.Add(attachBox);
+            attachRow.Children.Add(attach);
+            body.Children.Add(attachRow);
+        }
+        else
+        {
+            var people = Enumerate(project, "people_ids").Select(id => id.GetString()).Where(id => id is not null).ToList();
+            if (people.Count == 0)
+            {
+                body.Children.Add(new TextBlock
+                {
+                    Text = "Assign tasks to people (edit a task) and they appear here.",
+                    Opacity = 0.72,
+                });
+            }
+            foreach (var personId in people)
+            {
+                body.Children.Add(MakeChip(personId!, "HavenAccentTintBrush", "HavenAccentBrush"));
+            }
+        }
+    }
+
+    private async Task RunProjectsMutationAsync(Func<Task<JsonElement>> operation)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var envelope = await operation();
+            if (envelope.ValueKind == JsonValueKind.Object
+                && envelope.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                var message = envelope.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+                    ? error.GetString()
+                    : "HAVEN Core refused the change.";
+                ProjectsErrorText.Text = message ?? "HAVEN Core refused the change.";
+                TasksErrorText.Text = message ?? "HAVEN Core refused the change.";
+                return;
+            }
+            ProjectsErrorText.Text = "";
+            TasksErrorText.Text = "";
+            await LoadProjectsAsync();
+            await LoadTasksAsync();
+        }
+        catch (Exception ex)
+        {
+            ProjectsErrorText.Text = ex.Message;
+            TasksErrorText.Text = ex.Message;
+        }
+    }
+
+    private async void OnNewProjectClicked(object sender, RoutedEventArgs args)
+    {
+        await EditProjectDialogAsync(default);
+    }
+
+    private async Task EditProjectDialogAsync(JsonElement project)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        var editing = project.ValueKind == JsonValueKind.Object;
+        var projectId = editing ? GetString(project, "project_id") ?? "" : "";
+        var revision = editing ? (int)GetInt(project, "revision") : 0;
+        var title = new TextBox { Text = editing ? GetString(project, "title") ?? "" : "", PlaceholderText = "Project title", MinWidth = 320 };
+        var description = new TextBox
+        {
+            Text = editing ? GetString(project, "description") ?? "" : "",
+            PlaceholderText = "What does done look like?",
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            MinHeight = 72,
+        };
+        var status = new ComboBox { MinWidth = 200 };
+        foreach (var option in new[] { "active", "planning", "on_hold", "completed" })
+        {
+            status.Items.Add(Sentence(option));
+        }
+        var statusValues = new[] { "active", "planning", "on_hold", "completed" };
+        status.SelectedIndex = editing
+            ? Math.Max(0, Array.IndexOf(statusValues, GetString(project, "status") ?? "active"))
+            : 0;
+        var fields = new StackPanel { Spacing = 8, MinWidth = 360 };
+        fields.Children.Add(new TextBlock { Text = "Title" });
+        fields.Children.Add(title);
+        fields.Children.Add(new TextBlock { Text = "Goal" });
+        fields.Children.Add(description);
+        fields.Children.Add(new TextBlock { Text = "Status" });
+        fields.Children.Add(status);
+        var dialog = new ContentDialog
+        {
+            Title = editing ? "Edit project" : "New project",
+            Content = fields,
+            PrimaryButtonText = editing ? "Save" : "Create",
+            CloseButtonText = "Cancel",
+            XamlRoot = RootGrid().XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary || string.IsNullOrWhiteSpace(title.Text))
+        {
+            return;
+        }
+        var statusValue = statusValues[Math.Max(0, status.SelectedIndex)];
+        if (editing)
+        {
+            await RunProjectsMutationAsync(() => _client.UpdateProjectAsync(
+                projectId, revision, title.Text.Trim(), description.Text.Trim(), statusValue));
+        }
+        else
+        {
+            await RunProjectsMutationAsync(() => _client.CreateProjectAsync(
+                title.Text.Trim(), description.Text.Trim(), statusValue));
+        }
+    }
+
+    private async Task ArchiveProjectAsync(JsonElement project)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        var title = GetString(project, "title") ?? "this project";
+        var dialog = new ContentDialog
+        {
+            Title = $"Archive {title}?",
+            Content = new TextBlock
+            {
+                Text = "The project is tombstoned and leaves the default list. Its tasks and attached resources stay exactly where they are.",
+                TextWrapping = TextWrapping.Wrap,
+            },
+            PrimaryButtonText = "Archive",
+            CloseButtonText = "Cancel",
+            PrimaryButtonStyle = (Style)Application.Current.Resources["HavenDangerButtonStyle"],
+            XamlRoot = RootGrid().XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+        _openProjectId = null;
+        ProjectDetailHost.Visibility = Visibility.Collapsed;
+        ProjectGallery.Visibility = Visibility.Visible;
+        await RunProjectsMutationAsync(() => _client.ArchiveProjectAsync(GetString(project, "project_id") ?? ""));
+    }
+
+    // -- tasks -------------------------------------------------------------------
+
+    private async Task LoadTasksAsync()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.GetTasksAsync(_taskView);
+            TasksErrorText.Text = "";
+            TasksStatusText.Text = "";
+            RenderTasks(result.GetProperty("tasks"));
+        }
+        catch (Exception ex)
+        {
+            TasksStatusText.Text = "";
+            TasksErrorText.Text = $"Could not load tasks: {ex.Message} Use Refresh to retry.";
+        }
+    }
+
+    private void OnTaskViewClicked(object sender, RoutedEventArgs args)
+    {
+        if (sender is Button button && button.Tag is string view)
+        {
+            _taskView = view;
+            foreach (var item in ((StackPanel)button.Parent).Children.OfType<Button>())
+            {
+                item.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                    item == button ? "HavenAccentBrush" : "HavenMutedTextBrush"];
+                item.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                    item == button ? "HavenAccentBrush" : "HavenStrokeBrush"];
+            }
+            _ = LoadTasksAsync();
+        }
+    }
+
+    private void RenderTasks(JsonElement tasks)
+    {
+        TasksListPanel.Children.Clear();
+        foreach (var task in Enumerate(tasks))
+        {
+            TasksListPanel.Children.Add(MakeTaskRow(task));
+        }
+        if (TasksListPanel.Children.Count == 0)
+        {
+            TasksListPanel.Children.Add(new TextBlock
+            {
+                Text = _taskView == "completed"
+                    ? "Nothing completed yet."
+                    : "Nothing here. Add a task above, or ask HAVEN in the composer.",
+                Opacity = 0.72,
+            });
+        }
+    }
+
+    private Border MakeTaskRow(JsonElement task)
+    {
+        var taskId = GetString(task, "task_id") ?? "";
+        var revision = (int)GetInt(task, "revision");
+        var state = GetString(task, "state") ?? "open";
+        var terminal = state is "done" or "cancelled";
+
+        var card = new Grid();
+        card.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(36) });
+        card.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
+        card.ColumnDefinitions.Add(new ColumnDefinition { Width = Microsoft.UI.Xaml.GridLength.Auto });
+
+        var complete = new CheckBox
+        {
+            IsChecked = state == "done",
+            IsEnabled = !terminal,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        complete.Checked += async (_, _) =>
+        {
+            if (_client is null)
+            {
+                return;
+            }
+            try
+            {
+                var result = await _client.CompleteTaskAsync(taskId, revision);
+                if (result.ValueKind == JsonValueKind.Object
+                    && result.TryGetProperty("ok", out var ok) && !ok.GetBoolean())
+                {
+                    TasksErrorText.Text = result.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+                        ? error.GetString() ?? "Completion refused."
+                        : "Completion refused.";
+                    await LoadTasksAsync();
+                    return;
+                }
+                if (result.TryGetProperty("woken_task_ids", out var woken) && woken.GetArrayLength() > 0)
+                {
+                    TasksStatusText.Text = $"Unblocked {woken.GetArrayLength()} dependent task(s).";
+                }
+                await LoadTasksAsync();
+                await LoadProjectsAsync();
+            }
+            catch (Exception ex)
+            {
+                TasksErrorText.Text = ex.Message;
+            }
+        };
+        card.Children.Add(complete);
+
+        var body = new StackPanel { Spacing = 2 };
+        var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        titleRow.Children.Add(new TextBlock
+        {
+            Text = GetString(task, "title") ?? taskId,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        if (state == "blocked")
+        {
+            var blockedCount = Enumerate(task, "blocked_by").Count();
+            titleRow.Children.Add(MakeChip(
+                blockedCount > 0 ? $"Blocked · {blockedCount}" : "Blocked",
+                "HavenWarningTintBrush", "HavenWarningBrush"));
+        }
+        else if (state == "proposed")
+        {
+            titleRow.Children.Add(MakeChip("Proposed", "HavenVioletTintBrush", "HavenVioletBrush"));
+        }
+        var priority = GetString(task, "priority");
+        if (priority is not null)
+        {
+            var (tint, foreground) = priority switch
+            {
+                "high" => ("HavenOrangeTintBrush", "HavenOrangeBrush"),
+                "medium" => ("HavenWarningTintBrush", "HavenWarningBrush"),
+                _ => ("HavenStrokeBrush", "HavenMutedTextBrush"),
+            };
+            titleRow.Children.Add(MakeChip(Sentence(priority), tint, foreground));
+        }
+        body.Children.Add(titleRow);
+        var meta = new List<string>();
+        var projectTitle = GetString(task, "project_title");
+        if (projectTitle is not null)
+        {
+            meta.Add(projectTitle);
+        }
+        var due = FormatDue(GetString(task, "due_at"));
+        if (due is not null)
+        {
+            meta.Add(due);
+        }
+        if (terminal && GetString(task, "completed_at") is { } completedAt)
+        {
+            meta.Add($"completed {FormatDue(completedAt) ?? completedAt}");
+        }
+        if (meta.Count > 0)
+        {
+            body.Children.Add(new TextBlock
+            {
+                Text = string.Join(" · ", meta),
+                Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+            });
+        }
+        Grid.SetColumn(body, 1);
+        card.Children.Add(body);
+
+        var edit = new Button
+        {
+            Content = "Edit",
+            Style = (Style)Application.Current.Resources["HavenQuietButtonStyle"],
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        edit.Click += async (_, _) => await EditTaskDialogAsync(task, GetString(task, "project_id"));
+        Grid.SetColumn(edit, 2);
+        card.Children.Add(edit);
+
+        var wrap = new StackPanel();
+        wrap.Children.Add(card);
+        return WrapCard(wrap);
+    }
+
+    private static string? FormatDue(string? iso)
+    {
+        if (iso is null || !DateTimeOffset.TryParse(iso, out var parsed))
+        {
+            return null;
+        }
+        var local = parsed.LocalDateTime;
+        return local.Date == DateTime.Today
+            ? local.ToString("h:mm tt")
+            : local.ToString("MMM d");
+    }
+
+    private async void OnTaskFastAddClicked(object sender, RoutedEventArgs args)
+    {
+        await FastAddTaskAsync();
+    }
+
+    private async void OnTaskFastAddKeyDown(object sender, KeyRoutedEventArgs args)
+    {
+        if (args.Key == VirtualKey.Enter)
+        {
+            args.Handled = true;
+            await FastAddTaskAsync();
+        }
+    }
+
+    private async Task FastAddTaskAsync()
+    {
+        if (_client is null || string.IsNullOrWhiteSpace(TaskFastAddBox.Text))
+        {
+            return;
+        }
+        var title = TaskFastAddBox.Text.Trim();
+        await RunProjectsMutationAsync(() => _client.CreateTaskAsync(title));
+        TaskFastAddBox.Text = "";
+    }
+
+    private async Task EditTaskDialogAsync(JsonElement task, string? presetProjectId)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        var editing = task.ValueKind == JsonValueKind.Object;
+        var taskId = editing ? GetString(task, "task_id") ?? "" : "";
+        var revision = editing ? (int)GetInt(task, "revision") : 0;
+        var title = new TextBox { Text = editing ? GetString(task, "title") ?? "" : "", PlaceholderText = "What needs doing?", MinWidth = 320 };
+        var detail = new TextBox
+        {
+            Text = editing ? GetString(task, "detail") ?? "" : "",
+            PlaceholderText = "Detail (optional)",
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            MinHeight = 64,
+        };
+        var priority = new ComboBox { MinWidth = 200 };
+        priority.Items.Add("None");
+        foreach (var option in new[] { "high", "medium", "low" })
+        {
+            priority.Items.Add(Sentence(option));
+        }
+        var currentPriority = editing ? GetString(task, "priority") : null;
+        priority.SelectedIndex = currentPriority is null ? 0 : new[] { "high", "medium", "low" }.ToList().IndexOf(currentPriority) + 1;
+
+        var project = new ComboBox { MinWidth = 200 };
+        project.Items.Add("No project");
+        var projectIds = new List<string>();
+        foreach (var candidate in Enumerate(_projects))
+        {
+            var id = GetString(candidate, "project_id");
+            if (id is null)
+            {
+                continue;
+            }
+            projectIds.Add(id);
+            project.Items.Add(GetString(candidate, "title") ?? id);
+        }
+        var selectedProject = editing ? GetString(task, "project_id") : presetProjectId;
+        project.SelectedIndex = selectedProject is null ? 0 : Math.Max(0, projectIds.IndexOf(selectedProject) + 1);
+
+        var due = new TextBox
+        {
+            Text = editing ? (GetString(task, "due_at") ?? "") : "",
+            PlaceholderText = "Due (ISO, optional) e.g. 2026-10-01T17:00:00+00:00",
+            MinWidth = 320,
+        };
+
+        var fields = new StackPanel { Spacing = 8, MinWidth = 380 };
+        fields.Children.Add(new TextBlock { Text = "Title" });
+        fields.Children.Add(title);
+        fields.Children.Add(new TextBlock { Text = "Detail" });
+        fields.Children.Add(detail);
+        fields.Children.Add(new TextBlock { Text = "Priority" });
+        fields.Children.Add(priority);
+        fields.Children.Add(new TextBlock { Text = "Project" });
+        fields.Children.Add(project);
+        fields.Children.Add(new TextBlock { Text = "Due" });
+        fields.Children.Add(due);
+
+        ComboBox? state = null;
+        if (editing)
+        {
+            var stateValues = new[] { "open", "in_progress", "blocked", "proposed" };
+            state = new ComboBox { MinWidth = 200 };
+            foreach (var option in stateValues)
+            {
+                state.Items.Add(Sentence(option));
+            }
+            state.SelectedIndex = Math.Max(0, Array.IndexOf(stateValues, GetString(task, "state") ?? "open"));
+            fields.Children.Add(new TextBlock { Text = "State" });
+            fields.Children.Add(state);
+        }
+
+        var dialog = new ContentDialog
+        {
+            Title = editing ? "Edit task" : "New task",
+            Content = fields,
+            PrimaryButtonText = editing ? "Save" : "Add task",
+            CloseButtonText = "Cancel",
+            XamlRoot = RootGrid().XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary || string.IsNullOrWhiteSpace(title.Text))
+        {
+            return;
+        }
+        var projectValue = project.SelectedIndex <= 0 ? null : projectIds[project.SelectedIndex - 1];
+        var priorityValue = priority.SelectedIndex <= 0 ? null : new[] { "high", "medium", "low" }[priority.SelectedIndex - 1];
+        var dueValue = string.IsNullOrWhiteSpace(due.Text) ? null : due.Text.Trim();
+        if (editing && state is not null)
+        {
+            var stateValues = new[] { "open", "in_progress", "blocked", "proposed" };
+            var stateValue = stateValues[Math.Max(0, state.SelectedIndex)];
+            await RunProjectsMutationAsync(() => _client.UpdateTaskAsync(
+                taskId, revision, title.Text.Trim(), detail.Text.Trim(), stateValue,
+                priorityValue, dueValue, projectValue));
+        }
+        else
+        {
+            await RunProjectsMutationAsync(() => _client.CreateTaskAsync(
+                title.Text.Trim(), projectValue, detail.Text.Trim(), priorityValue, dueValue));
+        }
+    }
+
+    // -- computer (files / applications / windows / activity) -------------------
+
+    private string _computerTab = "files";
+
+    private void OnComputerTabClicked(object sender, RoutedEventArgs args)
+    {
+        if (sender is Button button && button.Tag is string tab)
+        {
+            _computerTab = tab;
+            foreach (var item in ((StackPanel)button.Parent).Children.OfType<Button>())
+            {
+                item.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                    item == button ? "HavenAccentBrush" : "HavenMutedTextBrush"];
+                item.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                    item == button ? "HavenAccentBrush" : "HavenStrokeBrush"];
+            }
+            ComputerStatusText.Text = "Loading…";
+            _ = LoadComputerTabAsync();
+        }
+    }
+
+    private async Task LoadComputerTabAsync()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            ComputerTabContent.Children.Clear();
+            if (_computerTab == "files")
+            {
+                var result = await _client.GetComputerFilesAsync();
+                var files = result.GetProperty("files");
+                var any = false;
+                foreach (var file in Enumerate(files))
+                {
+                    any = true;
+                    var card = new StackPanel { Spacing = 2 };
+                    card.Children.Add(new TextBlock
+                    {
+                        Text = GetString(file, "title") ?? GetString(file, "resource_id") ?? "?",
+                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                        TextWrapping = TextWrapping.Wrap,
+                    });
+                    card.Children.Add(new TextBlock
+                    {
+                        Text = GetString(file, "locator") ?? "",
+                        Style = (Style)Application.Current.Resources["HavenMonoTextStyle"],
+                        TextWrapping = TextWrapping.Wrap,
+                    });
+                    if (file.TryGetProperty("stale", out var stale) && stale.GetBoolean())
+                    {
+                        card.Opacity = 0.55;
+                    }
+                    ComputerTabContent.Children.Add(WrapCard(card));
+                }
+                if (!any)
+                {
+                    ComputerTabContent.Children.Add(new TextBlock
+                    {
+                        Text = "No authorized files observed yet. Enable the computer provider in Setup and scan an allowed folder.",
+                        Opacity = 0.72,
+                        TextWrapping = TextWrapping.Wrap,
+                    });
+                }
+            }
+            else if (_computerTab == "apps")
+            {
+                var result = await _client.GetComputerAppsAsync();
+                var any = false;
+                foreach (var app in Enumerate(result.GetProperty("apps")))
+                {
+                    any = true;
+                    var titles = Enumerate(app, "titles").Select(title => title.GetString()).Where(title => title is not null).ToList();
+                    var card = new StackPanel { Spacing = 2 };
+                    card.Children.Add(new TextBlock
+                    {
+                        Text = GetString(app, "app") ?? "?",
+                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                    });
+                    card.Children.Add(new TextBlock
+                    {
+                        Text = $"{GetInt(app, "windows")} window(s){(titles.Count > 0 ? " · " + string.Join("; ", titles) : "")}",
+                        Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                        TextWrapping = TextWrapping.Wrap,
+                    });
+                    ComputerTabContent.Children.Add(WrapCard(card));
+                }
+                if (!any)
+                {
+                    ComputerTabContent.Children.Add(new TextBlock { Text = "No applications observed.", Opacity = 0.72 });
+                }
+            }
+            else if (_computerTab == "windows")
+            {
+                var result = await _client.GetComputerWindowsAsync();
+                var any = false;
+                foreach (var window in Enumerate(result.GetProperty("windows")))
+                {
+                    any = true;
+                    var resourceId = GetString(window, "resource_id") ?? "";
+                    var card = new Grid();
+                    card.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
+                    card.ColumnDefinitions.Add(new ColumnDefinition { Width = Microsoft.UI.Xaml.GridLength.Auto });
+                    var body = new StackPanel { Spacing = 2 };
+                    body.Children.Add(new TextBlock
+                    {
+                        Text = GetString(window, "title") ?? "?",
+                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                        TextWrapping = TextWrapping.Wrap,
+                    });
+                    body.Children.Add(new TextBlock
+                    {
+                        Text = GetString(window, "process") ?? "",
+                        Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                    });
+                    card.Children.Add(body);
+                    var focus = new Button
+                    {
+                        Content = "Bring to front",
+                        VerticalAlignment = VerticalAlignment.Center,
+                    };
+                    focus.Click += async (_, _) => await FocusWindowAsync(resourceId);
+                    Grid.SetColumn(focus, 1);
+                    card.Children.Add(focus);
+                    var wrap = new StackPanel();
+                    wrap.Children.Add(card);
+                    ComputerTabContent.Children.Add(WrapCard(wrap));
+                }
+                if (!any)
+                {
+                    ComputerTabContent.Children.Add(new TextBlock { Text = "No visible windows right now.", Opacity = 0.72 });
+                }
+            }
+            else
+            {
+                var result = await _client.GetComputerActivityAsync();
+                var observation = result.GetProperty("observation");
+                var enabled = observation.TryGetProperty("enabled", out var enabledValue) && enabledValue.GetBoolean();
+                var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+                header.Children.Add(new TextBlock
+                {
+                    Text = enabled
+                        ? $"Foreground observation is on ({GetString(observation, "observed_events") ?? "0"} events, retention {GetInt(observation, "retention")})."
+                        : "Foreground observation is off. Nothing is recorded until you enable it.",
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                });
+                var toggle = new Button { Content = enabled ? "Disable observation" : "Enable observation" };
+                toggle.Click += async (_, _) =>
+                {
+                    try
+                    {
+                        await _client!.SetComputerObservationAsync(!enabled);
+                        ComputerErrorText.Text = "";
+                        await LoadComputerTabAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        ComputerErrorText.Text = ex.Message;
+                    }
+                };
+                header.Children.Add(toggle);
+                ComputerTabContent.Children.Add(header);
+                var events = Enumerate(result.GetProperty("events")).ToList();
+                if (events.Count == 0)
+                {
+                    ComputerTabContent.Children.Add(new TextBlock
+                    {
+                        Text = "No foreground history yet. Suppressed apps never appear here.",
+                        Opacity = 0.72,
+                    });
+                }
+                foreach (var entry in events)
+                {
+                    var card = new StackPanel { Spacing = 2 };
+                    card.Children.Add(new TextBlock
+                    {
+                        Text = GetString(entry, "title") ?? "?",
+                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                    });
+                    card.Children.Add(new TextBlock
+                    {
+                        Text = $"{GetString(entry, "app")} · {GetString(entry, "at")}",
+                        Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                    });
+                    ComputerTabContent.Children.Add(WrapCard(card));
+                }
+            }
+            ComputerStatusText.Text = "";
+            ComputerErrorText.Text = "";
+        }
+        catch (Exception ex)
+        {
+            ComputerStatusText.Text = "";
+            ComputerErrorText.Text = $"Could not load computer state: {ex.Message} Use Refresh to retry.";
+        }
+    }
+
+    private async Task FocusWindowAsync(string resourceId)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.FocusWindowAsync(resourceId);
+            if (result.ValueKind == JsonValueKind.Object
+                && result.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                ComputerErrorText.Text = result.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+                    ? error.GetString() ?? "Focus refused."
+                    : "Focus refused.";
+                return;
+            }
+            var success = result.TryGetProperty("success", out var successValue) && successValue.GetBoolean();
+            ComputerErrorText.Text = "";
+            ComputerStatusText.Text = success
+                ? "Window brought to the foreground (receipt recorded)."
+                : $"The OS refused the focus request: {GetString(result, "detail") ?? "no detail"}";
+            await LoadComputerTabAsync();
+        }
+        catch (Exception ex)
+        {
+            ComputerErrorText.Text = ex.Message;
+        }
+    }
+
+    // -- communications (email / messages / calendar / browser tabs) ------------
+
+    private string _commsTab = "email";
+
+    private void OnCommsTabClicked(object sender, RoutedEventArgs args)
+    {
+        if (sender is Button button && button.Tag is string tab)
+        {
+            _commsTab = tab;
+            foreach (var item in ((StackPanel)button.Parent).Children.OfType<Button>())
+            {
+                item.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                    item == button ? "HavenAccentBrush" : "HavenMutedTextBrush"];
+                item.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                    item == button ? "HavenAccentBrush" : "HavenStrokeBrush"];
+            }
+            CommsStatusText.Text = "Loading…";
+            _ = LoadCommsTabAsync();
+        }
+    }
+
+    private async Task LoadCommsTabAsync()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            CommsTabContent.Children.Clear();
+            CommsErrorText.Text = "";
+            if (_commsTab == "email")
+            {
+                var status = await _client.GetEmailStatusAsync();
+                var configured = status.TryGetProperty("configured", out var c) && c.GetBoolean();
+                var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+                header.Children.Add(new TextBlock
+                {
+                    Text = configured
+                        ? $"Connected: {GetString(status, "provider")} (read-only — sending needs a credentialed provider)"
+                        : $"Not connected: {GetString(status, "detail") ?? "no email provider configured"}",
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                });
+                var setFolder = new Button { Content = configured ? "Change mail folder…" : "Connect a mail folder…" };
+                setFolder.Click += async (_, _) => await PickMaildirAsync();
+                header.Children.Add(setFolder);
+                CommsTabContent.Children.Add(header);
+                if (configured)
+                {
+                    var messages = await _client.GetEmailMessagesAsync();
+                    var any = false;
+                    foreach (var message in Enumerate(messages.GetProperty("messages")))
+                    {
+                        any = true;
+                        var card = new StackPanel { Spacing = 2 };
+                        var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                        head.Children.Add(new TextBlock
+                        {
+                            Text = GetString(message, "subject") ?? "(no subject)",
+                            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                            TextWrapping = TextWrapping.Wrap,
+                        });
+                        foreach (var label in Enumerate(message, "labels"))
+                        {
+                            if (label.GetString() is { } text && text.Length > 0)
+                            {
+                                head.Children.Add(MakeChip(text, "HavenAccentTintBrush", "HavenAccentBrush"));
+                            }
+                        }
+                        card.Children.Add(head);
+                        card.Children.Add(new TextBlock
+                        {
+                            Text = $"{GetString(message, "sender")} · {GetString(message, "at")}",
+                            Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                        });
+                        if (GetString(message, "snippet") is { Length: > 0 } snippet)
+                        {
+                            card.Children.Add(new TextBlock
+                            {
+                                Text = snippet,
+                                Style = (Style)Application.Current.Resources["HavenBodyTextStyle"],
+                                TextWrapping = TextWrapping.Wrap,
+                                Opacity = 0.8,
+                            });
+                        }
+                        CommsTabContent.Children.Add(WrapCard(card));
+                    }
+                    if (!any)
+                    {
+                        CommsTabContent.Children.Add(new TextBlock { Text = "No messages in the configured folder.", Opacity = 0.72 });
+                    }
+                }
+            }
+            else if (_commsTab == "messages")
+            {
+                CommsTabContent.Children.Add(new Border
+                {
+                    Style = (Style)Application.Current.Resources["HavenCardStyle"],
+                    Child = new TextBlock
+                    {
+                        Text = "Message threads (Slack/Teams-style) arrive with a credentialed conversation provider. Nothing is connected, and HAVEN reads nothing until you add one.",
+                        TextWrapping = TextWrapping.Wrap,
+                        Style = (Style)Application.Current.Resources["HavenBodyTextStyle"],
+                    },
+                });
+            }
+            else if (_commsTab == "calendar")
+            {
+                var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+                header.Children.Add(new TextBlock
+                {
+                    Text = "Local calendar sources (.ics files). External calendars stay authoritative; changes are confirmed and verified by re-read.",
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                    TextWrapping = TextWrapping.Wrap,
+                });
+                var add = new Button { Content = "Add .ics file…" };
+                add.Click += async (_, _) => await PickIcsSourceAsync();
+                header.Children.Add(add);
+                CommsTabContent.Children.Add(header);
+
+                var events = await _client.GetCalendarEventsAsync();
+                var anyEvent = false;
+                foreach (var entry in Enumerate(events.GetProperty("events")))
+                {
+                    anyEvent = true;
+                    var eventId = GetString(entry, "event_id") ?? "";
+                    var card = new Grid();
+                    card.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
+                    card.ColumnDefinitions.Add(new ColumnDefinition { Width = Microsoft.UI.Xaml.GridLength.Auto });
+                    var body = new StackPanel { Spacing = 2 };
+                    body.Children.Add(new TextBlock
+                    {
+                        Text = GetString(entry, "title") ?? eventId,
+                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                        TextWrapping = TextWrapping.Wrap,
+                    });
+                    var meta = new List<string>();
+                    if (GetString(entry, "start_at") is { } start)
+                    {
+                        meta.Add(FormatDue(start) ?? start);
+                    }
+                    if (GetString(entry, "location") is { Length: > 0 } location)
+                    {
+                        meta.Add(location);
+                    }
+                    if (Enumerate(entry, "attendees").Count() > 0)
+                    {
+                        meta.Add($"{Enumerate(entry, "attendees").Count()} attendee(s)");
+                    }
+                    body.Children.Add(new TextBlock
+                    {
+                        Text = string.Join(" · ", meta),
+                        Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                    });
+                    card.Children.Add(body);
+                    var propose = new Button { Content = "Propose task", VerticalAlignment = VerticalAlignment.Center };
+                    propose.Click += async (_, _) =>
+                    {
+                        await RunCommsMutationAsync(() => _client!.ProposeTaskForEventAsync(eventId));
+                    };
+                    Grid.SetColumn(propose, 1);
+                    card.Children.Add(propose);
+                    var wrap = new StackPanel();
+                    wrap.Children.Add(card);
+                    CommsTabContent.Children.Add(WrapCard(wrap));
+                }
+                if (!anyEvent)
+                {
+                    CommsTabContent.Children.Add(new TextBlock
+                    {
+                        Text = "No events. Add a .ics file above to see your calendar here.",
+                        Opacity = 0.72,
+                    });
+                }
+            }
+            else
+            {
+                var tabs = await _client.GetBrowserTabsAsync();
+                var status = tabs.TryGetProperty("status", out var s) && s.ValueKind == JsonValueKind.Object ? s : default;
+                var connected = status.ValueKind == JsonValueKind.Object
+                    ? Enumerate(status, "connected_browsers").Count()
+                    : 0;
+                CommsTabContent.Children.Add(new TextBlock
+                {
+                    Text = connected > 0
+                        ? $"{connected} browser(s) connected. Tab identity, title, and URL only — no page content, no incognito."
+                        : "No browser connected. Install the experimental connector (browser/ in the HAVEN repo) to see tabs here.",
+                    Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                    TextWrapping = TextWrapping.Wrap,
+                });
+                foreach (var tab in Enumerate(tabs.GetProperty("tabs")))
+                {
+                    var resourceId = GetString(tab, "resource_id") ?? "";
+                    var card = new Grid();
+                    card.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
+                    card.ColumnDefinitions.Add(new ColumnDefinition { Width = Microsoft.UI.Xaml.GridLength.Auto });
+                    var body = new StackPanel { Spacing = 2 };
+                    body.Children.Add(new TextBlock
+                    {
+                        Text = GetString(tab, "title") ?? "?",
+                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                        TextWrapping = TextWrapping.Wrap,
+                    });
+                    body.Children.Add(new TextBlock
+                    {
+                        Text = $"{GetString(tab, "browser")} · {GetString(tab, "domain")}",
+                        Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                    });
+                    card.Children.Add(body);
+                    var focus = new Button { Content = "Focus", VerticalAlignment = VerticalAlignment.Center };
+                    focus.Click += async (_, _) => await RunCommsMutationAsync(() => _client!.FocusBrowserTabAsync(resourceId));
+                    Grid.SetColumn(focus, 1);
+                    card.Children.Add(focus);
+                    var wrap = new StackPanel();
+                    wrap.Children.Add(card);
+                    CommsTabContent.Children.Add(WrapCard(wrap));
+                }
+            }
+            CommsStatusText.Text = "";
+        }
+        catch (Exception ex)
+        {
+            CommsStatusText.Text = "";
+            CommsErrorText.Text = $"Could not load communications state: {ex.Message} Use Refresh to retry.";
+        }
+    }
+
+    private async Task RunCommsMutationAsync(Func<Task<JsonElement>> operation)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var envelope = await operation();
+            if (envelope.ValueKind == JsonValueKind.Object
+                && envelope.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                CommsErrorText.Text = envelope.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+                    ? error.GetString() ?? "HAVEN Core refused the change."
+                    : "HAVEN Core refused the change.";
+                return;
+            }
+            CommsErrorText.Text = "";
+            CommsStatusText.Text = "Done.";
+            await LoadCommsTabAsync();
+        }
+        catch (Exception ex)
+        {
+            CommsErrorText.Text = ex.Message;
+        }
+    }
+
+    private async Task PickMaildirAsync()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        var folder = await PickFolderAsync();
+        if (folder is not null)
+        {
+            await RunCommsMutationAsync(() => _client.SetEmailMaildirAsync(folder));
+        }
+    }
+
+    private async Task PickIcsSourceAsync()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        var handle = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        var picker = new Windows.Storage.Pickers.FileOpenPicker();
+        picker.FileTypeFilter.Add(".ics");
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, handle);
+        var file = await picker.PickSingleFileAsync();
+        if (file is not null)
+        {
+            await RunCommsMutationAsync(() => _client.AddCalendarSourceAsync(file.Path));
+        }
     }
 
     // -- home tabs --------------------------------------------------------------
@@ -779,14 +2319,18 @@ public sealed partial class MainWindow : Window
         {
             return;
         }
+        SettingsStatusText.Text = "";
+        SettingsErrorText.Text = "";
+
+        JsonElement? backups = null;
+        JsonElement? service = null;
+
+        // Each section loads independently: one failing call must not blank
+        // the whole control center.
         try
         {
             var diagnostics = await _client.GetSystemDiagnosticsAsync();
-            var backups = await _client.GetBackupsAsync();
-            var service = await _client.GetServiceStatusAsync();
             _diagnostics = diagnostics.GetProperty("diagnostics").Clone();
-            SettingsErrorText.Text = "";
-            SettingsStatusText.Text = "";
             StorageDataDirText.Text = GetString(_diagnostics, "data_dir") ?? "Unknown";
             var voice = _diagnostics.TryGetProperty("voice", out var voiceValue) && voiceValue.ValueKind == JsonValueKind.Object
                 ? voiceValue
@@ -800,13 +2344,35 @@ public sealed partial class MainWindow : Window
             var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
             AboutVersionText.Text = $"HAVEN Desktop {version?.Major}.{version?.Minor}.{version?.Build} — local-first; your data stays on this machine.";
             RenderDiagnostics();
-            RenderBackups(backups.GetProperty("backups"));
-            RenderService(service.GetProperty("service"));
         }
         catch (Exception ex)
         {
-            SettingsStatusText.Text = "";
-            SettingsErrorText.Text = $"Could not load system state: {ex.Message} Use Refresh to retry.";
+            SettingsErrorText.Text = $"Could not load diagnostics: {ex.Message} Use Refresh to retry.";
+        }
+
+        try
+        {
+            backups = (await _client.GetBackupsAsync()).Clone();
+        }
+        catch (Exception ex)
+        {
+            SettingsErrorText.Text = $"Could not load backups: {ex.Message} Use Refresh to retry.";
+        }
+        try
+        {
+            service = (await _client.GetServiceStatusAsync()).Clone();
+        }
+        catch (Exception ex)
+        {
+            SettingsErrorText.Text = $"Could not load the startup service: {ex.Message} Use Refresh to retry.";
+        }
+        if (backups is not null)
+        {
+            RenderBackups(backups.Value.GetProperty("backups"));
+        }
+        if (service is not null)
+        {
+            RenderService(service.Value.GetProperty("service"));
         }
     }
 
@@ -1842,6 +3408,27 @@ public sealed partial class MainWindow : Window
         Child = content,
     };
 
+    /* Status chip (spec 13): small rounded pill, ~20% tinted background,
+       solid accent text. */
+    private static Border MakeChip(string text, string tintResource, string foregroundResource)
+    {
+        var chip = new Border
+        {
+            CornerRadius = new Microsoft.UI.Xaml.CornerRadius(10),
+            Padding = new Microsoft.UI.Xaml.Thickness(8, 2, 8, 2),
+            Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[tintResource],
+            Child = new TextBlock
+            {
+                Text = text,
+                FontSize = 11.5,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[foregroundResource],
+            },
+        };
+        ToolTipService.SetToolTip(chip, text);
+        return chip;
+    }
+
     private async Task RunPeopleMutationAsync(Func<Task<JsonElement>> operation)
     {
         if (_client is null)
@@ -2095,22 +3682,14 @@ public sealed partial class MainWindow : Window
             Text = GetString(rule, "action") ?? "automation",
             Opacity = 0.72,
         });
-        var badge = new TextBlock
+        var (chipTint, chipForeground) = status switch
         {
-            Text = Sentence(status),
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            "approved" => ("HavenSuccessTintBrush", "HavenSuccessBrush"),
+            "proposed" => ("HavenWarningTintBrush", "HavenWarningBrush"),
+            "revoked" => ("HavenStrokeBrush", "HavenMutedTextBrush"),
+            _ => ("HavenAccentTintBrush", "HavenMutedTextBrush"),
         };
-        var badgeBrush = status switch
-        {
-            "approved" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenSuccessBrush"],
-            "proposed" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenWarningBrush"],
-            _ => null,
-        };
-        if (badgeBrush is not null)
-        {
-            badge.Foreground = badgeBrush;
-        }
-        head.Children.Add(badge);
+        head.Children.Add(MakeChip(Sentence(status), chipTint, chipForeground));
         var approvedAt = GetString(rule, "approved_at");
         if (approvedAt is not null)
         {
@@ -2605,18 +4184,12 @@ public sealed partial class MainWindow : Window
             Text = modelId,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
         });
-        var badge = new TextBlock
-        {
-            Text = Sentence(state),
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-        };
-        var badgeBrush = ModelFailureStates.Contains(state)
-            ? Application.Current.Resources["HavenDangerBrush"]
+        var (modelTint, modelForeground) = ModelFailureStates.Contains(state)
+            ? ("HavenDangerTintBrush", "HavenDangerBrush")
             : state is "ready" or "loaded"
-                ? Application.Current.Resources["HavenSuccessBrush"]
-                : Application.Current.Resources["HavenWarningBrush"];
-        badge.Foreground = (Microsoft.UI.Xaml.Media.Brush)badgeBrush;
-        head.Children.Add(badge);
+                ? ("HavenSuccessTintBrush", "HavenSuccessBrush")
+                : ("HavenWarningTintBrush", "HavenWarningBrush");
+        head.Children.Add(MakeChip(Sentence(state), modelTint, modelForeground));
         card.Children.Add(head);
 
         var details = new List<string>();
@@ -2733,14 +4306,13 @@ public sealed partial class MainWindow : Window
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 TextWrapping = TextWrapping.Wrap,
             });
-            var badge = new TextBlock { Text = Sentence(state) };
-            badge.Foreground = state switch
+            var (jobTint, jobForeground) = state switch
             {
-                "ready" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenSuccessBrush"],
-                "failed" or "cancelled" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenDangerBrush"],
-                _ => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenWarningBrush"],
+                "ready" => ("HavenSuccessTintBrush", "HavenSuccessBrush"),
+                "failed" or "cancelled" => ("HavenDangerTintBrush", "HavenDangerBrush"),
+                _ => ("HavenWarningTintBrush", "HavenWarningBrush"),
             };
-            head.Children.Add(badge);
+            head.Children.Add(MakeChip(Sentence(state), jobTint, jobForeground));
             card.Children.Add(head);
 
             var received = job.TryGetProperty("received_bytes", out var receivedValue) ? receivedValue.GetInt64() : 0L;

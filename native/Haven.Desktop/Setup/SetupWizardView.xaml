@@ -5,7 +5,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
-    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    <Grid Background="Transparent">
         <Grid MaxWidth="880" Margin="48,40" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
@@ -36,7 +36,7 @@
             </StackPanel>
 
             <TextBlock x:Name="ConfigWarning" Grid.Row="2" Margin="0,34,0,0" Visibility="Collapsed"
-                       TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCautionBrush}" />
+                       TextWrapping="Wrap" Foreground="{ThemeResource HavenWarningBrush}" />
 
             <ScrollViewer Grid.Row="3" Margin="0,18,0,0">
                 <StackPanel x:Name="StepContent" Spacing="12" MaxWidth="760" />
@@ -49,11 +49,12 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBlock x:Name="ErrorText" TextWrapping="Wrap" VerticalAlignment="Center"
-                           Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                           Foreground="{ThemeResource HavenDangerBrush}" />
                 <ProgressRing x:Name="BusyRing" Grid.Column="1" Width="22" Height="22" IsActive="False" />
-                <Button x:Name="BackButton" Grid.Column="1" Content="Back" Click="OnBackClicked" Visibility="Collapsed" />
+                <Button x:Name="BackButton" Grid.Column="1" Content="Back" Click="OnBackClicked" Visibility="Collapsed"
+                        Style="{StaticResource HavenSecondaryButtonStyle}" />
                 <Button x:Name="NextButton" Grid.Column="2" Content="Next" Click="OnNextClicked"
-                        Style="{StaticResource AccentButtonStyle}" />
+                        Style="{StaticResource HavenPrimaryButtonStyle}" />
             </Grid>
         </Grid>
     </Grid>
