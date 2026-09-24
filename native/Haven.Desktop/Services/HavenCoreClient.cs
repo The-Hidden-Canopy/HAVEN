@@ -25,7 +25,7 @@ public sealed class HavenCoreClient : IAsyncDisposable
 
     public async Task ConnectAsync(CancellationToken cancellationToken = default)
     {
-        if (_pipe is not null)
+        if (_pipe is not null && _pipe.IsConnected)
         {
             return;
         }
@@ -36,6 +36,25 @@ public sealed class HavenCoreClient : IAsyncDisposable
             new { token = _authToken },
             cancellationToken);
         EnsureSuccess(response);
+    }
+
+    public async Task DisconnectAsync()
+    {
+        // Reconnect lifecycle: dispose the dead pipe before reconnecting so
+        // no stale handle survives into the next attempt.
+        var pipe = _pipe;
+        _pipe = null;
+        if (pipe is not null)
+        {
+            try
+            {
+                await pipe.DisposeAsync();
+            }
+            catch (Exception)
+            {
+                // A broken pipe disposes best-effort.
+            }
+        }
     }
 
     public Task<JsonElement> GetStateAsync(CancellationToken cancellationToken = default) =>

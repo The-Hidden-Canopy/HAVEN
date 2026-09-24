@@ -97,6 +97,15 @@ if os.name == "nt":
     _KERNEL32.FlushFileBuffers.restype = wintypes.BOOL
     _KERNEL32.CancelIoEx.argtypes = [wintypes.HANDLE, wintypes.LPVOID]
     _KERNEL32.CancelIoEx.restype = wintypes.BOOL
+    _KERNEL32.PeekNamedPipe.argtypes = [
+        wintypes.HANDLE,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    _KERNEL32.PeekNamedPipe.restype = wintypes.BOOL
     _KERNEL32.CloseHandle.argtypes = [wintypes.HANDLE]
     _KERNEL32.CloseHandle.restype = wintypes.BOOL
 

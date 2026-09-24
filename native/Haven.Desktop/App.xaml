@@ -6,45 +6,15 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+                <!-- Flat theme dictionaries live under Themes/ and are merged
+                     by App at startup, then swapped live by ThemeService. -->
             </ResourceDictionary.MergedDictionaries>
 
-            <ResourceDictionary.ThemeDictionaries>
-                <ResourceDictionary x:Key="Dark">
-                    <Color x:Key="HavenCanvasColor">#0B1220</Color>
-                    <Color x:Key="HavenSurface1Color">#111A2C</Color>
-                    <Color x:Key="HavenSurface2Color">#172238</Color>
-                    <Color x:Key="HavenTextColor">#F3F6FC</Color>
-                    <Color x:Key="HavenMutedTextColor">#8E9BB4</Color>
-                    <Color x:Key="HavenStrokeColor">#27354F</Color>
-                    <Color x:Key="HavenHoverColor">#22FFFFFF</Color>
-                </ResourceDictionary>
-                <ResourceDictionary x:Key="Light">
-                    <Color x:Key="HavenCanvasColor">#F5F7FB</Color>
-                    <Color x:Key="HavenSurface1Color">#FFFFFF</Color>
-                    <Color x:Key="HavenSurface2Color">#F0F3F8</Color>
-                    <Color x:Key="HavenTextColor">#172033</Color>
-                    <Color x:Key="HavenMutedTextColor">#5C6678</Color>
-                    <Color x:Key="HavenStrokeColor">#D8DFEA</Color>
-                    <Color x:Key="HavenHoverColor">#14000000</Color>
-                </ResourceDictionary>
-            </ResourceDictionary.ThemeDictionaries>
-
-            <!-- Canvas: deep navy with a faint teal/violet horizon glow at the
-                 bottom edge, per the approved shell mockups (not flat). -->
-            <LinearGradientBrush x:Key="HavenCanvasGradient" StartPoint="0,0" EndPoint="0.15,1">
-                <GradientStop Color="#080D18" Offset="0" />
-                <GradientStop Color="#0B1220" Offset="0.55" />
-                <GradientStop Color="#0E1A2E" Offset="0.82" />
-                <GradientStop Color="#14303A" Offset="0.95" />
-                <GradientStop Color="#1B2E4A" Offset="1" />
-            </LinearGradientBrush>
-            <LinearGradientBrush x:Key="HavenSplashGradient" StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#080D18" Offset="0" />
-                <GradientStop Color="#0B1220" Offset="0.6" />
-                <GradientStop Color="#152A44" Offset="0.9" />
-                <GradientStop Color="#4A2E1B" Offset="1" />
-            </LinearGradientBrush>
-
+            <!-- Base brushes track the active theme dictionary (spec 34-39).
+                 Semantic aliases below give pages a stable vocabulary:
+                 CanvasBase/Surface*/Text*/StrokeSubtle map to the shell tokens,
+                 Accent*/FocusRing/PermissionGlow to the interaction tokens,
+                 Series1-8 and Heat* to the data-visualization tokens. -->
             <SolidColorBrush x:Key="HavenCanvasBrush" Color="{ThemeResource HavenCanvasColor}" />
             <SolidColorBrush x:Key="HavenSurface1Brush" Color="{ThemeResource HavenSurface1Color}" />
             <SolidColorBrush x:Key="HavenSurface2Brush" Color="{ThemeResource HavenSurface2Color}" />
@@ -53,21 +23,53 @@
             <SolidColorBrush x:Key="HavenStrokeBrush" Color="{ThemeResource HavenStrokeColor}" />
             <SolidColorBrush x:Key="HavenHoverBrush" Color="{ThemeResource HavenHoverColor}" />
 
-            <!-- Accent and semantic tokens are identical in both themes (spec section 04). -->
-            <SolidColorBrush x:Key="HavenAccentBrush" Color="#3B82F6" />
-            <SolidColorBrush x:Key="HavenVioletBrush" Color="#8B5CF6" />
-            <SolidColorBrush x:Key="HavenOrangeBrush" Color="#FF8A3D" />
-            <SolidColorBrush x:Key="HavenSuccessBrush" Color="#22C55E" />
-            <SolidColorBrush x:Key="HavenWarningBrush" Color="#F59E0B" />
-            <SolidColorBrush x:Key="HavenDangerBrush" Color="#EF4444" />
+            <SolidColorBrush x:Key="CanvasBaseBrush" Color="{ThemeResource HavenCanvasColor}" />
+            <SolidColorBrush x:Key="SurfacePrimaryBrush" Color="{ThemeResource HavenSurface1Color}" />
+            <SolidColorBrush x:Key="SurfaceSecondaryBrush" Color="{ThemeResource HavenSurface2Color}" />
+            <SolidColorBrush x:Key="TextPrimaryBrush" Color="{ThemeResource HavenTextColor}" />
+            <SolidColorBrush x:Key="TextSecondaryBrush" Color="{ThemeResource HavenMutedTextColor}" />
+            <SolidColorBrush x:Key="TextMutedBrush" Color="{ThemeResource HavenMutedTextColor}" />
+            <SolidColorBrush x:Key="StrokeSubtleBrush" Color="{ThemeResource HavenStrokeColor}" />
 
-            <!-- ~20% accent tints for chips and selected states. -->
-            <SolidColorBrush x:Key="HavenAccentTintBrush" Color="#333B82F6" />
-            <SolidColorBrush x:Key="HavenVioletTintBrush" Color="#338B5CF6" />
-            <SolidColorBrush x:Key="HavenOrangeTintBrush" Color="#33FF8A3D" />
-            <SolidColorBrush x:Key="HavenSuccessTintBrush" Color="#3322C55E" />
-            <SolidColorBrush x:Key="HavenWarningTintBrush" Color="#33F59E0B" />
-            <SolidColorBrush x:Key="HavenDangerTintBrush" Color="#33EF4444" />
+            <SolidColorBrush x:Key="AccentBrush" Color="{ThemeResource HavenAccentColor}" />
+            <SolidColorBrush x:Key="AccentHoverBrush" Color="{ThemeResource HavenAccentHoverColor}" />
+            <SolidColorBrush x:Key="FocusRingBrush" Color="{ThemeResource HavenFocusRingColor}" />
+            <SolidColorBrush x:Key="PermissionGlowBrush" Color="{ThemeResource HavenPermissionGlowColor}" />
+            <SolidColorBrush x:Key="SuccessBrush" Color="{ThemeResource HavenSuccessColor}" />
+            <SolidColorBrush x:Key="WarningBrush" Color="{ThemeResource HavenWarningColor}" />
+            <SolidColorBrush x:Key="DangerBrush" Color="{ThemeResource HavenDangerColor}" />
+            <SolidColorBrush x:Key="SuccessTintBrush" Color="{ThemeResource HavenSuccessTintColor}" />
+            <SolidColorBrush x:Key="WarningTintBrush" Color="{ThemeResource HavenWarningTintColor}" />
+            <SolidColorBrush x:Key="DangerTintBrush" Color="{ThemeResource HavenDangerTintColor}" />
+
+            <!-- Interaction brushes keep their historic Haven names. -->
+            <SolidColorBrush x:Key="HavenAccentBrush" Color="{ThemeResource HavenAccentColor}" />
+            <SolidColorBrush x:Key="HavenVioletBrush" Color="{ThemeResource HavenVioletColor}" />
+            <SolidColorBrush x:Key="HavenOrangeBrush" Color="{ThemeResource HavenOrangeColor}" />
+            <SolidColorBrush x:Key="HavenSuccessBrush" Color="{ThemeResource HavenSuccessColor}" />
+            <SolidColorBrush x:Key="HavenWarningBrush" Color="{ThemeResource HavenWarningColor}" />
+            <SolidColorBrush x:Key="HavenDangerBrush" Color="{ThemeResource HavenDangerColor}" />
+            <SolidColorBrush x:Key="HavenAccentTintBrush" Color="{ThemeResource HavenAccentTintColor}" />
+            <SolidColorBrush x:Key="HavenVioletTintBrush" Color="{ThemeResource HavenVioletTintColor}" />
+            <SolidColorBrush x:Key="HavenOrangeTintBrush" Color="{ThemeResource HavenOrangeTintColor}" />
+            <SolidColorBrush x:Key="HavenSuccessTintBrush" Color="{ThemeResource HavenSuccessTintColor}" />
+            <SolidColorBrush x:Key="HavenWarningTintBrush" Color="{ThemeResource HavenWarningTintColor}" />
+            <SolidColorBrush x:Key="HavenDangerTintBrush" Color="{ThemeResource HavenDangerTintColor}" />
+
+            <!-- Data-visualization series and heat ramp (spec 37).  v1 aliases
+                 the interaction tokens; per-theme dataviz palettes land with
+                 the density pass. -->
+            <SolidColorBrush x:Key="Series1Brush" Color="{ThemeResource HavenAccentColor}" />
+            <SolidColorBrush x:Key="Series2Brush" Color="{ThemeResource HavenVioletColor}" />
+            <SolidColorBrush x:Key="Series3Brush" Color="{ThemeResource HavenOrangeColor}" />
+            <SolidColorBrush x:Key="Series4Brush" Color="{ThemeResource HavenSuccessColor}" />
+            <SolidColorBrush x:Key="Series5Brush" Color="#22D3EE" />
+            <SolidColorBrush x:Key="Series6Brush" Color="#E879F9" />
+            <SolidColorBrush x:Key="Series7Brush" Color="#A3E635" />
+            <SolidColorBrush x:Key="Series8Brush" Color="#94A3B8" />
+            <SolidColorBrush x:Key="HeatLowBrush" Color="{ThemeResource HavenSuccessTintColor}" />
+            <SolidColorBrush x:Key="HeatMedBrush" Color="{ThemeResource HavenWarningTintColor}" />
+            <SolidColorBrush x:Key="HeatHighBrush" Color="{ThemeResource HavenDangerTintColor}" />
 
             <!-- Typography scale (spec section 05). Sentence case in copy. -->
             <Style x:Key="HavenDisplayTextStyle" TargetType="TextBlock">
