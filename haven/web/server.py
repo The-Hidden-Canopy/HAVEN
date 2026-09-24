@@ -415,6 +415,59 @@ class HavenWebServer(ThreadingHTTPServer):
             current = self.claims.get(claim.claim_id)
             return {"claim": claim_to_dict(current or claim)}
 
+        def _rooms_payload() -> dict:
+            # One observation pass feeds both the room list and the pending
+            # confirmation pool, so a refresh button can repaint the whole
+            # view without a second state snapshot drifting underneath it.
+            state = self.director.state()
+            return {"rooms": state["rooms"], "pending": state["pending"]}
+
+        def _rooms_get(params: dict) -> dict:
+            room_id = params.get("room_id")
+            if not isinstance(room_id, str) or not room_id.strip():
+                raise ValueError("a non-empty 'room_id' is required")
+            payload = _rooms_payload()
+            room = next((room for room in payload["rooms"] if room["id"] == room_id.strip()), None)
+            if room is None:
+                raise ValueError("unknown room")
+            return {"room": room, "pending": payload["pending"]}
+
+        def _device_command(params: dict) -> dict:
+            # Mirrors the /api/devices/{id}/command handler: the same
+            # brightness validation, then the same governed director path.
+            # Director-level refusals ride inside the result envelope exactly
+            # like computer.action.request, with the web surface's strings.
+            device_id = params.get("device_id")
+            if not isinstance(device_id, str) or not device_id.strip():
+                raise ValueError("a non-empty 'device_id' is required")
+            service = params.get("service")
+            if not isinstance(service, str) or not service.strip():
+                raise ValueError("a non-empty 'service' is required")
+            parameters = None
+            if service == "light.set_brightness":
+                brightness = params.get("brightness_pct")
+                if isinstance(brightness, bool) or not isinstance(brightness, int):
+                    raise ValueError("an integer 'brightness_pct' is required")
+                parameters = {"brightness_pct": brightness}
+            return self.director.device_command(device_id.strip(), service, parameters)
+
+        def _request_approve(params: dict) -> dict:
+            request_id = params.get("request_id")
+            if not isinstance(request_id, str) or not request_id.strip():
+                raise ValueError("a non-empty 'request_id' is required")
+            state = self.director.approve(request_id.strip())
+            if state is None:
+                raise ValueError("unknown request")
+            return {"state": state}
+
+        def _request_deny(params: dict) -> dict:
+            request_id = params.get("request_id")
+            if not isinstance(request_id, str) or not request_id.strip():
+                raise ValueError("a non-empty 'request_id' is required")
+            if not self.director.deny(request_id.strip()):
+                raise ValueError("unknown request")
+            return {"state": self.director.state()}
+
         def _computer_action(params: dict) -> dict:
             action = params.get("action")
             parameters = params.get("parameters", {})
@@ -553,6 +606,11 @@ class HavenWebServer(ThreadingHTTPServer):
                 "computer.action.confirm": _computer_confirm,
                 "computer.action.deny": _computer_deny,
                 "computer.action.history": lambda _params: self.computer_actions.history(),
+                "rooms.list": lambda _params: _rooms_payload(),
+                "rooms.get": _rooms_get,
+                "devices.command": _device_command,
+                "requests.approve": _request_approve,
+                "requests.deny": _request_deny,
             }
         )
 
