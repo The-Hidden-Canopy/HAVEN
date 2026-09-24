@@ -684,6 +684,18 @@ public sealed class HavenCoreClient : IAsyncDisposable
         CancellationToken cancellationToken = default) =>
         RequestResultAsync("relationships.for", new { resource_id = resourceId }, cancellationToken);
 
+    public Task<JsonElement> GetExtensionsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("extensions.list", new { }, cancellationToken);
+
+    public Task<JsonElement> SetExportConsumerEnabledAsync(
+        string pluginId,
+        bool enabled,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "extensions.export_consumers.set_enabled",
+            new { plugin_id = pluginId, enabled },
+            cancellationToken);
+
     private async Task<JsonElement> RequestResultAsync(
         string method,
         object parameters,
