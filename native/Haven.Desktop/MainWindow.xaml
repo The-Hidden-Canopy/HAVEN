@@ -34,6 +34,7 @@
                 <NavigationViewItem Content="Memory" Tag="memory" />
                 <NavigationViewItem Content="Rooms" Tag="rooms" />
                 <NavigationViewItem Content="People" Tag="people" />
+                <NavigationViewItem Content="Automations" Tag="automations" />
                 <NavigationViewItem Content="Home" Tag="home" />
                 <NavigationViewItem Content="Models" Tag="models" />
                 <NavigationViewItem Content="Settings" Tag="settings" />
@@ -129,6 +130,25 @@
                         <StackPanel x:Name="PeopleList" Spacing="8" />
                         <TextBlock FontSize="16" FontWeight="SemiBold" Text="Contexts" />
                         <StackPanel x:Name="ContextsList" Spacing="8" />
+                    </StackPanel>
+
+                    <StackPanel x:Name="AutomationsPanel" Spacing="12" Visibility="Collapsed">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="4">
+                                <TextBlock FontSize="20" Text="Automations" />
+                                <TextBlock Text="Rules HAVEN can run on a schedule. Proposals need an owner's approval before the scheduler acts." TextWrapping="Wrap" Opacity="0.72" />
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="Refresh" Click="OnAutomationsRefreshClicked" VerticalAlignment="Center" />
+                            <Button Grid.Column="2" Content="Propose automation" Click="OnProposeAutomationClicked" VerticalAlignment="Center" />
+                        </Grid>
+                        <TextBlock x:Name="AutomationsErrorText" TextWrapping="Wrap"
+                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                        <StackPanel x:Name="AutomationsList" Spacing="8" />
                     </StackPanel>
 
                     <StackPanel x:Name="HomePanel" Spacing="12">
