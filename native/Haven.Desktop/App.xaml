@@ -34,6 +34,15 @@
             <SolidColorBrush x:Key="AccentBrush" Color="{ThemeResource HavenAccentColor}" />
             <SolidColorBrush x:Key="AccentHoverBrush" Color="{ThemeResource HavenAccentHoverColor}" />
             <SolidColorBrush x:Key="FocusRingBrush" Color="{ThemeResource HavenFocusRingColor}" />
+            <!-- Keyboard focus visuals (spec 40/accessibility pass): override
+                 the Fluent defaults' resource keys so Tab-focus rectangles
+                 pick up each theme's accent instead of a generic blue.
+                 XamlControlsResources is merged first in this file, so a
+                 same-named key defined below it here wins the lookup. -->
+            <SolidColorBrush x:Key="SystemControlFocusVisualPrimaryBrush" Color="{ThemeResource HavenFocusRingColor}" />
+            <SolidColorBrush x:Key="SystemControlFocusVisualSecondaryBrush" Color="{ThemeResource HavenAccentColor}" />
+            <SolidColorBrush x:Key="FocusVisualPrimaryBrush" Color="{ThemeResource HavenFocusRingColor}" />
+            <SolidColorBrush x:Key="FocusVisualSecondaryBrush" Color="{ThemeResource HavenAccentColor}" />
             <SolidColorBrush x:Key="PermissionGlowBrush" Color="{ThemeResource HavenPermissionGlowColor}" />
             <SolidColorBrush x:Key="SuccessBrush" Color="{ThemeResource HavenSuccessColor}" />
             <SolidColorBrush x:Key="WarningBrush" Color="{ThemeResource HavenWarningColor}" />
