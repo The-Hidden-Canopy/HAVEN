@@ -249,9 +249,16 @@ Source: `haven_pass_spec_extracted.txt` v1.0 (spec sections 08–17, 34–42). P
   - Also fixed `tests/test_themes.py`, found failing (`FileNotFoundError` on `Themes/Haven.xaml`) at the start of this phase against a since-abandoned single-file-per-theme `ThemeDictionaries` design — confirmed pre-existing via `git stash` before touching it. The real, working architecture is `ThemeService.Apply` live-swapping one of eight flat `{Theme}{Appearance}.xaml` files; rewrote the parser and the two tests that assumed the old layout.
 - Interactive click-through not run (headless; WinUI compositing on the dev machine is intermittent). Verification throughout was build-clean + the Python XAML-parsing test suites, per the pattern the rest of the Product Pass already uses.
 
-## Queued — phases 5–7
+## Phase 5 — Connection center ✅
 
-- [ ] **Phase 5 — Connection center**: full connection UI (per-domain status, manual reconnect, diagnostics).
+- [x] The rail's connection indicator (previously a static `ConnectionText` label) is now a button (`ConnectionCenterButton`) opening a "Connection" `ContentDialog` (`MainWindow.ConnectionCenter.cs`, built in code-behind matching the codebase's existing `ContentDialog` convention — see `MainWindow.Automations.cs`/`MainWindow.Memory.cs`) with three sections:
+  - **Channels**: RPC (`ConnectionService`) and the push-only events pipe (`HavenEventClient`) each get a status row (name, live status text, Online/Attention chip) and their own reconnect action — RPC's reuses `ConnectionService.RetryNowAsync` + the same completed-task restart the banner's existing Retry button uses; events calls `EnsureEventClientAsync()`. `ConnectionService` gained two read-only properties, `Attempt` and `NextRetryDelayMs`, so the RECONNECTING/DISCONNECTED status text can show attempt count and backoff instead of just a generic label.
+  - **Domains**: every domain name from the existing `EventDomains` invalidation vocabulary (`MainWindow.Events.cs` — tasks/projects/relationships/memory/search/computer/comms/home/authority/models), each shown as a Fresh (success) or Pending refresh (warning) chip against `_dirtyDomains`. Computed via a method, not a field initializer, specifically to avoid racing `EventDomains`'s own static initializer across the two partial-class files (C# doesn't guarantee field-initializer order between partial declarations) — the one subtlety worth flagging for future edits to either file.
+  - **Diagnostics**: a link that closes the dialog and navigates to Settings rather than forking the existing `system.diagnostics`/`system.probe` UI (B6b) into a second copy.
+- Read-only surface: the only mutations are the two reconnect actions, both already-existing capabilities exposed through a new door. Build green (`dotnet build -p:Platform=x64`, 0 warnings). Interactive click-through not run (headless).
+
+## Queued — phases 6–7
+
 - [ ] **Phase 6 — Tablet adaptation polish.**
 - [ ] **Phase 7 — Accessibility/pixel pass.**
 
