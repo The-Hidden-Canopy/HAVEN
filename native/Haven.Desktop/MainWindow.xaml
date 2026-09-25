@@ -309,11 +309,48 @@
                     </Border>
                 </StackPanel>
 
+                <!-- Search (spec 22): result list + inspector, like a native
+                     command/research surface, instead of a bare result list. -->
                 <StackPanel x:Name="SearchPanel" Spacing="12" Visibility="Collapsed">
-                    <TextBox x:Name="SearchBox" PlaceholderText="Files, people, claims, anything HAVEN can see…"
-                             KeyDown="OnSearchKeyDown" MinHeight="38" />
-                    <Button Content="Find" Click="OnSearchClicked" HorizontalAlignment="Left" />
-                    <ListView x:Name="SearchResults" Style="{StaticResource HavenRowListStyle}" />
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="SearchBox" PlaceholderText="Files, claims, anything HAVEN can see…"
+                                 KeyDown="OnSearchKeyDown" MinHeight="38" />
+                        <Button Grid.Column="1" Content="Find" Click="OnSearchClicked" Style="{StaticResource HavenPrimaryButtonStyle}" />
+                    </Grid>
+                    <!-- Type filters map to SearchQuery.resource_types; only
+                         types the backend actually indexes as resources are
+                         offered (no "People" chip - people aren't indexed
+                         resources, so filtering on it would silently return
+                         nothing while claiming to filter - "no false
+                         capability", spec 06). -->
+                    <StackPanel x:Name="SearchTypeFilters" Orientation="Horizontal" Spacing="4">
+                        <Button Content="All" Tag="" Click="OnSearchTypeFilterClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                        <Button Content="Files" Tag="file,folder" Click="OnSearchTypeFilterClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                        <Button Content="Messages" Tag="email_message" Click="OnSearchTypeFilterClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                        <Button Content="Calendar" Tag="calendar_event" Click="OnSearchTypeFilterClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                        <Button Content="Tasks" Tag="task" Click="OnSearchTypeFilterClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                        <Button Content="Projects" Tag="project" Click="OnSearchTypeFilterClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                    </StackPanel>
+                    <TextBlock x:Name="SearchStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
+                    <Grid x:Name="SearchSplit" ColumnSpacing="18">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.5*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <ListView x:Name="SearchResults" SelectionChanged="OnSearchResultSelectionChanged" MaxHeight="560"
+                                  ItemContainerStyle="{StaticResource HavenListItemStyle}" />
+                        <Border x:Name="SearchInspector" Grid.Column="1" Style="{StaticResource HavenCardStyle}" Padding="18">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="560">
+                                <StackPanel x:Name="SearchDetail" Spacing="10">
+                                    <TextBlock Text="Search, then select a result to see why it matched." TextWrapping="Wrap" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Border>
+                    </Grid>
                 </StackPanel>
 
                 <!-- Projects (spec 27): filter chips + card gallery + detail. -->
@@ -338,7 +375,19 @@
                             </ItemsPanelTemplate>
                         </ListView.ItemsPanel>
                     </ListView>
-                    <StackPanel x:Name="ProjectDetailHost" Spacing="12" Visibility="Collapsed" />
+                    <!-- Project detail (spec 24): 70/30 - tabs change the
+                         primary work area while Progress/Files/People/
+                         Blocked stay visible in the context rail. -->
+                    <Grid x:Name="ProjectDetailHost" ColumnSpacing="18" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.6*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel x:Name="ProjectDetailMain" Spacing="12" />
+                        <Border x:Name="ProjectContextRailCard" Grid.Column="1" Style="{StaticResource HavenCardStyle}" VerticalAlignment="Top">
+                            <StackPanel x:Name="ProjectContextRail" Spacing="14" />
+                        </Border>
+                    </Grid>
                 </StackPanel>
 
                 <!-- Tasks (spec 29): view chips, fast add, dense rows. -->
@@ -379,7 +428,10 @@
                     <StackPanel x:Name="TasksListPanel" Spacing="2" />
                 </StackPanel>
 
-                <!-- Computer (spec 33/34): Files / Applications / Windows / Activity. -->
+                <!-- Computer (spec 28/33/34): Files gets a locations + table +
+                     inspector explorer layout; Applications/Windows/Activity
+                     keep the shared list host (already reasonably table/list-
+                     like per page). -->
                 <StackPanel x:Name="ComputerPanel" Spacing="12" Visibility="Collapsed">
                     <StackPanel Orientation="Horizontal" Spacing="4">
                         <Button Content="Files" Tag="files" Click="OnComputerTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
@@ -389,10 +441,38 @@
                     </StackPanel>
                     <TextBlock x:Name="ComputerErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
                     <TextBlock x:Name="ComputerStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
+
+                    <Grid x:Name="ComputerFilesGrid" ColumnSpacing="14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="180" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="1.1*" />
+                        </Grid.ColumnDefinitions>
+                        <!-- Locations: real folders derived from observed files
+                             (not a fabricated filesystem tree - HAVEN has no
+                             browse-arbitrary-folders capability). -->
+                        <ListView x:Name="ComputerLocations" SelectionChanged="OnComputerLocationSelectionChanged" MaxHeight="480"
+                                  ItemContainerStyle="{StaticResource HavenListItemStyle}" />
+                        <ListView x:Name="ComputerFilesTable" Grid.Column="1" SelectionChanged="OnComputerFileSelectionChanged" MaxHeight="480"
+                                  ItemContainerStyle="{StaticResource HavenListItemStyle}" />
+                        <Border x:Name="ComputerFileInspector" Grid.Column="2" Style="{StaticResource HavenCardStyle}" Padding="16">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="480">
+                                <StackPanel x:Name="ComputerFileDetail" Spacing="10">
+                                    <TextBlock Text="Select a file to see why HAVEN has it and what you can do." TextWrapping="Wrap" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Border>
+                    </Grid>
+
                     <StackPanel x:Name="ComputerTabContent" Spacing="8" />
                 </StackPanel>
 
-                <!-- Communications (spec 32): Email, Messages, Calendar, Browser tabs. -->
+                <!-- Communications (spec 29): Email gets an account/list/
+                     content split; Calendar gets a real week canvas + event
+                     inspector. Messages/Browser tabs keep the shared list
+                     host - Messages has no connected provider to show a list
+                     for, and Browser tabs' window/session grouping is left
+                     for a future pass. -->
                 <StackPanel x:Name="CommunicationsPanel" Spacing="14" Visibility="Collapsed">
                     <StackPanel Orientation="Horizontal" Spacing="4">
                         <Button Content="Email" Tag="email" Click="OnCommsTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
@@ -402,6 +482,50 @@
                     </StackPanel>
                     <TextBlock x:Name="CommsErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
                     <TextBlock x:Name="CommsStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
+
+                    <StackPanel x:Name="CommsEmailPanel" Spacing="10">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <TextBlock x:Name="EmailConnectionText" VerticalAlignment="Center" Style="{StaticResource HavenMetadataTextStyle}" />
+                            <Button x:Name="EmailFolderButton" Content="Change mail folder…" Click="OnEmailFolderClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
+                        </StackPanel>
+                        <Grid x:Name="CommsEmailGrid" ColumnSpacing="18">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="1.1*" />
+                            </Grid.ColumnDefinitions>
+                            <ListView x:Name="EmailMessages" SelectionChanged="OnEmailMessageSelectionChanged" MaxHeight="520"
+                                      ItemContainerStyle="{StaticResource HavenListItemStyle}" />
+                            <Border x:Name="EmailInspector" Grid.Column="1" Style="{StaticResource HavenCardStyle}" Padding="16">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="520">
+                                    <StackPanel x:Name="EmailDetail" Spacing="10">
+                                        <TextBlock Text="Select a message to read it." TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </Border>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- Calendar: week canvas (day columns, horizontally
+                         scrollable) + a below inspector for the selected
+                         event, rather than a flat chronological card list. -->
+                    <StackPanel x:Name="CommsCalendarPanel" Spacing="10">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="‹" Click="OnCalendarPrevWeekClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
+                            <TextBlock x:Name="CalendarWeekRangeText" VerticalAlignment="Center" Style="{StaticResource HavenMetadataTextStyle}" MinWidth="160" />
+                            <Button Content="›" Click="OnCalendarNextWeekClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
+                            <Button Content="Today" Click="OnCalendarTodayClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
+                            <Button Content="Add .ics file…" Click="OnAddIcsClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
+                        </StackPanel>
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="CalendarWeekGrid" Orientation="Horizontal" Spacing="8" />
+                        </ScrollViewer>
+                        <Border Style="{StaticResource HavenCardStyle}">
+                            <StackPanel x:Name="CalendarEventDetail" Spacing="10">
+                                <TextBlock Text="Select an event to see details." TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
                     <StackPanel x:Name="CommsTabContent" Spacing="8" />
                 </StackPanel>
 
@@ -433,6 +557,9 @@
                     </Grid>
                 </StackPanel>
 
+                <!-- People (spec 26): master-detail - directory left, selected
+                     person's relationship context right - instead of a
+                     stacked card per person. -->
                 <StackPanel x:Name="PeoplePanel" Spacing="12" Visibility="Collapsed">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <Button Content="Add person" Click="OnAddPersonClicked"
@@ -440,7 +567,21 @@
                     </StackPanel>
                     <TextBlock x:Name="PeopleErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
                     <TextBlock x:Name="PeopleStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
-                    <StackPanel x:Name="PeopleList" Spacing="8" />
+                    <Grid x:Name="PeopleSplit" ColumnSpacing="18">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="1.2*" />
+                        </Grid.ColumnDefinitions>
+                        <ListView x:Name="PeopleDirectory" SelectionChanged="OnPersonSelectionChanged" MaxHeight="560"
+                                  ItemContainerStyle="{StaticResource HavenListItemStyle}" />
+                        <Border x:Name="PersonInspector" Grid.Column="1" Style="{StaticResource HavenCardStyle}" Padding="18">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="560">
+                                <StackPanel x:Name="PersonDetail" Spacing="10">
+                                    <TextBlock Text="Select a person to see their relationship context." TextWrapping="Wrap" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Border>
+                    </Grid>
                 </StackPanel>
 
                 <!-- Home (spec 36): rooms, devices, automations, contexts under top tabs. -->

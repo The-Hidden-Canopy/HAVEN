@@ -184,7 +184,8 @@ public sealed partial class MainWindow
             var project = result.GetProperty("project");
             ProjectGallery.Visibility = Visibility.Collapsed;
             ProjectDetailHost.Visibility = Visibility.Visible;
-            ProjectDetailHost.Children.Clear();
+            ProjectDetailMain.Children.Clear();
+            RenderProjectContextRail(project);
 
             var head = new StackPanel { Spacing = 4 };
             var back = new Button
@@ -237,7 +238,7 @@ public sealed partial class MainWindow
             actions.Children.Add(edit);
             actions.Children.Add(archive);
             head.Children.Add(actions);
-            ProjectDetailHost.Children.Add(head);
+            ProjectDetailMain.Children.Add(head);
 
             var tabs = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
             foreach (var (label, key) in new[] { ("Tasks", "tasks"), ("Files", "files"), ("People", "people") })
@@ -251,10 +252,10 @@ public sealed partial class MainWindow
                 tab.Click += async (_, _) => await RenderProjectTabAsync(project, key);
                 tabs.Children.Add(tab);
             }
-            ProjectDetailHost.Children.Add(tabs);
+            ProjectDetailMain.Children.Add(tabs);
 
             var body = new StackPanel { Spacing = 8 };
-            ProjectDetailHost.Children.Add(body);
+            ProjectDetailMain.Children.Add(body);
             await RenderProjectTabAsync(project, "tasks");
         }
         catch (Exception ex)
@@ -263,9 +264,58 @@ public sealed partial class MainWindow
         }
     }
 
+    /// <summary>The 30% context rail (spec 24): stays visible while the tabs
+    /// in the 70% main area change. Progress/files/people come from the same
+    /// project payload the gallery card already uses - no extra fetch. No
+    /// "key dates" section: the project record carries no due-date field of
+    /// its own (only per-task due dates, one fetch away inside the Tasks
+    /// tab), so fabricating one here would violate "no false capability".</summary>
+    private void RenderProjectContextRail(JsonElement project)
+    {
+        ProjectContextRail.Children.Clear();
+        ProjectContextRail.Children.Add(new TextBlock { Text = "Progress", Style = (Style)Application.Current.Resources["HavenSectionTextStyle"] });
+        var done = GetInt(project, "tasks_done");
+        var total = GetInt(project, "tasks_total");
+        if (total > 0)
+        {
+            ProjectContextRail.Children.Add(new ProgressBar { Value = done * 100.0 / total, Maximum = 100, MinHeight = 6, MaxHeight = 6 });
+        }
+        var blocked = GetInt(project, "tasks_blocked");
+        var progressText = total == 0 ? "No tasks yet." : $"{done} of {total} task(s) done" + (blocked > 0 ? $" · {blocked} blocked" : "");
+        ProjectContextRail.Children.Add(new TextBlock { Text = progressText, Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"], TextWrapping = TextWrapping.Wrap });
+
+        ProjectContextRail.Children.Add(new TextBlock { Text = "Files", Style = (Style)Application.Current.Resources["HavenSectionTextStyle"] });
+        var filesCount = GetInt(project, "files_count");
+        ProjectContextRail.Children.Add(new TextBlock
+        {
+            Text = filesCount == 1 ? "1 file attached" : $"{filesCount} files attached",
+            Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+        });
+
+        var people = Enumerate(project, "people_ids").Select(id => id.GetString()).Where(id => id is not null).ToList();
+        ProjectContextRail.Children.Add(new TextBlock { Text = "People", Style = (Style)Application.Current.Resources["HavenSectionTextStyle"] });
+        if (people.Count == 0)
+        {
+            ProjectContextRail.Children.Add(new TextBlock
+            {
+                Text = "No one assigned yet.",
+                Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+            });
+        }
+        else
+        {
+            var chips = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            foreach (var personId in people)
+            {
+                chips.Children.Add(MakeChip(personId!, "HavenAccentTintBrush", "HavenAccentBrush"));
+            }
+            ProjectContextRail.Children.Add(chips);
+        }
+    }
+
     private async Task RenderProjectTabAsync(JsonElement project, string tab)
     {
-        var body = ProjectDetailHost.Children.OfType<StackPanel>().LastOrDefault();
+        var body = ProjectDetailMain.Children.OfType<StackPanel>().LastOrDefault();
         if (body is null || _client is null)
         {
             return;

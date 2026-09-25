@@ -55,26 +55,62 @@ public sealed partial class MainWindow
             ? new Microsoft.UI.Xaml.Thickness(16, 12, 16, 20)
             : new Microsoft.UI.Xaml.Thickness(30, 16, 30, 24);
 
-        // Memory: wide = list + right inspector; narrow = stacked single column.
+        // Master-detail splits: wide = list + right inspector; narrow =
+        // stacked single column (list on top, inspector below). Shared by
+        // every list+inspector page (Memory, People) so a new split only
+        // needs one call here, not a copy of this block.
+        AdaptSplitGrid(MemorySplit, MemoryClaims, MemoryInspector, narrow, wideListHeight: 560, narrowListHeight: 320);
+        AdaptSplitGrid(PeopleSplit, PeopleDirectory, PersonInspector, narrow, wideListHeight: 560, narrowListHeight: 320);
+        // Search: 60/40 results/inspector (spec 22) rather than the other
+        // splits' ~45/55 - the list is the primary surface here.
+        AdaptSplitGrid(SearchSplit, SearchResults, SearchInspector, narrow, wideListHeight: 560, narrowListHeight: 320, listStar: 1.5, inspectorStar: 1);
+
+        // Project detail: not a list+inspector shape (the left side is the
+        // tabbed work area, not a ListView), so it collapses inline rather
+        // than through AdaptSplitGrid.
         if (narrow)
         {
-            MemorySplit.ColumnDefinitions.Clear();
-            MemorySplit.RowDefinitions.Clear();
-            MemorySplit.RowDefinitions.Add(new RowDefinition { Height = Microsoft.UI.Xaml.GridLength.Auto });
-            MemorySplit.RowDefinitions.Add(new RowDefinition { Height = Microsoft.UI.Xaml.GridLength.Auto });
-            MemoryClaims.MaxHeight = 320;
-            Grid.SetColumn(MemoryInspector, 0);
-            Grid.SetRow(MemoryInspector, 1);
+            ProjectDetailHost.ColumnDefinitions.Clear();
+            ProjectDetailHost.RowDefinitions.Clear();
+            ProjectDetailHost.RowDefinitions.Add(new RowDefinition { Height = Microsoft.UI.Xaml.GridLength.Auto });
+            ProjectDetailHost.RowDefinitions.Add(new RowDefinition { Height = Microsoft.UI.Xaml.GridLength.Auto });
+            Grid.SetColumn(ProjectContextRailCard, 0);
+            Grid.SetRow(ProjectContextRailCard, 1);
         }
         else
         {
-            MemorySplit.RowDefinitions.Clear();
-            MemorySplit.ColumnDefinitions.Clear();
-            MemorySplit.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
-            MemorySplit.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1.2, Microsoft.UI.Xaml.GridUnitType.Star) });
-            MemoryClaims.MaxHeight = 560;
-            Grid.SetRow(MemoryInspector, 0);
-            Grid.SetColumn(MemoryInspector, 1);
+            ProjectDetailHost.RowDefinitions.Clear();
+            ProjectDetailHost.ColumnDefinitions.Clear();
+            ProjectDetailHost.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1.6, Microsoft.UI.Xaml.GridUnitType.Star) });
+            ProjectDetailHost.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
+            Grid.SetRow(ProjectContextRailCard, 0);
+            Grid.SetColumn(ProjectContextRailCard, 1);
+        }
+    }
+
+    private static void AdaptSplitGrid(
+        Grid split, ListView list, FrameworkElement inspector, bool narrow,
+        double wideListHeight, double narrowListHeight, double listStar = 1, double inspectorStar = 1.2)
+    {
+        if (narrow)
+        {
+            split.ColumnDefinitions.Clear();
+            split.RowDefinitions.Clear();
+            split.RowDefinitions.Add(new RowDefinition { Height = Microsoft.UI.Xaml.GridLength.Auto });
+            split.RowDefinitions.Add(new RowDefinition { Height = Microsoft.UI.Xaml.GridLength.Auto });
+            list.MaxHeight = narrowListHeight;
+            Grid.SetColumn(inspector, 0);
+            Grid.SetRow(inspector, 1);
+        }
+        else
+        {
+            split.RowDefinitions.Clear();
+            split.ColumnDefinitions.Clear();
+            split.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(listStar, Microsoft.UI.Xaml.GridUnitType.Star) });
+            split.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(inspectorStar, Microsoft.UI.Xaml.GridUnitType.Star) });
+            list.MaxHeight = wideListHeight;
+            Grid.SetRow(inspector, 0);
+            Grid.SetColumn(inspector, 1);
         }
     }
 

@@ -54,67 +54,123 @@ public sealed partial class MainWindow
         }
     }
 
+    // Master-detail (spec 26): the directory list carries only identity +
+    // presence at a glance; the full relationship context (sources, edit,
+    // remove) lives in the one selected-person inspector instead of being
+    // repeated inside every card.
+    private string? _selectedPersonId;
+
     private void RenderPeople()
     {
-        PeopleList.Children.Clear();
+        var previousSelection = _selectedPersonId;
+        PeopleDirectory.Items.Clear();
         foreach (var person in Enumerate(_people))
         {
             var personId = GetString(person, "person_id") ?? "";
             var name = GetString(person, "name") ?? personId;
             var role = Sentence(GetString(person, "role") ?? "member");
-
-            var card = new StackPanel { Spacing = 4 };
-            var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            head.Children.Add(new TextBlock
-            {
-                Text = name,
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            });
-            head.Children.Add(new TextBlock { Text = role, Opacity = 0.72 });
-            card.Children.Add(head);
-
             var present = person.TryGetProperty("present", out var presentValue)
                 && presentValue.ValueKind == JsonValueKind.True;
-            var room = GetString(person, "room");
-            card.Children.Add(new TextBlock
-            {
-                Text = present
-                    ? (room is not null ? $"Present · {room}" : "Present")
-                    : "Not present",
-                Opacity = 0.72,
-            });
 
-            var sources = Enumerate(person, "sources").ToList();
-            if (sources.Count > 0)
+            var row = new StackPanel { Spacing = 2 };
+            var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            head.Children.Add(new TextBlock { Text = name, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+            head.Children.Add(MakeChip(
+                present ? "Present" : "Not present",
+                present ? "HavenSuccessTintBrush" : "HavenStrokeBrush",
+                present ? "HavenSuccessBrush" : "HavenMutedTextBrush"));
+            row.Children.Add(head);
+            row.Children.Add(new TextBlock { Text = role, Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"] });
+
+            var item = new ListViewItem { Tag = personId, Content = row };
+            PeopleDirectory.Items.Add(item);
+            if (personId == previousSelection)
             {
-                card.Children.Add(new TextBlock
-                {
-                    Text = string.Join(" · ", sources.Select(source =>
-                        $"presence: {GetString(source, "entity_id") ?? "?"} in {GetString(source, "room_id") ?? "?"}")),
-                    Opacity = 0.6,
-                    TextWrapping = TextWrapping.Wrap,
-                });
+                PeopleDirectory.SelectedItem = item;
             }
-
-            var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            var edit = new Button { Content = "Edit" };
-            edit.Click += async (_, _) => await EditPersonAsync(person);
-            var remove = new Button { Content = "Remove" };
-            remove.Click += async (_, _) => await RemovePersonAsync(personId, name);
-            buttons.Children.Add(edit);
-            buttons.Children.Add(remove);
-            card.Children.Add(buttons);
-
-            PeopleList.Children.Add(WrapCard(card));
         }
-        if (PeopleList.Children.Count == 0)
+        if (PeopleDirectory.Items.Count == 0)
         {
-            PeopleList.Children.Add(new TextBlock
+            PeopleDirectory.Items.Add(new TextBlock
             {
                 Text = "No one is declared yet. Add the people HAVEN should know about.",
                 Opacity = 0.72,
             });
         }
+        if (PeopleDirectory.SelectedItem is null)
+        {
+            RenderPersonDetail(null);
+        }
+    }
+
+    private void OnPersonSelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        var personId = PeopleDirectory.SelectedItem is ListViewItem item ? item.Tag as string : null;
+        _selectedPersonId = personId;
+        RenderPersonDetail(personId is null
+            ? null
+            : Enumerate(_people).FirstOrDefault(p => GetString(p, "person_id") == personId));
+    }
+
+    private void RenderPersonDetail(JsonElement? person)
+    {
+        PersonDetail.Children.Clear();
+        if (person is null || person.Value.ValueKind != JsonValueKind.Object)
+        {
+            PersonDetail.Children.Add(new TextBlock
+            {
+                Text = "Select a person to see their relationship context.",
+                TextWrapping = TextWrapping.Wrap,
+            });
+            return;
+        }
+        var p = person.Value;
+        var personId = GetString(p, "person_id") ?? "";
+        var name = GetString(p, "name") ?? personId;
+        var role = Sentence(GetString(p, "role") ?? "member");
+
+        PersonDetail.Children.Add(new TextBlock
+        {
+            Text = name,
+            Style = (Style)Application.Current.Resources["HavenSectionTextStyle"],
+        });
+        PersonDetail.Children.Add(new TextBlock { Text = role, Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"] });
+
+        var present = p.TryGetProperty("present", out var presentValue) && presentValue.ValueKind == JsonValueKind.True;
+        var room = GetString(p, "room");
+        PersonDetail.Children.Add(new TextBlock
+        {
+            Text = present
+                ? (room is not null ? $"Present · {room}" : "Present")
+                : "Not present",
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        var sources = Enumerate(p, "sources").ToList();
+        if (sources.Count > 0)
+        {
+            PersonDetail.Children.Add(new TextBlock
+            {
+                Text = "Presence sources",
+                Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+            });
+            PersonDetail.Children.Add(new TextBlock
+            {
+                Text = string.Join("\n", sources.Select(source =>
+                    $"{GetString(source, "entity_id") ?? "?"} in {GetString(source, "room_id") ?? "?"}")),
+                Opacity = 0.72,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var edit = new Button { Content = "Edit", Style = (Style)Application.Current.Resources["HavenSecondaryButtonStyle"] };
+        edit.Click += async (_, _) => await EditPersonAsync(p);
+        var remove = new Button { Content = "Remove", Style = (Style)Application.Current.Resources["HavenDangerButtonStyle"] };
+        remove.Click += async (_, _) => await RemovePersonAsync(personId, name);
+        buttons.Children.Add(edit);
+        buttons.Children.Add(remove);
+        PersonDetail.Children.Add(buttons);
     }
 
     private void RenderContexts()
