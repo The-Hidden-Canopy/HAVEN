@@ -52,6 +52,12 @@ public sealed class ConnectionService
 
     public bool IsMutationsEnabled => State is StateConnected;
 
+    /// <summary>Failed attempts since the last successful connect (0 once connected).</summary>
+    public int Attempt => _attempt;
+
+    /// <summary>The backoff delay the next reconnect attempt will wait, in ms.</summary>
+    public int NextRetryDelayMs => BackoffForAttempt(Math.Max(_attempt - 1, 0));
+
     public static int BackoffForAttempt(int attempt)
     {
         var index = Math.Clamp(attempt, 0, BackoffMs.Length - 1);

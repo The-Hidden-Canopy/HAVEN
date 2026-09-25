@@ -128,8 +128,13 @@
                     <StackPanel x:Name="ProfileText" VerticalAlignment="Center">
                         <TextBlock Text="Personal" FontSize="13" FontWeight="SemiBold"
                                    Foreground="{ThemeResource HavenTextBrush}" />
-                        <TextBlock x:Name="ConnectionText" Text="Connecting…" FontSize="11"
-                                   Foreground="{ThemeResource HavenMutedTextBrush}" />
+                        <Button x:Name="ConnectionCenterButton" Click="OnConnectionCenterClicked"
+                                Style="{StaticResource HavenQuietButtonStyle}"
+                                Padding="0" MinHeight="0" HorizontalContentAlignment="Left"
+                                HorizontalAlignment="Left">
+                            <TextBlock x:Name="ConnectionText" Text="Connecting…" FontSize="11"
+                                       Foreground="{ThemeResource HavenMutedTextBrush}" />
+                        </Button>
                     </StackPanel>
                 </StackPanel>
                 <Button x:Name="ReopenSetupButton" Content="Setup" Click="OnReopenSetupClicked"
