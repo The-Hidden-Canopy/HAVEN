@@ -43,6 +43,10 @@ class ActionReceipt:
     decision: AuthorityDecision
     device_result: DeviceResult | None
     event_ids: tuple[str, ...]
+    # Redacted source block for an externally initiated action (connection,
+    # tool, correlation ids -- never tokens or raw subject identifiers).
+    # None for every action HAVEN's own surfaces initiate.
+    external_source: tuple[tuple[str, str], ...] | None = None
 
     @property
     def execution_attempted(self) -> bool:
@@ -70,7 +74,7 @@ class ActionReceipt:
                 "observed_at": self.device_result.observed_at.isoformat(),
                 "source": self.device_result.source,
             }
-        return {
+        payload = {
             "schema_version": RECEIPT_SCHEMA_VERSION,
             "receipt_id": self.receipt_id,
             "requested_action": {
@@ -109,6 +113,9 @@ class ActionReceipt:
             "event_ids": list(self.event_ids),
             "outcome": self.outcome,
         }
+        if self.external_source is not None:
+            payload["external_source"] = dict(self.external_source)
+        return payload
 
     def to_json(self, *, indent: int | None = None) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, sort_keys=True, indent=indent)
