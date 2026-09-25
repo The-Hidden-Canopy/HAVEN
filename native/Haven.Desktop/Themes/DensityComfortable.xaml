@@ -16,4 +16,6 @@
     <Thickness x:Key="DensityPrimaryButtonPadding">14,5,14,5</Thickness>
     <x:Double x:Key="DensityTabButtonMinHeight">34</x:Double>
     <Thickness x:Key="DensityTabButtonPadding">10,6,10,6</Thickness>
+    <x:Double x:Key="DensityCircleButtonSize">36</x:Double>
+    <CornerRadius x:Key="DensityCircleButtonRadius">18</CornerRadius>
 </ResourceDictionary>

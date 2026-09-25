@@ -31,6 +31,10 @@ public sealed partial class MainWindow
             return;
         }
         _narrow = narrow;
+        // Touch-safe floor for every density-tokened control app-wide (nav,
+        // lists, cards, buttons, tabs) - layered on top of whichever
+        // density the user picked, not a replacement for it.
+        _themeService.SetTouchOverlay(narrow, this);
         ShellRoot().ColumnDefinitions[0].Width = new Microsoft.UI.Xaml.GridLength(narrow ? 72 : 228);
 
         foreach (var button in NavItems.Children.OfType<Button>())

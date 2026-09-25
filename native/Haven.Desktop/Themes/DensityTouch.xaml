@@ -1,0 +1,26 @@
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Touch-safe density floor (spec 06/07/21/40): merged on top of
+         whichever density the user picked (Comfortable/Compact) whenever
+         the shell is narrower than the tablet breakpoint - see
+         MainWindow.Adaptive.cs's ApplyAdaptiveLayout. Every value here
+         meets or exceeds the ~44px touch-target guideline, so a user who
+         prefers Compact density on their desktop never gets sub-touch-size
+         controls on a tablet. Same key set as DensityComfortable.xaml /
+         DensityCompact.xaml - keep them in sync. -->
+    <x:Double x:Key="DensityNavItemHeight">44</x:Double>
+    <Thickness x:Key="DensityNavItemMargin">10,2,10,2</Thickness>
+    <Thickness x:Key="DensityNavItemPadding">14,0,14,0</Thickness>
+    <x:Double x:Key="DensityListItemMinHeight">44</x:Double>
+    <Thickness x:Key="DensityListItemMargin">2,2,2,2</Thickness>
+    <Thickness x:Key="DensityListItemPadding">12,6,12,6</Thickness>
+    <Thickness x:Key="DensityCardPadding">16,16,16,16</Thickness>
+    <x:Double x:Key="DensityButtonMinHeight">44</x:Double>
+    <Thickness x:Key="DensityButtonPadding">14,8,14,8</Thickness>
+    <Thickness x:Key="DensityPrimaryButtonPadding">16,8,16,8</Thickness>
+    <x:Double x:Key="DensityTabButtonMinHeight">44</x:Double>
+    <Thickness x:Key="DensityTabButtonPadding">12,8,12,8</Thickness>
+    <x:Double x:Key="DensityCircleButtonSize">44</x:Double>
+    <CornerRadius x:Key="DensityCircleButtonRadius">22</CornerRadius>
+</ResourceDictionary>

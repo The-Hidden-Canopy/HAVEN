@@ -257,9 +257,18 @@ Source: `haven_pass_spec_extracted.txt` v1.0 (spec sections 08–17, 34–42). P
   - **Diagnostics**: a link that closes the dialog and navigates to Settings rather than forking the existing `system.diagnostics`/`system.probe` UI (B6b) into a second copy.
 - Read-only surface: the only mutations are the two reconnect actions, both already-existing capabilities exposed through a new door. Build green (`dotnet build -p:Platform=x64`, 0 warnings). Interactive click-through not run (headless).
 
-## Queued — phases 6–7
+## Phase 6 — Tablet adaptation polish ✅
 
-- [ ] **Phase 6 — Tablet adaptation polish.**
+Before this phase, narrow-width (<900px) touch-target growth was hardcoded to nav items only (`button.Height = narrow ? 44 : 38` in a manual loop) and the Reopen-setup button; every other density-tokened control - list rows, cards, ordinary buttons, tab buttons, and the composer's circular mic/send buttons (which weren't density-tokened at all, fixed at 36px) - stayed whatever size the user's Comfortable/Compact density preference gave them, even on a narrow/touch window. A Compact-density user on a tablet would have gotten sub-40px controls everywhere outside the nav rail.
+
+- [x] **`Themes/DensityTouch.xaml`**: a third density file, same key set as Comfortable/Compact plus two new tokens this phase adds (`DensityCircleButtonSize`/`DensityCircleButtonRadius`, wired into `HavenCircleButtonStyle` - the corner radius has to track the size or a "circle" button stops being circular at a different size). Every value meets or exceeds the ~44px touch-target guideline.
+- [x] **`ThemeService.SetTouchOverlay(bool, MainWindow)`**: merges/unmerges `DensityTouch.xaml` on top of whichever density dictionary the user's Comfortable/Compact choice already merged (last-merged-wins, reusing the existing `RemoveMerged` helper), then calls `window.SetRequestedTheme(...)` to force WinUI to re-resolve every `ThemeResource`-bound Setter app-wide - the same mechanism `Apply()` already relies on for the live theme/density swap to reach already-instantiated elements without a restart. Independent of `Apply()` itself since it tracks window width, not the user's theme/density choice.
+- [x] **`MainWindow.Adaptive.cs`'s `ApplyAdaptiveLayout`** calls `_themeService.SetTouchOverlay(narrow, this)` on every narrow/wide transition. The pre-existing manual nav-item-height loop and Reopen-setup-button override are left in place unchanged (already proven, and a harmless no-op once the touch overlay makes `DensityNavItemHeight` itself already 44 - kept as a redundant safety net rather than removed, since the new resource-driven path can't be pixel-verified here).
+- [x] 4 new tests appended to `tests/test_density.py` (13 total in that file now): the touch overlay is well-formed with the full token set, every Double token clears the 40px floor, no touch value undercuts Comfortable's own value, and `ApplyAdaptiveLayout` actually calls the new toggle.
+- Build green (`dotnet build -p:Platform=x64`, 0 warnings). Interactive click-through not run (headless).
+
+## Queued — phase 7
+
 - [ ] **Phase 7 — Accessibility/pixel pass.**
 
 # Definition of done (spec page 44, verbatim target)

@@ -134,6 +134,38 @@ public sealed class ThemeService
         }
     }
 
+    /// <summary>
+    /// Merge/unmerge the touch-safe density floor (spec 06/07/21/40) on top
+    /// of whichever density the user picked. Called by the shell's narrow-
+    /// width adaptive layout (<see cref="MainWindow"/>'s
+    /// <c>ApplyAdaptiveLayout</c>), not by <see cref="Apply"/> - it tracks
+    /// window width, not the user's theme/density choice, so a Compact-
+    /// density user never gets sub-touch-target controls on a narrow/tablet
+    /// window.
+    /// </summary>
+    public void SetTouchOverlay(bool enabled, MainWindow window)
+    {
+        var merged = Application.Current.Resources.MergedDictionaries;
+        var alreadyOn = merged.Any(d =>
+            (d.Source?.OriginalString ?? "").Contains("/Themes/DensityTouch", StringComparison.OrdinalIgnoreCase));
+        if (enabled == alreadyOn)
+        {
+            return;
+        }
+        if (enabled)
+        {
+            merged.Add(new ResourceDictionary { Source = new Uri("ms-appx:///Themes/DensityTouch.xaml") });
+        }
+        else
+        {
+            RemoveMerged(merged, "/Themes/DensityTouch");
+        }
+        // Force WinUI to re-resolve every ThemeResource-bound Setter app-wide
+        // - the same mechanism Apply() relies on for the live theme/density
+        // swap to reach already-instantiated elements without a restart.
+        window.SetRequestedTheme(EffectiveAppearance() == "Dark" ? "dark" : "light");
+    }
+
     private string EffectiveAppearance()
     {
         if (Mode == "dark")

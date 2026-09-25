@@ -16,17 +16,25 @@ from pathlib import Path
 THEMES_DIR = Path(__file__).resolve().parent.parent / "native" / "Haven.Desktop" / "Themes"
 APP_XAML = Path(__file__).resolve().parent.parent / "native" / "Haven.Desktop" / "App.xaml"
 THEME_SERVICE = Path(__file__).resolve().parent.parent / "native" / "Haven.Desktop" / "Services" / "ThemeService.cs"
+MAINWINDOW_ADAPTIVE = Path(__file__).resolve().parent.parent / "native" / "Haven.Desktop" / "MainWindow.Adaptive.cs"
 
 DENSITY_FILES = {
     "comfortable": "DensityComfortable.xaml",
     "compact": "DensityCompact.xaml",
 }
 
+# The touch-safe overlay (spec 06/07/21/40): merged on top of whichever
+# density the user picked whenever the shell goes narrow (tablet width) -
+# see MainWindow.Adaptive.cs's ApplyAdaptiveLayout / ThemeService.SetTouchOverlay.
+TOUCH_FILE = "DensityTouch.xaml"
+TOUCH_TARGET_FLOOR = 40.0  # px; the ~44px guideline with a little slack
+
 DOUBLE_KEYS = {
     "DensityNavItemHeight",
     "DensityListItemMinHeight",
     "DensityButtonMinHeight",
     "DensityTabButtonMinHeight",
+    "DensityCircleButtonSize",
 }
 THICKNESS_KEYS = {
     "DensityNavItemMargin",
@@ -37,6 +45,7 @@ THICKNESS_KEYS = {
     "DensityButtonPadding",
     "DensityPrimaryButtonPadding",
     "DensityTabButtonPadding",
+    "DensityCircleButtonRadius",
 }
 REQUIRED_KEYS = DOUBLE_KEYS | THICKNESS_KEYS
 
@@ -110,3 +119,36 @@ def test_theme_service_swaps_the_density_dictionary_live():
     text = THEME_SERVICE.read_text(encoding="utf-8")
     assert "ms-appx:///Themes/Density" in text
     assert "DefaultDensity" in text or "Densities" in text
+
+
+def test_touch_overlay_is_well_formed_and_complete():
+    ET.parse(THEMES_DIR / TOUCH_FILE)
+    values = _parse_density_file(THEMES_DIR / TOUCH_FILE)
+    missing = REQUIRED_KEYS - set(values)
+    assert not missing, f"touch: missing {sorted(missing)}"
+
+
+def test_touch_overlay_meets_the_touch_target_floor():
+    values = _parse_density_file(THEMES_DIR / TOUCH_FILE)
+    for key in DOUBLE_KEYS:
+        assert float(values[key]) >= TOUCH_TARGET_FLOOR, (
+            f"{key}: {values[key]} below the {TOUCH_TARGET_FLOOR}px touch-target floor"
+        )
+
+
+def test_touch_overlay_never_shrinks_comfortable():
+    comfortable = _parse_density_file(THEMES_DIR / DENSITY_FILES["comfortable"])
+    touch = _parse_density_file(THEMES_DIR / TOUCH_FILE)
+    for key in DOUBLE_KEYS:
+        assert float(touch[key]) >= float(comfortable[key]), (
+            f"{key}: touch {touch[key]} < comfortable {comfortable[key]}"
+        )
+    for key in THICKNESS_KEYS:
+        assert _thickness_max(touch[key]) >= _thickness_max(comfortable[key]), (
+            f"{key}: touch overlay padding shrank below comfortable"
+        )
+
+
+def test_adaptive_layout_toggles_the_touch_overlay_on_narrow_width():
+    text = MAINWINDOW_ADAPTIVE.read_text(encoding="utf-8")
+    assert "SetTouchOverlay(narrow" in text
