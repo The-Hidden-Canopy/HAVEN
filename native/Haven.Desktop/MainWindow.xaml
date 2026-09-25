@@ -34,57 +34,65 @@
                    HorizontalAlignment="Left" Margin="16,0,0,2" />
             <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                 <StackPanel x:Name="NavItems" Margin="0,6,0,0">
-                    <Button Tag="today" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}">
-                        
+                    <Button Tag="today" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}"
+                            AutomationProperties.Name="Today">
+
                         <StackPanel Orientation="Horizontal" Spacing="11">
                             <SymbolIcon Symbol="Calendar" />
                             <TextBlock Text="Today" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
-                    <Button Tag="search" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}">
-                        
+                    <Button Tag="search" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}"
+                            AutomationProperties.Name="Search">
+
                         <StackPanel Orientation="Horizontal" Spacing="11">
                             <SymbolIcon Symbol="Find" />
                             <TextBlock Text="Search" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
-                    <Button Tag="projects" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}">
-                        
+                    <Button Tag="projects" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}"
+                            AutomationProperties.Name="Projects">
+
                         <StackPanel Orientation="Horizontal" Spacing="11">
                             <SymbolIcon Symbol="Folder" />
                             <TextBlock Text="Projects" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
-                    <Button Tag="tasks" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}">
-                        
+                    <Button Tag="tasks" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}"
+                            AutomationProperties.Name="Tasks">
+
                         <StackPanel Orientation="Horizontal" Spacing="11">
                             <SymbolIcon Symbol="List" />
                             <TextBlock Text="Tasks" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
-                    <Button Tag="people" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}">
-                        
+                    <Button Tag="people" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}"
+                            AutomationProperties.Name="People">
+
                         <StackPanel Orientation="Horizontal" Spacing="11">
                             <SymbolIcon Symbol="People" />
                             <TextBlock Text="People" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
-                    <Button Tag="memory" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}">
-                        
+                    <Button Tag="memory" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}"
+                            AutomationProperties.Name="Memory">
+
                         <StackPanel Orientation="Horizontal" Spacing="11">
                             <SymbolIcon Symbol="Memo" />
                             <TextBlock Text="Memory" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
-                    <Button Tag="computer" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}">
-                        
+                    <Button Tag="computer" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}"
+                            AutomationProperties.Name="Computer">
+
                         <StackPanel Orientation="Horizontal" Spacing="11">
                             <FontIcon Glyph="&#xE977;" />
                             <TextBlock Text="Computer" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
-                    <Button Tag="communications" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}">
-                        
+                    <Button Tag="communications" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}"
+                            AutomationProperties.Name="Communications">
+
                         <StackPanel Orientation="Horizontal" Spacing="11">
                             <SymbolIcon Symbol="Mail" />
                             <TextBlock Text="Communications" VerticalAlignment="Center" />
@@ -93,22 +101,25 @@
 
                     <Rectangle Height="1" Fill="{ThemeResource HavenStrokeBrush}" Margin="16,8" />
 
-                    <Button Tag="home" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}">
-                        
+                    <Button Tag="home" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}"
+                            AutomationProperties.Name="Home">
+
                         <StackPanel Orientation="Horizontal" Spacing="11">
                             <SymbolIcon Symbol="Home" />
                             <TextBlock Text="Home" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
-                    <Button Tag="models" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}">
-                        
+                    <Button Tag="models" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}"
+                            AutomationProperties.Name="Models">
+
                         <StackPanel Orientation="Horizontal" Spacing="11">
                             <FontIcon Glyph="&#xE753;" />
                             <TextBlock Text="Models" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
-                    <Button Tag="settings" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}">
-                        
+                    <Button Tag="settings" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}"
+                            AutomationProperties.Name="Settings">
+
                         <StackPanel Orientation="Horizontal" Spacing="11">
                             <SymbolIcon Symbol="Setting" />
                             <TextBlock Text="Settings" VerticalAlignment="Center" />
@@ -575,6 +586,7 @@
                         </Grid.ColumnDefinitions>
                         <Button x:Name="ComposerMicButton" Grid.Column="0" IsEnabled="False"
                                 ToolTipService.ToolTip="Voice input arrives with the native speech surface."
+                                AutomationProperties.Name="Voice input (not yet available)"
                                 Style="{StaticResource HavenCircleButtonStyle}">
                             <SymbolIcon Symbol="Microphone" />
                         </Button>
@@ -584,6 +596,7 @@
                                  VerticalAlignment="Center" KeyDown="OnComposerKeyDown"
                                  Background="Transparent" BorderThickness="0" />
                         <Button x:Name="ComposerSendButton" Grid.Column="2" Click="OnComposerSendClicked"
+                                AutomationProperties.Name="Send"
                                 Style="{StaticResource HavenCircleButtonStyle}"
                                 Background="{ThemeResource HavenAccentBrush}" Foreground="#FFFFFF">
                             <SymbolIcon Symbol="Send" />
