@@ -28,6 +28,21 @@
             <Color x:Key="HavenFocusRingColor">#992563EB</Color>
             <Color x:Key="HavenPermissionGlowColor">#667C3AED</Color>
 
+            <!-- Data-visualization categorical series (spec 37): fixed hue
+                 order, validated for CVD-safe adjacent separation and contrast
+                 via the dataviz skill's validator (both appearances share the
+                 same eight hexes; the OKLCH bands overlap enough that one set
+                 clears both modes' checks). Heat ramp reuses the fixed status
+                 tints (page 37: status colors never follow the theme). -->
+            <Color x:Key="Series1Color">#3B82F6</Color>
+            <Color x:Key="Series2Color">#EA580C</Color>
+            <Color x:Key="Series3Color">#0284C7</Color>
+            <Color x:Key="Series4Color">#D97706</Color>
+            <Color x:Key="Series5Color">#D946EF</Color>
+            <Color x:Key="Series6Color">#65A30D</Color>
+            <Color x:Key="Series7Color">#8B5CF6</Color>
+            <Color x:Key="Series8Color">#DC2626</Color>
+
             <LinearGradientBrush x:Key="HavenCanvasGradient" StartPoint="0,0" EndPoint="0.15,1">
                 <GradientStop Color="#EDF1F8" Offset="0" />
                 <GradientStop Color="#F5F7FB" Offset="0.55" />

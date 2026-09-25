@@ -56,17 +56,18 @@
             <SolidColorBrush x:Key="HavenWarningTintBrush" Color="{ThemeResource HavenWarningTintColor}" />
             <SolidColorBrush x:Key="HavenDangerTintBrush" Color="{ThemeResource HavenDangerTintColor}" />
 
-            <!-- Data-visualization series and heat ramp (spec 37).  v1 aliases
-                 the interaction tokens; per-theme dataviz palettes land with
-                 the density pass. -->
-            <SolidColorBrush x:Key="Series1Brush" Color="{ThemeResource HavenAccentColor}" />
-            <SolidColorBrush x:Key="Series2Brush" Color="{ThemeResource HavenVioletColor}" />
-            <SolidColorBrush x:Key="Series3Brush" Color="{ThemeResource HavenOrangeColor}" />
-            <SolidColorBrush x:Key="Series4Brush" Color="{ThemeResource HavenSuccessColor}" />
-            <SolidColorBrush x:Key="Series5Brush" Color="#22D3EE" />
-            <SolidColorBrush x:Key="Series6Brush" Color="#E879F9" />
-            <SolidColorBrush x:Key="Series7Brush" Color="#A3E635" />
-            <SolidColorBrush x:Key="Series8Brush" Color="#94A3B8" />
+            <!-- Data-visualization series and heat ramp (spec 37).  Each theme
+                 defines its own eight-slot Series1-8Color set (fixed hue
+                 order, CVD-validated); heat stays on the fixed status tints
+                 since status color never follows the theme. -->
+            <SolidColorBrush x:Key="Series1Brush" Color="{ThemeResource Series1Color}" />
+            <SolidColorBrush x:Key="Series2Brush" Color="{ThemeResource Series2Color}" />
+            <SolidColorBrush x:Key="Series3Brush" Color="{ThemeResource Series3Color}" />
+            <SolidColorBrush x:Key="Series4Brush" Color="{ThemeResource Series4Color}" />
+            <SolidColorBrush x:Key="Series5Brush" Color="{ThemeResource Series5Color}" />
+            <SolidColorBrush x:Key="Series6Brush" Color="{ThemeResource Series6Color}" />
+            <SolidColorBrush x:Key="Series7Brush" Color="{ThemeResource Series7Color}" />
+            <SolidColorBrush x:Key="Series8Brush" Color="{ThemeResource Series8Color}" />
             <SolidColorBrush x:Key="HeatLowBrush" Color="{ThemeResource HavenSuccessTintColor}" />
             <SolidColorBrush x:Key="HeatMedBrush" Color="{ThemeResource HavenWarningTintColor}" />
             <SolidColorBrush x:Key="HeatHighBrush" Color="{ThemeResource HavenDangerTintColor}" />
