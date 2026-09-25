@@ -92,18 +92,12 @@ public sealed class ThemeService
         return fallback;
     }
 
-    /// <summary>Swap the merged flat theme dictionary and re-apply chrome.</summary>
+    /// <summary>Swap the merged flat theme + density dictionaries and re-apply chrome.</summary>
     public void Apply(MainWindow window)
     {
         var merged = Application.Current.Resources.MergedDictionaries;
-        for (var index = merged.Count - 1; index >= 0; index--)
-        {
-            var source = merged[index].Source?.OriginalString ?? "";
-            if (source.Contains("/Themes/", StringComparison.OrdinalIgnoreCase))
-            {
-                merged.RemoveAt(index);
-            }
-        }
+        RemoveMerged(merged, "/Themes/", except: "/Themes/Density");
+
         var appearance = EffectiveAppearance();
         var themeName = string.Concat(Theme[..1].ToUpperInvariant(), Theme.AsSpan(1));
         // Add first (last-merged wins every key lookup), remove the previous
@@ -111,20 +105,33 @@ public sealed class ThemeService
         // is the active lookup target breaks theme-resource resolution.
         var incoming = new ResourceDictionary { Source = new Uri($"ms-appx:///Themes/{themeName}{appearance}.xaml") };
         merged.Add(incoming);
-        for (var index = merged.Count - 2; index >= 0; index--)
-        {
-            var source = merged[index].Source?.OriginalString ?? "";
-            if (source.Contains("/Themes/", StringComparison.OrdinalIgnoreCase))
-            {
-                merged.RemoveAt(index);
-            }
-        }
+        RemoveMerged(merged, "/Themes/", except: "/Themes/Density", skipLast: true);
+
+        var densityName = string.Concat(Density[..1].ToUpperInvariant(), Density.AsSpan(1));
+        var incomingDensity = new ResourceDictionary { Source = new Uri($"ms-appx:///Themes/Density{densityName}.xaml") };
+        merged.Add(incomingDensity);
+        RemoveMerged(merged, "/Themes/Density", skipLast: true);
 
         // High contrast always wins: a flat canvas beats a decorative gradient.
         var flatCanvas = new AccessibilitySettings().HighContrast;
         window.SetRequestedTheme(appearance == "Dark" ? "dark" : "light");
         window.SetFlatCanvas(flatCanvas);
         window.ApplyTitleBarColors();
+    }
+
+    private static void RemoveMerged(
+        IList<ResourceDictionary> merged, string sourceContains, string? except = null, bool skipLast = false)
+    {
+        var start = merged.Count - (skipLast ? 2 : 1);
+        for (var index = start; index >= 0; index--)
+        {
+            var source = merged[index].Source?.OriginalString ?? "";
+            if (source.Contains(sourceContains, StringComparison.OrdinalIgnoreCase)
+                && (except is null || !source.Contains(except, StringComparison.OrdinalIgnoreCase)))
+            {
+                merged.RemoveAt(index);
+            }
+        }
     }
 
     private string EffectiveAppearance()
