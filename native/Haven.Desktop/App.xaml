@@ -108,25 +108,27 @@
                 <Setter Property="BorderBrush" Value="{ThemeResource HavenStrokeBrush}" />
                 <Setter Property="BorderThickness" Value="1" />
                 <Setter Property="CornerRadius" Value="12" />
-                <Setter Property="Padding" Value="14" />
+                <Setter Property="Padding" Value="{ThemeResource DensityCardPadding}" />
             </Style>
 
-            <!-- Button hierarchy (spec 12). -->
+            <!-- Button hierarchy (spec 12).  MinHeight/Padding follow the
+                 density tokens (spec 40); ThemeService.Apply swaps them
+                 alongside the color theme. -->
             <Style x:Key="HavenButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="{ThemeResource HavenSurface2Brush}" />
                 <Setter Property="Foreground" Value="{ThemeResource HavenTextBrush}" />
                 <Setter Property="BorderBrush" Value="{ThemeResource HavenStrokeBrush}" />
                 <Setter Property="BorderThickness" Value="1" />
                 <Setter Property="CornerRadius" Value="8" />
-                <Setter Property="MinHeight" Value="32" />
-                <Setter Property="Padding" Value="12,5" />
+                <Setter Property="MinHeight" Value="{ThemeResource DensityButtonMinHeight}" />
+                <Setter Property="Padding" Value="{ThemeResource DensityButtonPadding}" />
             </Style>
             <Style x:Key="HavenPrimaryButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="{ThemeResource HavenAccentBrush}" />
                 <Setter Property="Foreground" Value="#FFFFFF" />
                 <Setter Property="CornerRadius" Value="8" />
-                <Setter Property="MinHeight" Value="32" />
-                <Setter Property="Padding" Value="14,5" />
+                <Setter Property="MinHeight" Value="{ThemeResource DensityButtonMinHeight}" />
+                <Setter Property="Padding" Value="{ThemeResource DensityPrimaryButtonPadding}" />
                 <Setter Property="FontWeight" Value="SemiBold" />
             </Style>
             <Style x:Key="HavenSecondaryButtonStyle" TargetType="Button">
@@ -135,8 +137,8 @@
                 <Setter Property="BorderThickness" Value="1" />
                 <Setter Property="Foreground" Value="{ThemeResource HavenTextBrush}" />
                 <Setter Property="CornerRadius" Value="8" />
-                <Setter Property="MinHeight" Value="32" />
-                <Setter Property="Padding" Value="12,5" />
+                <Setter Property="MinHeight" Value="{ThemeResource DensityButtonMinHeight}" />
+                <Setter Property="Padding" Value="{ThemeResource DensityButtonPadding}" />
             </Style>
             <Style x:Key="HavenQuietButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
@@ -144,8 +146,8 @@
                 <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="Foreground" Value="{ThemeResource HavenAccentBrush}" />
                 <Setter Property="CornerRadius" Value="8" />
-                <Setter Property="MinHeight" Value="30" />
-                <Setter Property="Padding" Value="10,4" />
+                <Setter Property="MinHeight" Value="{ThemeResource DensityButtonMinHeight}" />
+                <Setter Property="Padding" Value="{ThemeResource DensityTabButtonPadding}" />
             </Style>
             <Style x:Key="HavenDangerButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
@@ -153,8 +155,8 @@
                 <Setter Property="BorderThickness" Value="1" />
                 <Setter Property="Foreground" Value="{ThemeResource HavenDangerBrush}" />
                 <Setter Property="CornerRadius" Value="8" />
-                <Setter Property="MinHeight" Value="32" />
-                <Setter Property="Padding" Value="12,5" />
+                <Setter Property="MinHeight" Value="{ThemeResource DensityButtonMinHeight}" />
+                <Setter Property="Padding" Value="{ThemeResource DensityButtonPadding}" />
             </Style>
 
             <!-- Circular icon button (mic affordance, send). -->
@@ -177,12 +179,12 @@
                 <Setter Property="Foreground" Value="{ThemeResource HavenMutedTextBrush}" />
                 <Setter Property="BorderThickness" Value="0,0,0,2" />
                 <Setter Property="BorderBrush" Value="Transparent" />
-                <Setter Property="Padding" Value="10,6" />
-                <Setter Property="MinHeight" Value="34" />
+                <Setter Property="Padding" Value="{ThemeResource DensityTabButtonPadding}" />
+                <Setter Property="MinHeight" Value="{ThemeResource DensityTabButtonMinHeight}" />
             </Style>
 
-            <!-- Rail navigation item (spec 08): 36-40px rows, hover surface,
-                 selected = filled blue rounded pill. -->
+            <!-- Rail navigation item (spec 08): 30-38px rows depending on
+                 density, hover surface, selected = filled blue rounded pill. -->
             <Style x:Key="HavenNavItemStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="Foreground" Value="{ThemeResource HavenMutedTextBrush}" />
@@ -190,18 +192,18 @@
                 <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="HorizontalContentAlignment" Value="Left" />
                 <Setter Property="HorizontalAlignment" Value="Stretch" />
-                <Setter Property="Height" Value="38" />
-                <Setter Property="Margin" Value="10,1" />
-                <Setter Property="Padding" Value="12,0" />
+                <Setter Property="Height" Value="{ThemeResource DensityNavItemHeight}" />
+                <Setter Property="Margin" Value="{ThemeResource DensityNavItemMargin}" />
+                <Setter Property="Padding" Value="{ThemeResource DensityNavItemPadding}" />
                 <Setter Property="CornerRadius" Value="8" />
                 <Setter Property="FontSize" Value="13" />
             </Style>
 
             <!-- Dense list rows with hover and selected states (spec 13/14). -->
             <Style x:Key="HavenListItemStyle" TargetType="ListViewItem">
-                <Setter Property="MinHeight" Value="40" />
-                <Setter Property="Margin" Value="2,1" />
-                <Setter Property="Padding" Value="10,4" />
+                <Setter Property="MinHeight" Value="{ThemeResource DensityListItemMinHeight}" />
+                <Setter Property="Margin" Value="{ThemeResource DensityListItemMargin}" />
+                <Setter Property="Padding" Value="{ThemeResource DensityListItemPadding}" />
                 <Setter Property="CornerRadius" Value="8" />
                 <Setter Property="Background" Value="Transparent" />
             </Style>
