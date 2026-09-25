@@ -1,9 +1,17 @@
 """Theme-token contract tests (spec sections 34-40).
 
 There is no C# test runner in this repo, so these tests parse the committed
-XAML: every theme ships Dark and Light appearance dictionaries with the full
+XAML: every theme ships Dark and Light appearance files with the full
 semantic token set, the spec palettes are honored exactly, and text/background
 pairs meet a 3:1 contrast floor.
+
+Each theme is two flat (non-ThemeDictionaries) ResourceDictionary files -
+``{Theme}Dark.xaml`` / ``{Theme}Light.xaml`` - swapped live as the app's
+merged dictionary by ``ThemeService.Apply`` (see ``Services/ThemeService.cs``).
+This is a deliberate departure from WinUI's built-in ThemeDictionaries +
+RequestedTheme resolution: it lets the shell carry an arbitrary theme *count*
+(four today) rather than being limited to the two slots ThemeDictionaries
+natively resolves.
 """
 
 from __future__ import annotations
@@ -15,12 +23,13 @@ from pathlib import Path
 
 THEMES_DIR = Path(__file__).resolve().parent.parent / "native" / "Haven.Desktop" / "Themes"
 APP_XAML = Path(__file__).resolve().parent.parent / "native" / "Haven.Desktop" / "App.xaml"
+THEME_SERVICE = Path(__file__).resolve().parent.parent / "native" / "Haven.Desktop" / "Services" / "ThemeService.cs"
 
 THEME_FILES = {
-    "haven": "Haven.xaml",
-    "canopy": "Canopy.xaml",
-    "ember": "Ember.xaml",
-    "mono": "Mono.xaml",
+    "haven": {"Dark": "HavenDark.xaml", "Light": "HavenLight.xaml"},
+    "canopy": {"Dark": "CanopyDark.xaml", "Light": "CanopyLight.xaml"},
+    "ember": {"Dark": "EmberDark.xaml", "Light": "EmberLight.xaml"},
+    "mono": {"Dark": "MonoDark.xaml", "Light": "MonoLight.xaml"},
 }
 
 REQUIRED_COLORS = {
@@ -46,6 +55,14 @@ REQUIRED_COLORS = {
     "HavenDangerTintColor",
     "HavenFocusRingColor",
     "HavenPermissionGlowColor",
+    "Series1Color",
+    "Series2Color",
+    "Series3Color",
+    "Series4Color",
+    "Series5Color",
+    "Series6Color",
+    "Series7Color",
+    "Series8Color",
 }
 
 REQUIRED_GRADIENTS = {"HavenCanvasGradient", "HavenSplashGradient"}
@@ -127,25 +144,26 @@ _XAML_NS = "{http://schemas.microsoft.com/winfx/2006/xaml/presentation}"
 _XAML_X_NS = "{http://schemas.microsoft.com/winfx/2006/xaml}"
 
 
-def _parse_theme(path: Path) -> dict[str, dict[str, str]]:
+def _parse_appearance_file(path: Path) -> dict[str, str]:
+    """Parse one flat {Theme}{Appearance}.xaml file (no ThemeDictionaries wrapper)."""
     root = ET.parse(path).getroot()
-    result: dict[str, dict[str, str]] = {}
-    theme_dicts = root.find(f"{_XAML_NS}ResourceDictionary.ThemeDictionaries")
-    assert theme_dicts is not None, f"{path.name}: missing ThemeDictionaries"
-    for appearance in ("Dark", "Light"):
-        node = theme_dicts.find(f"{_XAML_NS}ResourceDictionary[@{_XAML_X_NS}Key='{appearance}']")
-        assert node is not None, f"{path.name}: missing {appearance} dictionary"
-        colors = {}
-        for child in node:
-            key = child.attrib.get(f"{_XAML_X_NS}Key")
-            if key is None:
-                continue
-            if child.tag == f"{_XAML_NS}Color":
-                value = (child.text or "").strip()
-                assert _HEX_RE.match(value), f"{path.name} {appearance} {key}: bad hex {value!r}"
-                colors[key] = value.upper()
-        result[appearance] = colors
-    return result
+    colors = {}
+    for child in root:
+        key = child.attrib.get(f"{_XAML_X_NS}Key")
+        if key is None:
+            continue
+        if child.tag == f"{_XAML_NS}Color":
+            value = (child.text or "").strip()
+            assert _HEX_RE.match(value), f"{path.name} {key}: bad hex {value!r}"
+            colors[key] = value.upper()
+    return colors
+
+
+def _parse_theme(files: dict[str, str]) -> dict[str, dict[str, str]]:
+    return {
+        appearance: _parse_appearance_file(THEMES_DIR / filename)
+        for appearance, filename in files.items()
+    }
 
 
 def _srgb_channel(value: str) -> float:
@@ -173,7 +191,7 @@ def _contrast(first: str, second: str) -> float:
 
 
 def _all_themes() -> dict[str, dict[str, dict[str, str]]]:
-    return {name: _parse_theme(THEMES_DIR / file) for name, file in THEME_FILES.items()}
+    return {name: _parse_theme(files) for name, files in THEME_FILES.items()}
 
 
 def test_every_theme_has_both_appearances_with_the_full_token_set():
@@ -184,14 +202,12 @@ def test_every_theme_has_both_appearances_with_the_full_token_set():
 
 
 def test_every_theme_defines_both_canvas_gradients():
-    for name, file in THEME_FILES.items():
-        root = ET.parse(THEMES_DIR / file).getroot()
-        theme_dicts = root.find(f"{_XAML_NS}ResourceDictionary.ThemeDictionaries")
-        for appearance in ("Dark", "Light"):
-            node = theme_dicts.find(f"{_XAML_NS}ResourceDictionary[@{_XAML_X_NS}Key='{appearance}']")
+    for name, files in THEME_FILES.items():
+        for appearance, filename in files.items():
+            root = ET.parse(THEMES_DIR / filename).getroot()
             gradients = {
                 child.attrib.get(f"{_XAML_X_NS}Key")
-                for child in node
+                for child in root
                 if child.tag == f"{_XAML_NS}LinearGradientBrush"
             }
             assert REQUIRED_GRADIENTS <= gradients, f"{name}/{appearance}: missing gradients"
@@ -236,9 +252,14 @@ def test_app_xaml_defines_every_semantic_alias():
         assert f'x:Key="{alias}"' in text, f"App.xaml: missing semantic alias {alias}"
 
 
-def test_app_xaml_loads_the_default_theme_dictionary():
-    text = APP_XAML.read_text(encoding="utf-8")
-    assert 'Source="Themes/Haven.xaml"' in text
+def test_theme_service_swaps_the_default_theme_dictionary_live():
+    text = THEME_SERVICE.read_text(encoding="utf-8")
+    assert 'DefaultTheme = "haven"' in text
+    # ThemeService.Apply builds ms-appx:///Themes/{Theme}{Appearance}.xaml at
+    # runtime and merges it (App.xaml itself carries no static theme source -
+    # see the module docstring for why).
+    assert 'ms-appx:///Themes/' in text
+    assert "merged.Add(incoming)" in text
 
 
 def test_semantic_aliases_resolve_to_theme_defined_colors():
