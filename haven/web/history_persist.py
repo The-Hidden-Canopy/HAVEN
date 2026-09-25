@@ -369,7 +369,7 @@ def receipt_to_dict(receipt: ActionReceipt) -> dict:
     """Full-fidelity persistence codec -- deliberately separate from
     `ActionReceipt.to_dict()`, which is a lossy, display-oriented export."""
 
-    return {
+    payload = {
         "receipt_id": receipt.receipt_id,
         "requested_action": action_request_to_dict(receipt.requested_action),
         "interpretation": receipt.interpretation,
@@ -378,6 +378,9 @@ def receipt_to_dict(receipt: ActionReceipt) -> dict:
         "device_result": device_result_to_dict(receipt.device_result),
         "event_ids": list(receipt.event_ids),
     }
+    if receipt.external_source is not None:
+        payload["external_source"] = dict(receipt.external_source)
+    return payload
 
 
 def receipt_from_dict(payload: object) -> ActionReceipt:
@@ -392,7 +395,15 @@ def receipt_from_dict(payload: object) -> ActionReceipt:
         decision=authority_decision_from_dict(payload["decision"]),
         device_result=device_result_from_dict(payload.get("device_result")),
         event_ids=tuple(payload.get("event_ids", [])),
+        external_source=_external_source_from(payload.get("external_source")),
     )
+
+
+def _external_source_from(value: object) -> tuple[tuple[str, str], ...] | None:
+    if value is None:
+        return None
+    mapping = _require_mapping(value, name="receipt 'external_source'")
+    return tuple((str(key), str(item)) for key, item in mapping.items())
 
 
 @dataclass(frozen=True)
