@@ -248,6 +248,11 @@ public sealed partial class MainWindow
         }
     }
 
+    // -- search: result list + inspector (spec 22) ------------------------------
+
+    private string[] _searchTypeFilter = Array.Empty<string>();
+    private readonly Dictionary<string, JsonElement> _searchHitsById = new();
+
     private async void OnSearchClicked(object sender, RoutedEventArgs args)
     {
         await SearchAsync();
@@ -261,30 +266,152 @@ public sealed partial class MainWindow
         }
     }
 
+    private async void OnSearchTypeFilterClicked(object sender, RoutedEventArgs args)
+    {
+        if (sender is not Button button || button.Tag is not string tag)
+        {
+            return;
+        }
+        _searchTypeFilter = string.IsNullOrEmpty(tag) ? Array.Empty<string>() : tag.Split(',');
+        foreach (var item in SearchTypeFilters.Children.OfType<Button>())
+        {
+            item.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                item == button ? "HavenAccentBrush" : "HavenMutedTextBrush"];
+            item.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                item == button ? "HavenAccentBrush" : "HavenStrokeBrush"];
+        }
+        if (!string.IsNullOrWhiteSpace(SearchBox.Text))
+        {
+            await SearchAsync();
+        }
+    }
+
     private async Task SearchAsync()
     {
         if (_client is null || string.IsNullOrWhiteSpace(SearchBox.Text))
         {
             return;
         }
+        SearchStatusText.Text = "Searching…";
         try
         {
-            var result = await _client.SearchAsync(SearchBox.Text.Trim());
+            var result = await _client.SearchAsync(SearchBox.Text.Trim(), _searchTypeFilter);
             SearchResults.Items.Clear();
-            foreach (var hit in result.GetProperty("hits").EnumerateArray())
+            _searchHitsById.Clear();
+            var hits = Enumerate(result, "hits").ToList();
+            foreach (var hit in hits)
             {
-                var title = hit.TryGetProperty("resource", out var resource) && resource.ValueKind == JsonValueKind.Object
-                    && resource.TryGetProperty("title", out var titleValue)
-                    ? titleValue.GetString()
-                    : hit.GetProperty("resource_id").GetString();
-                SearchResults.Items.Add(new TextBlock { Text = $"{title}\n{hit.GetProperty("reason").GetString()}" });
+                var resourceId = GetString(hit, "resource_id") ?? "";
+                _searchHitsById[resourceId] = hit;
+                var resource = hit.TryGetProperty("resource", out var r) && r.ValueKind == JsonValueKind.Object ? r : (JsonElement?)null;
+                var title = (resource is { } res ? GetString(res, "title") : null) ?? resourceId;
+
+                var row = new StackPanel { Spacing = 2 };
+                row.Children.Add(new TextBlock { Text = title, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+                var meta = new List<string>();
+                if (resource is { } res2 && GetString(res2, "resource_type") is { } type)
+                {
+                    meta.Add(Sentence(type));
+                }
+                meta.Add(GetString(hit, "reason") ?? "");
+                row.Children.Add(new TextBlock { Text = string.Join(" · ", meta), Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"] });
+                SearchResults.Items.Add(new ListViewItem { Tag = resourceId, Content = row });
             }
+            SearchStatusText.Text = hits.Count == 0 ? "No results." : $"{hits.Count} result(s).";
+            RenderSearchDetail(null);
         }
         catch (Exception ex)
         {
             SearchResults.Items.Clear();
-            SearchResults.Items.Add(new TextBlock { Text = ex.Message });
+            SearchStatusText.Text = $"Could not search: {ex.Message}";
         }
     }
+
+    private void OnSearchResultSelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        var resourceId = SearchResults.SelectedItem is ListViewItem item ? item.Tag as string : null;
+        RenderSearchDetail(resourceId is not null && _searchHitsById.TryGetValue(resourceId, out var hit) ? hit : null);
+    }
+
+    private void RenderSearchDetail(JsonElement? hit)
+    {
+        SearchDetail.Children.Clear();
+        if (hit is null)
+        {
+            SearchDetail.Children.Add(new TextBlock { Text = "Search, then select a result to see why it matched.", TextWrapping = TextWrapping.Wrap });
+            return;
+        }
+        var h = hit.Value;
+        var resource = h.TryGetProperty("resource", out var r) && r.ValueKind == JsonValueKind.Object ? r : (JsonElement?)null;
+        var resourceId = GetString(h, "resource_id") ?? "";
+        var title = (resource is { } res ? GetString(res, "title") : null) ?? resourceId;
+
+        SearchDetail.Children.Add(new TextBlock { Text = title, Style = (Style)Application.Current.Resources["HavenSectionTextStyle"], TextWrapping = TextWrapping.Wrap });
+
+        SearchDetail.Children.Add(new TextBlock { Text = "Overview", Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"] });
+        var overview = new List<string>();
+        string? resourceType = null;
+        if (resource is { } res2)
+        {
+            resourceType = GetString(res2, "resource_type");
+            if (resourceType is not null)
+            {
+                overview.Add(Sentence(resourceType));
+            }
+            if (GetString(res2, "locator") is { Length: > 0 } locator)
+            {
+                overview.Add(locator);
+            }
+            if (res2.TryGetProperty("stale", out var stale) && stale.ValueKind == JsonValueKind.True)
+            {
+                overview.Add("stale");
+            }
+        }
+        SearchDetail.Children.Add(new TextBlock
+        {
+            Text = overview.Count > 0 ? string.Join(" · ", overview) : "No resource metadata available.",
+            TextWrapping = TextWrapping.Wrap,
+            Opacity = 0.85,
+        });
+
+        SearchDetail.Children.Add(new TextBlock { Text = "Why this was found", Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"] });
+        SearchDetail.Children.Add(new TextBlock { Text = GetString(h, "reason") ?? "—", TextWrapping = TextWrapping.Wrap, Opacity = 0.85 });
+
+        var matchedClaims = Enumerate(h, "matched_claims").ToList();
+        if (matchedClaims.Count > 0)
+        {
+            SearchDetail.Children.Add(new TextBlock { Text = "Matched evidence", Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"] });
+            foreach (var claim in matchedClaims)
+            {
+                SearchDetail.Children.Add(new TextBlock
+                {
+                    Text = GetString(claim, "proposition") ?? "",
+                    TextWrapping = TextWrapping.Wrap,
+                    Opacity = 0.85,
+                });
+            }
+        }
+
+        var openTag = NavigationTagForResourceType(resourceType);
+        if (openTag is not null)
+        {
+            var open = new Button { Content = "Open", Style = (Style)Application.Current.Resources["HavenPrimaryButtonStyle"] };
+            open.Click += (_, _) => SelectNavigation(openTag);
+            SearchDetail.Children.Add(open);
+        }
+    }
+
+    /// <summary>Search's default safe action is "go to the page that owns this
+    /// resource" - not a governed filesystem open/reveal, which would need a
+    /// per-type authority path this pass doesn't wire up. Null means no known
+    /// destination, so no button renders (never a dead action).</summary>
+    private static string? NavigationTagForResourceType(string? resourceType) => resourceType switch
+    {
+        "file" or "folder" or "application" or "window" => "computer",
+        "browser_tab" or "calendar_event" or "email_message" => "communications",
+        "project" => "projects",
+        "task" => "tasks",
+        _ => null,
+    };
 
 }

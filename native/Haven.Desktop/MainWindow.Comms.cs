@@ -14,6 +14,8 @@ public sealed partial class MainWindow
 
     private string _commsTab = "email";
 
+    private readonly Dictionary<string, JsonElement> _emailMessagesById = new();
+
     private void OnCommsTabClicked(object sender, RoutedEventArgs args)
     {
         if (sender is Button button && button.Tag is string tab)
@@ -37,74 +39,26 @@ public sealed partial class MainWindow
         {
             return;
         }
+        CommsEmailPanel.Visibility = _commsTab == "email" ? Visibility.Visible : Visibility.Collapsed;
+        CommsCalendarPanel.Visibility = _commsTab == "calendar" ? Visibility.Visible : Visibility.Collapsed;
+        CommsTabContent.Visibility = _commsTab is "email" or "calendar" ? Visibility.Collapsed : Visibility.Visible;
+        CommsErrorText.Text = "";
+        if (_commsTab == "email")
+        {
+            await LoadEmailAsync();
+            CommsStatusText.Text = "";
+            return;
+        }
+        if (_commsTab == "calendar")
+        {
+            await LoadCalendarAsync();
+            CommsStatusText.Text = "";
+            return;
+        }
         try
         {
             CommsTabContent.Children.Clear();
-            CommsErrorText.Text = "";
-            if (_commsTab == "email")
-            {
-                var status = await _client.GetEmailStatusAsync();
-                var configured = status.TryGetProperty("configured", out var c) && c.GetBoolean();
-                var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
-                header.Children.Add(new TextBlock
-                {
-                    Text = configured
-                        ? $"Connected: {GetString(status, "provider")} (read-only — sending needs a credentialed provider)"
-                        : $"Not connected: {GetString(status, "detail") ?? "no email provider configured"}",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
-                });
-                var setFolder = new Button { Content = configured ? "Change mail folder…" : "Connect a mail folder…" };
-                setFolder.Click += async (_, _) => await PickMaildirAsync();
-                header.Children.Add(setFolder);
-                CommsTabContent.Children.Add(header);
-                if (configured)
-                {
-                    var messages = await _client.GetEmailMessagesAsync();
-                    var any = false;
-                    foreach (var message in Enumerate(messages.GetProperty("messages")))
-                    {
-                        any = true;
-                        var card = new StackPanel { Spacing = 2 };
-                        var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-                        head.Children.Add(new TextBlock
-                        {
-                            Text = GetString(message, "subject") ?? "(no subject)",
-                            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                            TextWrapping = TextWrapping.Wrap,
-                        });
-                        foreach (var label in Enumerate(message, "labels"))
-                        {
-                            if (label.GetString() is { } text && text.Length > 0)
-                            {
-                                head.Children.Add(MakeChip(text, "HavenAccentTintBrush", "HavenAccentBrush"));
-                            }
-                        }
-                        card.Children.Add(head);
-                        card.Children.Add(new TextBlock
-                        {
-                            Text = $"{GetString(message, "sender")} · {GetString(message, "at")}",
-                            Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
-                        });
-                        if (GetString(message, "snippet") is { Length: > 0 } snippet)
-                        {
-                            card.Children.Add(new TextBlock
-                            {
-                                Text = snippet,
-                                Style = (Style)Application.Current.Resources["HavenBodyTextStyle"],
-                                TextWrapping = TextWrapping.Wrap,
-                                Opacity = 0.8,
-                            });
-                        }
-                        CommsTabContent.Children.Add(WrapCard(card));
-                    }
-                    if (!any)
-                    {
-                        CommsTabContent.Children.Add(new TextBlock { Text = "No messages in the configured folder.", Opacity = 0.72 });
-                    }
-                }
-            }
-            else if (_commsTab == "messages")
+            if (_commsTab == "messages")
             {
                 CommsTabContent.Children.Add(new Border
                 {
@@ -117,78 +71,14 @@ public sealed partial class MainWindow
                     },
                 });
             }
-            else if (_commsTab == "calendar")
-            {
-                var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
-                header.Children.Add(new TextBlock
-                {
-                    Text = "Local calendar sources (.ics files). External calendars stay authoritative; changes are confirmed and verified by re-read.",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
-                    TextWrapping = TextWrapping.Wrap,
-                });
-                var add = new Button { Content = "Add .ics file…" };
-                add.Click += async (_, _) => await PickIcsSourceAsync();
-                header.Children.Add(add);
-                CommsTabContent.Children.Add(header);
-
-                var events = await _client.GetCalendarEventsAsync();
-                var anyEvent = false;
-                foreach (var entry in Enumerate(events.GetProperty("events")))
-                {
-                    anyEvent = true;
-                    var eventId = GetString(entry, "event_id") ?? "";
-                    var card = new Grid();
-                    card.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
-                    card.ColumnDefinitions.Add(new ColumnDefinition { Width = Microsoft.UI.Xaml.GridLength.Auto });
-                    var body = new StackPanel { Spacing = 2 };
-                    body.Children.Add(new TextBlock
-                    {
-                        Text = GetString(entry, "title") ?? eventId,
-                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                        TextWrapping = TextWrapping.Wrap,
-                    });
-                    var meta = new List<string>();
-                    if (GetString(entry, "start_at") is { } start)
-                    {
-                        meta.Add(FormatDue(start) ?? start);
-                    }
-                    if (GetString(entry, "location") is { Length: > 0 } location)
-                    {
-                        meta.Add(location);
-                    }
-                    if (Enumerate(entry, "attendees").Count() > 0)
-                    {
-                        meta.Add($"{Enumerate(entry, "attendees").Count()} attendee(s)");
-                    }
-                    body.Children.Add(new TextBlock
-                    {
-                        Text = string.Join(" · ", meta),
-                        Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
-                    });
-                    card.Children.Add(body);
-                    var propose = new Button { Content = "Propose task", VerticalAlignment = VerticalAlignment.Center };
-                    propose.Click += async (_, _) =>
-                    {
-                        await RunCommsMutationAsync(() => _client!.ProposeTaskForEventAsync(eventId));
-                    };
-                    Grid.SetColumn(propose, 1);
-                    card.Children.Add(propose);
-                    var wrap = new StackPanel();
-                    wrap.Children.Add(card);
-                    CommsTabContent.Children.Add(WrapCard(wrap));
-                }
-                if (!anyEvent)
-                {
-                    CommsTabContent.Children.Add(new TextBlock
-                    {
-                        Text = "No events. Add a .ics file above to see your calendar here.",
-                        Opacity = 0.72,
-                    });
-                }
-            }
             else
             {
+                // Grouped by browser (spec 29's "window/session grouping"):
+                // the real grouping dimension the data actually carries.
+                // BrowserTabSnapshot has no window/session id at all, so
+                // inventing "Window 1"/"Window 2" labels would be a false
+                // capability - each connected browser instance is the
+                // honest analog to a session in this single-machine context.
                 var tabs = await _client.GetBrowserTabsAsync();
                 var status = tabs.TryGetProperty("status", out var s) && s.ValueKind == JsonValueKind.Object ? s : default;
                 var connected = status.ValueKind == JsonValueKind.Object
@@ -202,32 +92,58 @@ public sealed partial class MainWindow
                     Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
                     TextWrapping = TextWrapping.Wrap,
                 });
-                foreach (var tab in Enumerate(tabs.GetProperty("tabs")))
+                var byBrowser = Enumerate(tabs, "tabs")
+                    .GroupBy(tab => GetString(tab, "browser") ?? "Unknown browser")
+                    .OrderBy(g => g.Key);
+                var attachProjects = new List<JsonElement>();
+                try
                 {
-                    var resourceId = GetString(tab, "resource_id") ?? "";
-                    var card = new Grid();
-                    card.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
-                    card.ColumnDefinitions.Add(new ColumnDefinition { Width = Microsoft.UI.Xaml.GridLength.Auto });
-                    var body = new StackPanel { Spacing = 2 };
-                    body.Children.Add(new TextBlock
+                    attachProjects = Enumerate(await _client.GetProjectsAsync(), "projects").ToList();
+                }
+                catch (Exception)
+                {
+                    // Attach-to-project is a convenience on top of the tab
+                    // list; a failed projects fetch shouldn't blank tabs
+                    // that already loaded fine.
+                }
+                foreach (var group in byBrowser)
+                {
+                    CommsTabContent.Children.Add(new TextBlock
                     {
-                        Text = GetString(tab, "title") ?? "?",
-                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                        TextWrapping = TextWrapping.Wrap,
+                        Text = $"{group.Key} · {group.Count()} tab(s)",
+                        Style = (Style)Application.Current.Resources["HavenSectionTextStyle"],
                     });
-                    body.Children.Add(new TextBlock
+                    foreach (var tab in group)
                     {
-                        Text = $"{GetString(tab, "browser")} · {GetString(tab, "domain")}",
-                        Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
-                    });
-                    card.Children.Add(body);
-                    var focus = new Button { Content = "Focus", VerticalAlignment = VerticalAlignment.Center };
-                    focus.Click += async (_, _) => await RunCommsMutationAsync(() => _client!.FocusBrowserTabAsync(resourceId));
-                    Grid.SetColumn(focus, 1);
-                    card.Children.Add(focus);
-                    var wrap = new StackPanel();
-                    wrap.Children.Add(card);
-                    CommsTabContent.Children.Add(WrapCard(wrap));
+                        var resourceId = GetString(tab, "resource_id") ?? "";
+                        var card = new Grid();
+                        card.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
+                        card.ColumnDefinitions.Add(new ColumnDefinition { Width = Microsoft.UI.Xaml.GridLength.Auto });
+                        var body = new StackPanel { Spacing = 2 };
+                        body.Children.Add(new TextBlock
+                        {
+                            Text = GetString(tab, "title") ?? "?",
+                            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                            TextWrapping = TextWrapping.Wrap,
+                        });
+                        body.Children.Add(new TextBlock
+                        {
+                            Text = GetString(tab, "domain") ?? "",
+                            Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                        });
+                        if (BuildAttachToProjectRow(resourceId, attachProjects) is { } attachRow)
+                        {
+                            body.Children.Add(attachRow);
+                        }
+                        card.Children.Add(body);
+                        var focus = new Button { Content = "Focus", VerticalAlignment = VerticalAlignment.Center };
+                        focus.Click += async (_, _) => await RunCommsMutationAsync(() => _client!.FocusBrowserTabAsync(resourceId));
+                        Grid.SetColumn(focus, 1);
+                        card.Children.Add(focus);
+                        var wrap = new StackPanel();
+                        wrap.Children.Add(card);
+                        CommsTabContent.Children.Add(WrapCard(wrap));
+                    }
                 }
             }
             CommsStatusText.Text = "";
@@ -267,6 +183,120 @@ public sealed partial class MainWindow
         }
     }
 
+    // -- email: list + detail (spec 29) ------------------------------------------
+
+    private async Task LoadEmailAsync()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var status = await _client.GetEmailStatusAsync();
+            var configured = status.TryGetProperty("configured", out var c) && c.GetBoolean();
+            EmailConnectionText.Text = configured
+                ? $"Connected: {GetString(status, "provider")} (read-only — sending needs a credentialed provider)"
+                : $"Not connected: {GetString(status, "detail") ?? "no email provider configured"}";
+            EmailFolderButton.Content = configured ? "Change mail folder…" : "Connect a mail folder…";
+
+            EmailMessages.Items.Clear();
+            _emailMessagesById.Clear();
+            RenderEmailDetail(null);
+            if (!configured)
+            {
+                CommsEmailGrid.Visibility = Visibility.Collapsed;
+                return;
+            }
+            CommsEmailGrid.Visibility = Visibility.Visible;
+            var messages = Enumerate(await _client.GetEmailMessagesAsync(), "messages").ToList();
+            foreach (var message in messages)
+            {
+                var messageId = GetString(message, "message_id") ?? "";
+                _emailMessagesById[messageId] = message;
+                var row = new StackPanel { Spacing = 2 };
+                var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                head.Children.Add(new TextBlock
+                {
+                    Text = GetString(message, "subject") ?? "(no subject)",
+                    FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                    TextWrapping = TextWrapping.Wrap,
+                });
+                head.Children.Add(new TextBlock
+                {
+                    Text = GetString(message, "at") ?? "",
+                    Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                });
+                row.Children.Add(head);
+                row.Children.Add(new TextBlock { Text = GetString(message, "sender") ?? "", Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"] });
+                EmailMessages.Items.Add(new ListViewItem { Tag = messageId, Content = row });
+            }
+            if (messages.Count == 0)
+            {
+                EmailMessages.Items.Add(new TextBlock { Text = "No messages in the configured folder.", Opacity = 0.72 });
+            }
+        }
+        catch (Exception ex)
+        {
+            CommsErrorText.Text = $"Could not load email: {ex.Message} Use Refresh to retry.";
+        }
+    }
+
+    private void OnEmailMessageSelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        var messageId = EmailMessages.SelectedItem is ListViewItem item ? item.Tag as string : null;
+        RenderEmailDetail(messageId is not null && _emailMessagesById.TryGetValue(messageId, out var message) ? message : null);
+    }
+
+    private void RenderEmailDetail(JsonElement? message)
+    {
+        EmailDetail.Children.Clear();
+        if (message is null)
+        {
+            EmailDetail.Children.Add(new TextBlock { Text = "Select a message to read it.", TextWrapping = TextWrapping.Wrap });
+            return;
+        }
+        var m = message.Value;
+        EmailDetail.Children.Add(new TextBlock
+        {
+            Text = GetString(m, "subject") ?? "(no subject)",
+            Style = (Style)Application.Current.Resources["HavenSectionTextStyle"],
+            TextWrapping = TextWrapping.Wrap,
+        });
+        var recipients = Enumerate(m, "recipients").Select(r => r.GetString()).Where(r => r is not null).ToList();
+        EmailDetail.Children.Add(new TextBlock
+        {
+            Text = $"From {GetString(m, "sender")} · {GetString(m, "at")}"
+                + (recipients.Count > 0 ? $"\nTo {string.Join(", ", recipients)}" : ""),
+            Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+            TextWrapping = TextWrapping.Wrap,
+        });
+        var labels = Enumerate(m, "labels").Select(l => l.GetString()).Where(l => l is { Length: > 0 }).ToList();
+        if (labels.Count > 0)
+        {
+            var chips = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            foreach (var label in labels)
+            {
+                chips.Children.Add(MakeChip(label!, "HavenAccentTintBrush", "HavenAccentBrush"));
+            }
+            EmailDetail.Children.Add(chips);
+        }
+        // The read-side snippet is deliberately bounded (spec 29: full-body
+        // indexing is opt-in and scope-aware) - this is the whole message
+        // HAVEN has, not a truncated preview of more it's hiding.
+        EmailDetail.Children.Add(new TextBlock
+        {
+            Text = GetString(m, "snippet") ?? "",
+            Style = (Style)Application.Current.Resources["HavenBodyTextStyle"],
+            TextWrapping = TextWrapping.Wrap,
+        });
+    }
+
+    private async void OnEmailFolderClicked(object sender, RoutedEventArgs args)
+    {
+        await PickMaildirAsync();
+    }
+
     private async Task PickMaildirAsync()
     {
         if (_client is null)
@@ -295,6 +325,232 @@ public sealed partial class MainWindow
         {
             await RunCommsMutationAsync(() => _client.AddCalendarSourceAsync(file.Path));
         }
+    }
+
+    // -- calendar: week canvas + inspector (spec 29) -----------------------------
+
+    private List<JsonElement> _calendarEvents = new();
+    private DateOnly _calendarWeekStart = StartOfWeek(DateOnly.FromDateTime(DateTime.Today));
+    private JsonElement? _calendarSelectedEvent;
+
+    private static DateOnly StartOfWeek(DateOnly date)
+    {
+        var offset = ((int)date.DayOfWeek + 6) % 7; // Monday = 0
+        return date.AddDays(-offset);
+    }
+
+    private async void OnAddIcsClicked(object sender, RoutedEventArgs args)
+    {
+        await PickIcsSourceAsync();
+    }
+
+    private void OnCalendarPrevWeekClicked(object sender, RoutedEventArgs args)
+    {
+        _calendarWeekStart = _calendarWeekStart.AddDays(-7);
+        RenderCalendarWeek();
+    }
+
+    private void OnCalendarNextWeekClicked(object sender, RoutedEventArgs args)
+    {
+        _calendarWeekStart = _calendarWeekStart.AddDays(7);
+        RenderCalendarWeek();
+    }
+
+    private void OnCalendarTodayClicked(object sender, RoutedEventArgs args)
+    {
+        _calendarWeekStart = StartOfWeek(DateOnly.FromDateTime(DateTime.Today));
+        RenderCalendarWeek();
+    }
+
+    private async Task LoadCalendarAsync()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.GetCalendarEventsAsync();
+            _calendarEvents = Enumerate(result, "events").ToList();
+            RenderCalendarEventDetail(null);
+            RenderCalendarWeek();
+        }
+        catch (Exception ex)
+        {
+            CommsErrorText.Text = $"Could not load calendar: {ex.Message} Use Refresh to retry.";
+        }
+    }
+
+    /// <summary>Day columns, not a proportional hour-grid - each column lists
+    /// that day's events in start-time order rather than positioning blocks
+    /// by exact time-of-day, which would need pixel-precise layout math this
+    /// pass can't verify visually anyway (WinUI compositing on the dev
+    /// machine is intermittent).</summary>
+    private void RenderCalendarWeek()
+    {
+        var weekEnd = _calendarWeekStart.AddDays(6);
+        CalendarWeekRangeText.Text = _calendarWeekStart.Month == weekEnd.Month
+            ? $"{_calendarWeekStart:MMM d}–{weekEnd:d}, {weekEnd:yyyy}"
+            : $"{_calendarWeekStart:MMM d} – {weekEnd:MMM d, yyyy}";
+
+        CalendarWeekGrid.Children.Clear();
+        var byDay = _calendarEvents
+            .Where(e => DateTimeOffset.TryParse(GetString(e, "start_at"), out _))
+            .GroupBy(e => DateOnly.FromDateTime(DateTimeOffset.Parse(GetString(e, "start_at")!).LocalDateTime));
+
+        for (var i = 0; i < 7; i++)
+        {
+            var day = _calendarWeekStart.AddDays(i);
+            var column = new StackPanel { Spacing = 6, MinWidth = 148, MaxWidth = 148 };
+            var isToday = day == DateOnly.FromDateTime(DateTime.Today);
+            column.Children.Add(new TextBlock
+            {
+                Text = $"{day:ddd} {day.Day}",
+                FontWeight = isToday ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal,
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[isToday ? "HavenAccentBrush" : "HavenMutedTextBrush"],
+            });
+            var dayEvents = byDay.FirstOrDefault(g => g.Key == day)?.OrderBy(e => GetString(e, "start_at")).ToList()
+                ?? new List<JsonElement>();
+            foreach (var e in dayEvents)
+            {
+                var eventId = GetString(e, "event_id") ?? "";
+                var start = DateTimeOffset.TryParse(GetString(e, "start_at"), out var s) ? s.LocalDateTime.ToString("h:mm tt") : "";
+                var chip = new Border
+                {
+                    Style = (Style)Application.Current.Resources["HavenCardStyle"],
+                    Padding = new Microsoft.UI.Xaml.Thickness(8, 6, 8, 6),
+                    BorderBrush = eventId == GetString(_calendarSelectedEvent, "event_id")
+                        ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenAccentBrush"]
+                        : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenStrokeBrush"],
+                    Child = new StackPanel
+                    {
+                        Spacing = 1,
+                        Children =
+                        {
+                            new TextBlock { Text = start, Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"] },
+                            new TextBlock { Text = GetString(e, "title") ?? eventId, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap },
+                        },
+                    },
+                };
+                var capturedEvent = e;
+                chip.Tapped += (_, _) =>
+                {
+                    _calendarSelectedEvent = capturedEvent;
+                    RenderCalendarWeek();
+                    RenderCalendarEventDetail(capturedEvent);
+                };
+                column.Children.Add(chip);
+            }
+            CalendarWeekGrid.Children.Add(column);
+        }
+    }
+
+    private string? GetString(JsonElement? element, string property) =>
+        element is { } e ? GetString(e, property) : null;
+
+    private async void RenderCalendarEventDetail(JsonElement? evt)
+    {
+        CalendarEventDetail.Children.Clear();
+        if (evt is null)
+        {
+            CalendarEventDetail.Children.Add(new TextBlock { Text = "Select an event to see details.", TextWrapping = TextWrapping.Wrap });
+            return;
+        }
+        var e = evt.Value;
+        var eventId = GetString(e, "event_id") ?? "";
+        var resourceId = GetString(e, "resource_id") ?? "";
+
+        CalendarEventDetail.Children.Add(new TextBlock
+        {
+            Text = GetString(e, "title") ?? eventId,
+            Style = (Style)Application.Current.Resources["HavenSectionTextStyle"],
+            TextWrapping = TextWrapping.Wrap,
+        });
+        var when = new List<string>();
+        if (DateTimeOffset.TryParse(GetString(e, "start_at"), out var start))
+        {
+            when.Add(start.LocalDateTime.ToString("dddd, MMM d · h:mm tt"));
+        }
+        if (DateTimeOffset.TryParse(GetString(e, "end_at"), out var end))
+        {
+            when.Add($"until {end.LocalDateTime:h:mm tt}");
+        }
+        if (GetString(e, "location") is { Length: > 0 } location)
+        {
+            when.Add(location);
+        }
+        CalendarEventDetail.Children.Add(new TextBlock { Text = string.Join(" · ", when), TextWrapping = TextWrapping.Wrap, Opacity = 0.85 });
+
+        var attendees = Enumerate(e, "attendees").Select(a => a.GetString()).Where(a => a is { Length: > 0 }).ToList();
+        if (attendees.Count > 0)
+        {
+            CalendarEventDetail.Children.Add(new TextBlock { Text = $"Attendees: {string.Join(", ", attendees)}", TextWrapping = TextWrapping.Wrap, Opacity = 0.85 });
+        }
+
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var propose = new Button { Content = "Propose task", Style = (Style)Application.Current.Resources["HavenPrimaryButtonStyle"] };
+        propose.Click += async (_, _) => await RunCommsMutationAsync(() => _client!.ProposeTaskForEventAsync(eventId));
+        actions.Children.Add(propose);
+        CalendarEventDetail.Children.Add(actions);
+
+        if (await BuildAttachToProjectRowAsync(resourceId) is { } attachRow)
+        {
+            CalendarEventDetail.Children.Add(attachRow);
+        }
+    }
+
+    /// <summary>Single-item convenience: fetches projects once, then builds
+    /// the row. Fine for a one-off (Calendar's selected event) but never use
+    /// this inside a loop over many rows - it would refetch per row.</summary>
+    private async Task<FrameworkElement?> BuildAttachToProjectRowAsync(string resourceId)
+    {
+        if (_client is null)
+        {
+            return null;
+        }
+        try
+        {
+            var projects = Enumerate(await _client.GetProjectsAsync(), "projects").ToList();
+            return BuildAttachToProjectRow(resourceId, projects);
+        }
+        catch (Exception)
+        {
+            // A convenience on top of whatever detail view called this; a
+            // failed projects fetch shouldn't blank details the caller
+            // already rendered.
+            return null;
+        }
+    }
+
+    /// <summary>"Project relation" (spec 29): a forward-only attach control
+    /// (not a reverse lookup of existing attachments, which the client has
+    /// no cheap way to query) reusing the generic projects.attach seam with
+    /// the caller's own resource_id - shared by Calendar's event inspector
+    /// and Browser tabs' rows rather than duplicated per surface. Takes an
+    /// already-fetched project list so a row-per-item list (Browser tabs)
+    /// fetches once, not once per row.</summary>
+    private FrameworkElement? BuildAttachToProjectRow(string resourceId, List<JsonElement> projects)
+    {
+        if (_client is null || projects.Count == 0)
+        {
+            return null;
+        }
+        var picker = new ComboBox
+        {
+            ItemsSource = projects.Select(p => GetString(p, "title") ?? GetString(p, "project_id")).ToList(),
+            MinWidth = 180,
+        };
+        picker.SelectedIndex = 0;
+        var attach = new Button { Content = "Attach to project", Style = (Style)Application.Current.Resources["HavenSecondaryButtonStyle"] };
+        attach.Click += async (_, _) =>
+        {
+            var projectId = GetString(projects[picker.SelectedIndex], "project_id") ?? "";
+            await RunCommsMutationAsync(() => _client!.AttachProjectResourceAsync(projectId, resourceId));
+        };
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        row.Children.Add(picker);
+        row.Children.Add(attach);
+        return row;
     }
 
 }

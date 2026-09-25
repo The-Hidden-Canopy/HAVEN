@@ -37,47 +37,19 @@ public sealed partial class MainWindow
         {
             return;
         }
+        ComputerFilesGrid.Visibility = _computerTab == "files" ? Visibility.Visible : Visibility.Collapsed;
+        ComputerTabContent.Visibility = _computerTab == "files" ? Visibility.Collapsed : Visibility.Visible;
+        if (_computerTab == "files")
+        {
+            await LoadComputerFilesExplorerAsync();
+            ComputerStatusText.Text = "";
+            ComputerErrorText.Text = "";
+            return;
+        }
         try
         {
             ComputerTabContent.Children.Clear();
-            if (_computerTab == "files")
-            {
-                var result = await _client.GetComputerFilesAsync();
-                var files = result.GetProperty("files");
-                var any = false;
-                foreach (var file in Enumerate(files))
-                {
-                    any = true;
-                    var card = new StackPanel { Spacing = 2 };
-                    card.Children.Add(new TextBlock
-                    {
-                        Text = GetString(file, "title") ?? GetString(file, "resource_id") ?? "?",
-                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                        TextWrapping = TextWrapping.Wrap,
-                    });
-                    card.Children.Add(new TextBlock
-                    {
-                        Text = GetString(file, "locator") ?? "",
-                        Style = (Style)Application.Current.Resources["HavenMonoTextStyle"],
-                        TextWrapping = TextWrapping.Wrap,
-                    });
-                    if (file.TryGetProperty("stale", out var stale) && stale.GetBoolean())
-                    {
-                        card.Opacity = 0.55;
-                    }
-                    ComputerTabContent.Children.Add(WrapCard(card));
-                }
-                if (!any)
-                {
-                    ComputerTabContent.Children.Add(new TextBlock
-                    {
-                        Text = "No authorized files observed yet. Enable the computer provider in Setup and scan an allowed folder.",
-                        Opacity = 0.72,
-                        TextWrapping = TextWrapping.Wrap,
-                    });
-                }
-            }
-            else if (_computerTab == "apps")
+            if (_computerTab == "apps")
             {
                 var result = await _client.GetComputerAppsAsync();
                 var any = false;
@@ -207,6 +179,186 @@ public sealed partial class MainWindow
         {
             ComputerStatusText.Text = "";
             ComputerErrorText.Text = $"Could not load computer state: {ex.Message} Use Refresh to retry.";
+        }
+    }
+
+    // -- computer: Files explorer (locations + table + inspector, spec 28) ------
+
+    private readonly Dictionary<string, JsonElement> _computerFilesById = new();
+    private string? _computerLocationFilter;
+
+    private async Task LoadComputerFilesExplorerAsync()
+    {
+        try
+        {
+            var result = await _client!.GetComputerFilesAsync();
+            var files = Enumerate(result, "files").ToList();
+            _computerFilesById.Clear();
+            foreach (var file in files)
+            {
+                var id = GetString(file, "resource_id");
+                if (id is not null)
+                {
+                    _computerFilesById[id] = file;
+                }
+            }
+            RenderComputerLocations(files);
+            RenderComputerFilesTable(files);
+            RenderComputerFileDetail(null);
+        }
+        catch (Exception ex)
+        {
+            ComputerErrorText.Text = $"Could not load files: {ex.Message} Use Refresh to retry.";
+        }
+    }
+
+    /// <summary>Real folders derived from the paths HAVEN has actually
+    /// observed - not a browsable filesystem tree, since HAVEN has no
+    /// capability to enumerate arbitrary unauthorized folders (no false
+    /// capability, spec 06).</summary>
+    private void RenderComputerLocations(List<JsonElement> files)
+    {
+        var previous = _computerLocationFilter;
+        ComputerLocations.Items.Clear();
+        var all = new ListViewItem { Tag = null, Content = new TextBlock { Text = $"All files ({files.Count})" } };
+        ComputerLocations.Items.Add(all);
+        var byFolder = files
+            .Select(f => GetString(f, "locator"))
+            .Where(l => l is { Length: > 0 })
+            .Select(l => System.IO.Path.GetDirectoryName(l))
+            .Where(dir => dir is { Length: > 0 })
+            .GroupBy(dir => dir!)
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key);
+        ListViewItem? restore = null;
+        foreach (var group in byFolder)
+        {
+            var item = new ListViewItem
+            {
+                Tag = group.Key,
+                Content = new TextBlock { Text = $"{group.Key} ({group.Count()})", TextTrimming = TextTrimming.CharacterEllipsis },
+            };
+            ComputerLocations.Items.Add(item);
+            if (group.Key == previous)
+            {
+                restore = item;
+            }
+        }
+        ComputerLocations.SelectedItem = restore ?? all;
+    }
+
+    private void RenderComputerFilesTable(List<JsonElement> files)
+    {
+        var visible = _computerLocationFilter is null
+            ? files
+            : files.Where(f => System.IO.Path.GetDirectoryName(GetString(f, "locator")) == _computerLocationFilter).ToList();
+        ComputerFilesTable.Items.Clear();
+        foreach (var file in visible)
+        {
+            var resourceId = GetString(file, "resource_id") ?? "";
+            var row = new StackPanel { Spacing = 2 };
+            row.Children.Add(new TextBlock
+            {
+                Text = GetString(file, "title") ?? resourceId,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            var meta = new List<string> { Sentence(GetString(file, "resource_type") ?? "file") };
+            if (FormatObservedAgo(GetString(file, "observed_at") ?? "") is { Length: > 0 } observed)
+            {
+                meta.Add(observed);
+            }
+            if (file.TryGetProperty("stale", out var stale) && stale.ValueKind == JsonValueKind.True)
+            {
+                meta.Add("stale");
+            }
+            row.Children.Add(new TextBlock { Text = string.Join(" · ", meta), Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"] });
+            ComputerFilesTable.Items.Add(new ListViewItem { Tag = resourceId, Content = row });
+        }
+        if (visible.Count == 0)
+        {
+            ComputerFilesTable.Items.Add(new TextBlock
+            {
+                Text = "No authorized files observed yet. Enable the computer provider in Setup and scan an allowed folder.",
+                Opacity = 0.72,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+    }
+
+    private void OnComputerLocationSelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        _computerLocationFilter = ComputerLocations.SelectedItem is ListViewItem item ? item.Tag as string : null;
+        RenderComputerFilesTable(_computerFilesById.Values.ToList());
+    }
+
+    private void OnComputerFileSelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        var resourceId = ComputerFilesTable.SelectedItem is ListViewItem item ? item.Tag as string : null;
+        RenderComputerFileDetail(resourceId is not null && _computerFilesById.TryGetValue(resourceId, out var file) ? file : null);
+    }
+
+    private void RenderComputerFileDetail(JsonElement? file)
+    {
+        ComputerFileDetail.Children.Clear();
+        if (file is null)
+        {
+            ComputerFileDetail.Children.Add(new TextBlock { Text = "Select a file to see why HAVEN has it and what you can do.", TextWrapping = TextWrapping.Wrap });
+            return;
+        }
+        var f = file.Value;
+        var resourceId = GetString(f, "resource_id") ?? "";
+        ComputerFileDetail.Children.Add(new TextBlock
+        {
+            Text = GetString(f, "title") ?? resourceId,
+            Style = (Style)Application.Current.Resources["HavenSectionTextStyle"],
+            TextWrapping = TextWrapping.Wrap,
+        });
+        ComputerFileDetail.Children.Add(new TextBlock
+        {
+            Text = GetString(f, "locator") ?? "",
+            Style = (Style)Application.Current.Resources["HavenMonoTextStyle"],
+            TextWrapping = TextWrapping.Wrap,
+        });
+        var why = new List<string> { $"Provider: {GetString(f, "provider_id") ?? "unknown"}" };
+        if (FormatObservedAgo(GetString(f, "observed_at") ?? "") is { Length: > 0 } observed)
+        {
+            why.Add($"Observed {observed}");
+        }
+        ComputerFileDetail.Children.Add(new TextBlock
+        {
+            Text = "Why here",
+            Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+        });
+        ComputerFileDetail.Children.Add(new TextBlock { Text = string.Join(" · ", why), TextWrapping = TextWrapping.Wrap, Opacity = 0.85 });
+
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var open = new Button { Content = "Open", Style = (Style)Application.Current.Resources["HavenPrimaryButtonStyle"] };
+        open.Click += async (_, _) => await RunComputerFileActionAsync("filesystem.open", resourceId);
+        var reveal = new Button { Content = "Reveal", Style = (Style)Application.Current.Resources["HavenSecondaryButtonStyle"] };
+        reveal.Click += async (_, _) => await RunComputerFileActionAsync("filesystem.reveal", resourceId);
+        actions.Children.Add(open);
+        actions.Children.Add(reveal);
+        ComputerFileDetail.Children.Add(actions);
+    }
+
+    private async Task RunComputerFileActionAsync(string action, string resourceId)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.RequestComputerActionAsync(action, resourceId);
+            ComputerErrorText.Text = result.ValueKind == JsonValueKind.Object
+                && result.TryGetProperty("ok", out var ok) && !ok.GetBoolean()
+                ? (result.TryGetProperty("error", out var error) ? error.GetString() : "Action refused.") ?? "Action refused."
+                : "";
+        }
+        catch (Exception ex)
+        {
+            ComputerErrorText.Text = ex.Message;
         }
     }
 
