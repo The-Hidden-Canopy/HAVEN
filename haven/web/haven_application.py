@@ -102,6 +102,11 @@ class PendingRequest:
     title: str
     detail: str
     expires_at: datetime
+    # Who asked, and -- for an externally initiated request -- which
+    # external-agent connection it came through. Both stay None for
+    # requests HAVEN's own surfaces raise on the resident's behalf.
+    requested_by: str | None = None
+    external_connection_id: str | None = None
 
 
 VOICE_DORMANT = "dormant"
@@ -311,6 +316,7 @@ class HavenApplication:
         intelligence_provider=None,
         ha_states_source=None,
         person_names: Mapping[str, str] | None = None,
+        person_roles: Mapping[str, str] | None = None,
         room_names: Mapping[str, str] | None = None,
         rules_persistence: RulesPersistence | None = None,
         resident: Principal | None = None,
@@ -384,6 +390,10 @@ class HavenApplication:
         # Declared person names, when a setup layer declares who lives here:
         # the declared name wins over the title-cased person_id derivation.
         self._person_names = dict(person_names or {})
+        # Declared household standing ("owner"/"member") per person id --
+        # the only input `principal_for` uses to derive a role tier. Nothing
+        # an external caller sends can change it.
+        self._person_roles = dict(person_roles or {})
         # Declared room names are the same kind of household-owned meaning:
         # provider observations may add rooms, but cannot erase a room the
         # user explicitly declared or force its display name back to an id.
@@ -478,6 +488,24 @@ class HavenApplication:
     def pending_requests(self) -> tuple[PendingRequest, ...]:
         return tuple(self._pending.values())
 
+    def principal_for(self, person_id: str) -> Principal | None:
+        """The HAVEN principal for one declared person, or None if unknown.
+
+        Role derives only from this household's own declarations: the
+        declared owner is OWNER, every other declared person is MEMBER. An
+        undeclared id (or a household with nobody declared) resolves to
+        nothing, so nothing can be bound to a placeholder identity.
+        """
+
+        if not self.has_declared_owner or not isinstance(person_id, str) or not person_id.strip():
+            return None
+        person_id = person_id.strip()
+        if person_id == self.owner.actor_id or self._person_roles.get(person_id) == "owner":
+            return Principal(actor_id=person_id, household_id=self.household_id, role_tier=RoleTier.OWNER)
+        if person_id == self.resident.actor_id or person_id in self._person_roles or person_id in self._person_names:
+            return Principal(actor_id=person_id, household_id=self.household_id, role_tier=RoleTier.MEMBER)
+        return None
+
     def _persist_rules(self) -> None:
         # The rules sidecar is optional: without one this is a no-op and
         # nothing here is any more persistent than process memory.
@@ -549,6 +577,26 @@ class HavenApplication:
         return self.state()
 
     def _approve_direct_action(self, request_id: str, pending: PendingRequest) -> dict[str, Any] | None:
+        self._confirm_direct_action(request_id, pending, principal=self.resident)
+        self._publish_state()
+        return self.state()
+
+    def _confirm_direct_action(
+        self,
+        request_id: str,
+        pending: PendingRequest,
+        *,
+        principal: Principal,
+        external_source: tuple[tuple[str, str], ...] | None = None,
+    ):
+        """Consume one pending direct action with a fresh bound confirmation.
+
+        The confirmation token names `principal` as the confirmer, so the
+        authority engine's token binding checks the same person who is now
+        acting -- the resident for HAVEN's own surfaces, the bound person
+        for an external agent. Returns the receipt.
+        """
+
         proposal = self._direct_actions.pop(request_id)
         del self._pending[request_id]
         now = self._clock()
@@ -557,13 +605,13 @@ class HavenApplication:
             household_id=self.household_id,
             rule_id=pending.rule_id,
             request_id=request_id,
-            confirmed_by=self.resident.actor_id,
+            confirmed_by=principal.actor_id,
             issued_at=now,
             expires_at=now + timedelta(minutes=5),
         )
         self._set_glow(GLOW_ACTING, target=self._device_room(proposal.target_device_id))
         receipt = self.runtime.run_action(
-            principal=self.resident,
+            principal=principal,
             action_kind=proposal.action_kind,
             capability=proposal.capability,
             target_device_id=proposal.target_device_id,
@@ -574,6 +622,8 @@ class HavenApplication:
             now=now,
             confirmation_token=token,
         )
+        if external_source is not None:
+            receipt = replace(receipt, external_source=external_source)
         self.receipts.append(receipt)
         if receipt.decision.status == DecisionStatus.ALLOW:
             self._proposal_completed(proposal, receipt)
@@ -583,8 +633,7 @@ class HavenApplication:
             self._set_glow(GLOW_PERMISSION, target=self._device_room(proposal.target_device_id))
         else:
             self._record_block(receipt)
-        self._publish_state()
-        return self.state()
+        return receipt
 
     def deny(self, request_id: str) -> bool:
         if request_id not in self._pending:
