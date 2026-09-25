@@ -74,10 +74,16 @@ public sealed partial class MainWindow
         var state = GetString(task, "state") ?? "open";
         var terminal = state is "done" or "cancelled";
 
-        var card = new Grid();
+        // Column widths mirror the static header Grid in MainWindow.xaml's
+        // TasksPanel exactly (36 / * / 140 / 90 / 90 / 52) so rows and header
+        // stay pixel-aligned - a real table, not a stack of cards (spec 25).
+        var card = new Grid { ColumnSpacing = 10 };
         card.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(36) });
         card.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
-        card.ColumnDefinitions.Add(new ColumnDefinition { Width = Microsoft.UI.Xaml.GridLength.Auto });
+        card.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(140) });
+        card.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(90) });
+        card.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(90) });
+        card.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(52) });
 
         var complete = new CheckBox
         {
@@ -117,13 +123,15 @@ public sealed partial class MainWindow
         };
         card.Children.Add(complete);
 
-        var body = new StackPanel { Spacing = 2 };
-        var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        // Task column: title + inline state chips only (no project/due text
+        // buried here anymore - those get their own columns below).
+        var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
         titleRow.Children.Add(new TextBlock
         {
             Text = GetString(task, "title") ?? taskId,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
         });
         if (state == "blocked")
         {
@@ -136,6 +144,22 @@ public sealed partial class MainWindow
         {
             titleRow.Children.Add(MakeChip("Proposed", "HavenVioletTintBrush", "HavenVioletBrush"));
         }
+        Grid.SetColumn(titleRow, 1);
+        card.Children.Add(titleRow);
+
+        // Project column.
+        var projectTitle = GetString(task, "project_title");
+        var projectText = new TextBlock
+        {
+            Text = projectTitle ?? "—",
+            Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        Grid.SetColumn(projectText, 2);
+        card.Children.Add(projectText);
+
+        // Priority column.
         var priority = GetString(task, "priority");
         if (priority is not null)
         {
@@ -145,43 +169,35 @@ public sealed partial class MainWindow
                 "medium" => ("HavenWarningTintBrush", "HavenWarningBrush"),
                 _ => ("HavenStrokeBrush", "HavenMutedTextBrush"),
             };
-            titleRow.Children.Add(MakeChip(Sentence(priority), tint, foreground));
+            var priorityChip = MakeChip(Sentence(priority), tint, foreground);
+            priorityChip.HorizontalAlignment = HorizontalAlignment.Left;
+            priorityChip.VerticalAlignment = VerticalAlignment.Center;
+            Grid.SetColumn(priorityChip, 3);
+            card.Children.Add(priorityChip);
         }
-        body.Children.Add(titleRow);
-        var meta = new List<string>();
-        var projectTitle = GetString(task, "project_title");
-        if (projectTitle is not null)
+
+        // Due column - completed tasks show their completion date instead.
+        var dueText = terminal && GetString(task, "completed_at") is { } completedAt
+            ? $"Done {FormatDue(completedAt) ?? completedAt}"
+            : FormatDue(GetString(task, "due_at")) ?? "—";
+        var due = new TextBlock
         {
-            meta.Add(projectTitle);
-        }
-        var due = FormatDue(GetString(task, "due_at"));
-        if (due is not null)
-        {
-            meta.Add(due);
-        }
-        if (terminal && GetString(task, "completed_at") is { } completedAt)
-        {
-            meta.Add($"completed {FormatDue(completedAt) ?? completedAt}");
-        }
-        if (meta.Count > 0)
-        {
-            body.Children.Add(new TextBlock
-            {
-                Text = string.Join(" · ", meta),
-                Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
-            });
-        }
-        Grid.SetColumn(body, 1);
-        card.Children.Add(body);
+            Text = dueText,
+            Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(due, 4);
+        card.Children.Add(due);
 
         var edit = new Button
         {
             Content = "Edit",
             Style = (Style)Application.Current.Resources["HavenQuietButtonStyle"],
             VerticalAlignment = VerticalAlignment.Center,
+            Padding = new Microsoft.UI.Xaml.Thickness(8, 4, 8, 4),
         };
         edit.Click += async (_, _) => await EditTaskDialogAsync(task, GetString(task, "project_id"));
-        Grid.SetColumn(edit, 2);
+        Grid.SetColumn(edit, 5);
         card.Children.Add(edit);
 
         var wrap = new StackPanel();

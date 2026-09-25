@@ -238,7 +238,75 @@
                         </Button>
                     </StackPanel>
                     <TextBlock x:Name="TodayStatus" Style="{StaticResource HavenMetadataTextStyle}" />
-                    <StackPanel x:Name="TodayCardsHost" Spacing="12" />
+
+                    <!-- Dense dashboard grid (spec 21): Focus/Upcoming on top,
+                         Tasks spanning two rows beside Recent files/Pending
+                         replies, Recent activity full-width beneath. Each
+                         region is a named host StackPanel inside a collapsible
+                         card - empty regions collapse rather than leaving a
+                         dead rectangle (see RenderTodayCards). -->
+                    <Grid x:Name="TodayGrid" ColumnSpacing="16" RowSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <Border x:Name="TodayFocusCard" Grid.Row="0" Grid.Column="0" Style="{StaticResource HavenCardStyle}">
+                            <StackPanel Spacing="8">
+                                <TextBlock Text="Focus" Style="{StaticResource HavenSectionTextStyle}" />
+                                <StackPanel x:Name="TodayFocusHost" Spacing="8" />
+                            </StackPanel>
+                        </Border>
+                        <Border x:Name="TodayUpcomingCard" Grid.Row="0" Grid.Column="1" Style="{StaticResource HavenCardStyle}">
+                            <StackPanel Spacing="8">
+                                <TextBlock Text="Upcoming" Style="{StaticResource HavenSectionTextStyle}" />
+                                <StackPanel x:Name="TodayUpcomingHost" Spacing="8" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border x:Name="TodayTasksCard" Grid.Row="1" Grid.RowSpan="2" Grid.Column="0" Style="{StaticResource HavenCardStyle}">
+                            <StackPanel Spacing="8">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="Tasks" Style="{StaticResource HavenSectionTextStyle}" />
+                                    <Button Content="See all" Click="OnQuickActionTaskClicked" Style="{StaticResource HavenQuietButtonStyle}" />
+                                </StackPanel>
+                                <StackPanel x:Name="TodayTasksHost" Spacing="6" />
+                            </StackPanel>
+                        </Border>
+                        <Border x:Name="TodayFilesCard" Grid.Row="1" Grid.Column="1" Style="{StaticResource HavenCardStyle}">
+                            <StackPanel Spacing="8">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="Recent files" Style="{StaticResource HavenSectionTextStyle}" />
+                                    <Button Content="See all" Click="OnQuickActionOpenClicked" Style="{StaticResource HavenQuietButtonStyle}" />
+                                </StackPanel>
+                                <StackPanel x:Name="TodayFilesHost" Spacing="6" />
+                            </StackPanel>
+                        </Border>
+                        <Border x:Name="TodayRepliesCard" Grid.Row="2" Grid.Column="1" Style="{StaticResource HavenCardStyle}">
+                            <StackPanel Spacing="8">
+                                <TextBlock Text="Pending replies" Style="{StaticResource HavenSectionTextStyle}" />
+                                <StackPanel x:Name="TodayRepliesHost" Spacing="6" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border x:Name="TodayActivityCard" Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource HavenCardStyle}">
+                            <StackPanel Spacing="8">
+                                <TextBlock Text="Recent activity" Style="{StaticResource HavenSectionTextStyle}" />
+                                <StackPanel x:Name="TodayActivityHost" Spacing="6" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <Border x:Name="TodayEmptyCard" Style="{StaticResource HavenCardStyle}" Visibility="Collapsed">
+                        <TextBlock Text="Nothing needs you right now. Tasks with due dates, pending decisions, and upcoming commitments will appear here."
+                                   TextWrapping="Wrap" Style="{StaticResource HavenBodyTextStyle}" />
+                    </Border>
                 </StackPanel>
 
                 <StackPanel x:Name="SearchPanel" Spacing="12" Visibility="Collapsed">
@@ -291,7 +359,24 @@
                     </Grid>
                     <TextBlock x:Name="TasksErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
                     <TextBlock x:Name="TasksStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
-                    <StackPanel x:Name="TasksListPanel" Spacing="6" />
+                    <!-- Aligned table header (spec 25): checkbox / task / project /
+                         priority / due, matching MakeTaskRow's column widths exactly
+                         so header and rows stay pixel-aligned. -->
+                    <Grid ColumnSpacing="10" Padding="10,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="36" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="140" />
+                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="52" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="1" Text="Task" Style="{StaticResource HavenMetadataTextStyle}" />
+                        <TextBlock Grid.Column="2" Text="Project" Style="{StaticResource HavenMetadataTextStyle}" />
+                        <TextBlock Grid.Column="3" Text="Priority" Style="{StaticResource HavenMetadataTextStyle}" />
+                        <TextBlock Grid.Column="4" Text="Due" Style="{StaticResource HavenMetadataTextStyle}" />
+                    </Grid>
+                    <StackPanel x:Name="TasksListPanel" Spacing="2" />
                 </StackPanel>
 
                 <!-- Computer (spec 33/34): Files / Applications / Windows / Activity. -->
