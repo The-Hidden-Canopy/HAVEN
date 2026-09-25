@@ -60,8 +60,14 @@ public sealed class HavenCoreClient : IAsyncDisposable
     public Task<JsonElement> GetStateAsync(CancellationToken cancellationToken = default) =>
         RequestResultAsync("state.get", new { }, cancellationToken);
 
-    public Task<JsonElement> SearchAsync(string text, CancellationToken cancellationToken = default) =>
-        RequestResultAsync("search.query", new { text, limit = 50 }, cancellationToken);
+    public Task<JsonElement> SearchAsync(
+        string text,
+        IEnumerable<string>? resourceTypes = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "search.query",
+            new { text, limit = 50, resource_types = (resourceTypes ?? Enumerable.Empty<string>()).ToArray() },
+            cancellationToken);
 
     public Task<JsonElement> GetKnowledgeClaimsAsync(
         bool includeStale = false,
@@ -636,6 +642,17 @@ public sealed class HavenCoreClient : IAsyncDisposable
 
     public Task<JsonElement> GetComputerActivityAsync(CancellationToken cancellationToken = default) =>
         RequestResultAsync("computer.activity.list", new { }, cancellationToken);
+
+    /// <summary>filesystem.open/filesystem.reveal are SAFE_AUTOMATIC (spec 29)
+    /// - this executes immediately, no confirm/deny round trip.</summary>
+    public Task<JsonElement> RequestComputerActionAsync(
+        string action,
+        string resourceId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "computer.action.request",
+            new { action, resource_id = resourceId },
+            cancellationToken);
 
     public Task<JsonElement> SetComputerObservationAsync(
         bool enabled,
