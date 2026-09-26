@@ -108,6 +108,7 @@ public sealed partial class MainWindow
             case "settings":
                 SettingsStatusText.Text = "Loading…";
                 _ = LoadSettingsAsync();
+                _ = LoadExternalAgentsAsync();
                 break;
         }
     }
