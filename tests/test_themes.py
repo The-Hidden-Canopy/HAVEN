@@ -255,11 +255,12 @@ def test_app_xaml_defines_every_semantic_alias():
 def test_theme_service_swaps_the_default_theme_dictionary_live():
     text = THEME_SERVICE.read_text(encoding="utf-8")
     assert 'DefaultTheme = "haven"' in text
-    # ThemeService.Apply builds ms-appx:///Themes/{Theme}{Appearance}.xaml at
-    # runtime and merges it (App.xaml itself carries no static theme source -
-    # see the module docstring for why).
-    assert 'ms-appx:///Themes/' in text
-    assert "merged.Add(incoming)" in text
+    # ThemeService.Apply builds the theme dictionary via the compiled
+    # ThemeDictionaries factory and merges it (not a dynamic ms-appx:///
+    # XamlReader.Load: that crashes natively in this unpackaged app -- see
+    # ThemeDictionaries.cs's docstring for why).
+    assert "ThemeDictionaries.CreateTheme(Theme, appearance)" in text
+    assert "merged.Add(incomingTheme)" in text
 
 
 def test_semantic_aliases_resolve_to_theme_defined_colors():

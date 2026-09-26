@@ -49,6 +49,15 @@ from .folder_picker import choose_folder
 from .setup_config import SetupConfigStore, default_data_dir
 from .setup_service import SetupService
 from .computer_actions import ComputerActionService
+from .discovery_service import DiscoveryService, default_discovery_providers
+from ..external_agents import (
+    ExternalAgentGateway,
+    ExternalAgentService,
+    ExternalAgentStore,
+    ExternalDenied,
+    ExternalProvider,
+    parse_scopes,
+)
 from ..actions import ActionLedgerStore
 from ..knowledge import ClaimStore, KnowledgeService
 from ..knowledge.audit import audit_event_to_dict
@@ -109,6 +118,12 @@ _IPC_METHOD_EVENTS = {
     "rooms.rename": "home.state.changed",
     "rooms.remove": "home.state.changed",
     "devices.command": "home.state.changed",
+    "discovery.enroll": "home.state.changed",
+    "external_agents.connections.create": "external_agents.changed",
+    "external_agents.connections.enable": "external_agents.changed",
+    "external_agents.connections.revoke": "external_agents.changed",
+    "external_agents.bindings.upsert": "external_agents.changed",
+    "external_agents.bindings.revoke": "external_agents.changed",
     "people.add": "home.state.changed",
     "people.update": "home.state.changed",
     "people.remove": "home.state.changed",
@@ -452,6 +467,25 @@ class HavenWebServer(ThreadingHTTPServer):
             include_demo_candidates=self._director_demo,
             resource_store=self.resources,
             knowledge_service=self.knowledge,
+        )
+        # Everyday (post-setup) discovery: real transports only, no demo
+        # fixtures -- distinct from `self.setup`'s one-time onboarding scan.
+        self.discovery = DiscoveryService(director=self.director, providers=default_discovery_providers())
+        # External Agent Gateway (Build/Ship/Shape): admission boundary for
+        # outside assistants (Alexa+ MCP first). `self.external_agents` is
+        # the owner-facing connection/binding surface; `self.external_agent_gateway`
+        # is what a future transport adapter calls per request. No MCP
+        # transport is wired yet -- this is reachable via IPC today so the
+        # native/web "External Agents" view has something real to manage.
+        self._external_agents_store = ExternalAgentStore(Path(resolved_data_dir) / "external_agents.db")
+        self.external_agents = ExternalAgentService(
+            store=self._external_agents_store, household_id=self.director.household_id, clock=clock
+        )
+        self.external_agent_gateway = ExternalAgentGateway(
+            store=self._external_agents_store,
+            household_id=self.director.household_id,
+            resolve_principal=self.director.principal_for,
+            clock=clock,
         )
         # Authorization + consequence verification in front of
         # `FilesystemProvider.execute_provider()` -- independent of `self.setup`
@@ -1761,6 +1795,20 @@ class HavenWebServer(ThreadingHTTPServer):
                 skip=bool(params.get("skip", False)),
             )
 
+        def _discovery_enroll(params: dict) -> dict:
+            candidate_id = params.get("candidate_id")
+            device_type = params.get("device_type")
+            room = params.get("room")
+            if not isinstance(candidate_id, str) or not candidate_id.strip():
+                raise ValueError("a non-empty 'candidate_id' is required")
+            if not isinstance(device_type, str) or not device_type.strip():
+                raise ValueError("a non-empty 'device_type' is required")
+            return self.discovery.enroll(
+                candidate_id.strip(),
+                device_type=device_type.strip(),
+                room=room if isinstance(room, str) and room.strip() else None,
+            )
+
         def _setup_enroll(params: dict) -> dict:
             candidate_id = params.get("candidate_id")
             device_type = params.get("device_type")
@@ -1807,6 +1855,158 @@ class HavenWebServer(ThreadingHTTPServer):
                 provider_id=params.get("provider_id"), enabled=bool(params.get("enabled", True))
             )
 
+        # External Agent Gateway (Build/Ship/Shape): owner-facing connection/
+        # binding management. No MCP transport reaches `self.external_agent_gateway`
+        # yet -- these are the CRUD surface WP6's "External Agents" view needs
+        # regardless, so it isn't blocked on the transport landing first.
+        def _external_agent_connection_dict(connection) -> dict:
+            return {
+                "connection_id": connection.connection_id,
+                "provider": connection.provider.value,
+                "display_name": connection.display_name,
+                "enabled": connection.enabled,
+                "active": connection.active,
+                "unbound_scopes": sorted(scope.value for scope in connection.unbound_scopes),
+                "created_by": connection.created_by,
+                "created_at": connection.created_at.isoformat(),
+                "revoked_at": connection.revoked_at.isoformat() if connection.revoked_at else None,
+            }
+
+        def _external_agent_binding_dict(binding) -> dict:
+            return {
+                "binding_id": binding.binding_id,
+                "connection_id": binding.connection_id,
+                "subject_key": binding.subject_key,
+                "subject_label": binding.subject_label,
+                "principal_id": binding.principal_id,
+                "scopes": sorted(scope.value for scope in binding.scopes),
+                "created_by": binding.created_by,
+                "created_at": binding.created_at.isoformat(),
+                "expires_at": binding.expires_at.isoformat() if binding.expires_at else None,
+                "revoked_at": binding.revoked_at.isoformat() if binding.revoked_at else None,
+            }
+
+        def _require_owner_for_external_agents() -> None:
+            if not self.director.has_declared_owner:
+                raise ValueError("declare a household owner before managing external agent connections")
+
+        def _external_agents_connections_list(_params: dict) -> dict:
+            return {"ok": True, "connections": [_external_agent_connection_dict(c) for c in self.external_agents.list_connections()]}
+
+        def _external_agents_connection_create(params: dict) -> dict:
+            _require_owner_for_external_agents()
+            provider = params.get("provider")
+            display_name = params.get("display_name")
+            if not isinstance(provider, str) or not provider.strip():
+                raise ValueError("a non-empty 'provider' is required")
+            if not isinstance(display_name, str) or not display_name.strip():
+                raise ValueError("a non-empty 'display_name' is required")
+            try:
+                provider_value = ExternalProvider(provider.strip())
+            except ValueError:
+                raise ValueError(f"unknown provider: {provider!r}") from None
+            unbound_scopes = parse_scopes(params.get("unbound_scopes") or [])
+            connection = self.external_agents.create_connection(
+                provider=provider_value,
+                display_name=display_name.strip(),
+                created_by=self.director.owner.actor_id,
+                unbound_scopes=unbound_scopes,
+            )
+            return {"ok": True, "connection": _external_agent_connection_dict(connection)}
+
+        def _external_agents_connection_enable(params: dict) -> dict:
+            _require_owner_for_external_agents()
+            connection_id = params.get("connection_id")
+            if not isinstance(connection_id, str) or not connection_id.strip():
+                raise ValueError("a non-empty 'connection_id' is required")
+            try:
+                connection = self.external_agents.set_connection_enabled(
+                    connection_id.strip(), bool(params.get("enabled", True)), actor=self.director.owner.actor_id
+                )
+            except ExternalDenied as exc:
+                return {"ok": False, "error": exc.message, "code": exc.code}
+            return {"ok": True, "connection": _external_agent_connection_dict(connection)}
+
+        def _external_agents_connection_revoke(params: dict) -> dict:
+            _require_owner_for_external_agents()
+            connection_id = params.get("connection_id")
+            if not isinstance(connection_id, str) or not connection_id.strip():
+                raise ValueError("a non-empty 'connection_id' is required")
+            try:
+                connection = self.external_agents.revoke_connection(
+                    connection_id.strip(), actor=self.director.owner.actor_id
+                )
+            except ExternalDenied as exc:
+                return {"ok": False, "error": exc.message, "code": exc.code}
+            return {"ok": True, "connection": _external_agent_connection_dict(connection)}
+
+        def _external_agents_bindings_list(params: dict) -> dict:
+            connection_id = params.get("connection_id")
+            if not isinstance(connection_id, str) or not connection_id.strip():
+                raise ValueError("a non-empty 'connection_id' is required")
+            bindings = self.external_agents.list_bindings(connection_id.strip())
+            return {"ok": True, "bindings": [_external_agent_binding_dict(b) for b in bindings]}
+
+        def _external_agents_binding_upsert(params: dict) -> dict:
+            _require_owner_for_external_agents()
+            connection_id = params.get("connection_id")
+            subject_key = params.get("subject_key")
+            subject_label = params.get("subject_label")
+            principal_id = params.get("principal_id")
+            if not isinstance(connection_id, str) or not connection_id.strip():
+                raise ValueError("a non-empty 'connection_id' is required")
+            if not isinstance(subject_key, str) or not subject_key.strip():
+                raise ValueError("a non-empty 'subject_key' is required")
+            if not isinstance(subject_label, str) or not subject_label.strip():
+                raise ValueError("a non-empty 'subject_label' is required")
+            if not isinstance(principal_id, str) or not principal_id.strip():
+                raise ValueError("a non-empty 'principal_id' is required")
+            if self.director.principal_for(principal_id.strip()) is None:
+                raise ValueError(f"unknown household principal: {principal_id!r}")
+            scopes = parse_scopes(params.get("scopes") or [])
+            try:
+                binding = self.external_agents.upsert_binding(
+                    connection_id=connection_id.strip(),
+                    subject_key=subject_key.strip(),
+                    subject_label=subject_label.strip(),
+                    principal_id=principal_id.strip(),
+                    scopes=scopes,
+                    created_by=self.director.owner.actor_id,
+                )
+            except ExternalDenied as exc:
+                return {"ok": False, "error": exc.message, "code": exc.code}
+            return {"ok": True, "binding": _external_agent_binding_dict(binding)}
+
+        def _external_agents_binding_revoke(params: dict) -> dict:
+            _require_owner_for_external_agents()
+            binding_id = params.get("binding_id")
+            if not isinstance(binding_id, str) or not binding_id.strip():
+                raise ValueError("a non-empty 'binding_id' is required")
+            try:
+                binding = self.external_agents.revoke_binding(binding_id.strip(), actor=self.director.owner.actor_id)
+            except ExternalDenied as exc:
+                return {"ok": False, "error": exc.message, "code": exc.code}
+            return {"ok": True, "binding": _external_agent_binding_dict(binding)}
+
+        def _external_agents_observed_subjects(params: dict) -> dict:
+            connection_id = params.get("connection_id")
+            if not isinstance(connection_id, str) or not connection_id.strip():
+                raise ValueError("a non-empty 'connection_id' is required")
+            return {"ok": True, "subjects": list(self.external_agents.observed_subjects(connection_id.strip()))}
+
+        def _external_agents_audit(params: dict) -> dict:
+            connection_id = params.get("connection_id")
+            limit = params.get("limit")
+            return {
+                "ok": True,
+                "audit": list(
+                    self.external_agents.audit(
+                        connection_id=connection_id if isinstance(connection_id, str) and connection_id.strip() else None,
+                        limit=limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else 50,
+                    )
+                ),
+            }
+
         handlers = {
                 "host.capabilities": lambda _params: {
                     **self.host_capabilities(),
@@ -1819,6 +2019,18 @@ class HavenWebServer(ThreadingHTTPServer):
                 "setup.provider.connect": _setup_provider_connect,
                 "setup.enroll": _setup_enroll,
                 "setup.discovery.scan": lambda _params: self.setup.run_discovery(),
+                "discovery.scan": lambda _params: self.discovery.scan(),
+                "discovery.candidates": lambda _params: self.discovery.candidates(),
+                "discovery.enroll": _discovery_enroll,
+                "external_agents.connections.list": _external_agents_connections_list,
+                "external_agents.connections.create": _external_agents_connection_create,
+                "external_agents.connections.enable": _external_agents_connection_enable,
+                "external_agents.connections.revoke": _external_agents_connection_revoke,
+                "external_agents.bindings.list": _external_agents_bindings_list,
+                "external_agents.bindings.upsert": _external_agents_binding_upsert,
+                "external_agents.bindings.revoke": _external_agents_binding_revoke,
+                "external_agents.observed_subjects": _external_agents_observed_subjects,
+                "external_agents.audit": _external_agents_audit,
                 "setup.household.people.add": _setup_household_people_add,
                 "setup.household.people.remove": lambda params: self.setup.remove_person(
                     person_id=params.get("person_id")
@@ -2029,6 +2241,7 @@ class HavenWebServer(ThreadingHTTPServer):
         new = self._build_director()
         self.director = new
         self.setup.set_director(new)
+        self.discovery.set_director(new)
         # Rebuilt from the *current* data dir root (`self.setup_store.path
         # .parent` -- already updated if this rebuild followed a
         # `choose_data_dir` move) every time, not just on a data-dir move:
@@ -2048,6 +2261,16 @@ class HavenWebServer(ThreadingHTTPServer):
         # root; without this rebind the authority boundary would keep
         # reading the old (now moved-away) location.
         self.scope_store = ScopeStore(data_dir / "scopes.db")
+        self._external_agents_store = ExternalAgentStore(data_dir / "external_agents.db")
+        self.external_agents = ExternalAgentService(
+            store=self._external_agents_store, household_id=new.household_id, clock=self._director_clock
+        )
+        self.external_agent_gateway = ExternalAgentGateway(
+            store=self._external_agents_store,
+            household_id=new.household_id,
+            resolve_principal=new.principal_for,
+            clock=self._director_clock,
+        )
         self.identity = LocalIdentityProvider(
             path=data_dir / "identity.json",
             household_id=new.household_id,

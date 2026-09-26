@@ -117,7 +117,7 @@ def test_app_xaml_styles_reference_density_tokens_not_literals():
 
 def test_theme_service_swaps_the_density_dictionary_live():
     text = THEME_SERVICE.read_text(encoding="utf-8")
-    assert "ms-appx:///Themes/Density" in text
+    assert "ThemeDictionaries.CreateDensity(Density)" in text
     assert "DefaultDensity" in text or "Densities" in text
 
 

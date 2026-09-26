@@ -598,6 +598,7 @@
                         <Button Content="Devices" Tag="devices" Click="OnHomeTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
                         <Button Content="Automations" Tag="automations" Click="OnHomeTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
                         <Button Content="Contexts" Tag="contexts" Click="OnHomeTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                        <Button Content="Discover" Tag="discover" Click="OnHomeTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
                     </StackPanel>
 
                     <StackPanel x:Name="HomeTabRooms" Spacing="12">
@@ -646,6 +647,18 @@
                                     Style="{StaticResource HavenPrimaryButtonStyle}" />
                         </StackPanel>
                         <StackPanel x:Name="ContextsList" Spacing="8" />
+                    </StackPanel>
+
+                    <StackPanel x:Name="HomeTabDiscover" Spacing="12" Visibility="Collapsed">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock VerticalAlignment="Center" Style="{StaticResource HavenMetadataTextStyle}"
+                                       Text="A scan finds nearby WiFi/Bluetooth devices; enrolling one is your decision, not the scan's." />
+                            <Button x:Name="DiscoveryScanButton" Content="Scan" Click="OnDiscoveryScanClicked" VerticalAlignment="Center"
+                                    Style="{StaticResource HavenPrimaryButtonStyle}" />
+                        </StackPanel>
+                        <TextBlock x:Name="DiscoveryErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
+                        <TextBlock x:Name="DiscoveryStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
+                        <StackPanel x:Name="DiscoveryCandidatesList" Spacing="8" />
                     </StackPanel>
                 </StackPanel>
 

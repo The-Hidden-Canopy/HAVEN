@@ -34,6 +34,10 @@ public sealed class ThemeService
     public string Density { get; private set; } = DefaultDensity;
     public string Motion { get; private set; } = DefaultMotion;
 
+    private ResourceDictionary? _themeDictionary;
+    private ResourceDictionary? _densityDictionary;
+    private ResourceDictionary? _touchDictionary;
+
     public void Load()
     {
         try
@@ -96,42 +100,40 @@ public sealed class ThemeService
     public void Apply(MainWindow window)
     {
         var merged = Application.Current.Resources.MergedDictionaries;
-        RemoveMerged(merged, "/Themes/", except: "/Themes/Density");
 
         var appearance = EffectiveAppearance();
-        var themeName = string.Concat(Theme[..1].ToUpperInvariant(), Theme.AsSpan(1));
         // Add first (last-merged wins every key lookup), remove the previous
         // theme dictionary afterwards: removing a merged dictionary while it
         // is the active lookup target breaks theme-resource resolution.
-        var incoming = new ResourceDictionary { Source = new Uri($"ms-appx:///Themes/{themeName}{appearance}.xaml") };
-        merged.Add(incoming);
-        RemoveMerged(merged, "/Themes/", except: "/Themes/Density", skipLast: true);
+        var incomingTheme = global::Haven.Desktop.Themes.ThemeDictionaries.CreateTheme(Theme, appearance);
+        merged.Add(incomingTheme);
+        if (_themeDictionary is not null)
+        {
+            merged.Remove(_themeDictionary);
+        }
+        else if (App.BootstrapThemeDictionary is { } bootstrapTheme)
+        {
+            merged.Remove(bootstrapTheme);
+        }
+        _themeDictionary = incomingTheme;
 
-        var densityName = string.Concat(Density[..1].ToUpperInvariant(), Density.AsSpan(1));
-        var incomingDensity = new ResourceDictionary { Source = new Uri($"ms-appx:///Themes/Density{densityName}.xaml") };
+        var incomingDensity = global::Haven.Desktop.Themes.ThemeDictionaries.CreateDensity(Density);
         merged.Add(incomingDensity);
-        RemoveMerged(merged, "/Themes/Density", skipLast: true);
+        if (_densityDictionary is not null)
+        {
+            merged.Remove(_densityDictionary);
+        }
+        else if (App.BootstrapDensityDictionary is { } bootstrapDensity)
+        {
+            merged.Remove(bootstrapDensity);
+        }
+        _densityDictionary = incomingDensity;
 
         // High contrast always wins: a flat canvas beats a decorative gradient.
         var flatCanvas = new AccessibilitySettings().HighContrast;
         window.SetRequestedTheme(appearance == "Dark" ? "dark" : "light");
         window.SetFlatCanvas(flatCanvas);
         window.ApplyTitleBarColors();
-    }
-
-    private static void RemoveMerged(
-        IList<ResourceDictionary> merged, string sourceContains, string? except = null, bool skipLast = false)
-    {
-        var start = merged.Count - (skipLast ? 2 : 1);
-        for (var index = start; index >= 0; index--)
-        {
-            var source = merged[index].Source?.OriginalString ?? "";
-            if (source.Contains(sourceContains, StringComparison.OrdinalIgnoreCase)
-                && (except is null || !source.Contains(except, StringComparison.OrdinalIgnoreCase)))
-            {
-                merged.RemoveAt(index);
-            }
-        }
     }
 
     /// <summary>
@@ -146,19 +148,20 @@ public sealed class ThemeService
     public void SetTouchOverlay(bool enabled, MainWindow window)
     {
         var merged = Application.Current.Resources.MergedDictionaries;
-        var alreadyOn = merged.Any(d =>
-            (d.Source?.OriginalString ?? "").Contains("/Themes/DensityTouch", StringComparison.OrdinalIgnoreCase));
+        var alreadyOn = _touchDictionary is not null;
         if (enabled == alreadyOn)
         {
             return;
         }
         if (enabled)
         {
-            merged.Add(new ResourceDictionary { Source = new Uri("ms-appx:///Themes/DensityTouch.xaml") });
+            _touchDictionary = global::Haven.Desktop.Themes.ThemeDictionaries.CreateDensity("touch");
+            merged.Add(_touchDictionary);
         }
-        else
+        else if (_touchDictionary is not null)
         {
-            RemoveMerged(merged, "/Themes/DensityTouch");
+            merged.Remove(_touchDictionary);
+            _touchDictionary = null;
         }
         // Force WinUI to re-resolve every ThemeResource-bound Setter app-wide
         // - the same mechanism Apply() relies on for the live theme/density
