@@ -14,6 +14,7 @@ from haven.desktop import shell as shell_module
 from haven.desktop.shell import (
     DesktopShell,
     DesktopShellAlreadyRunning,
+    _normalize_process_exit_code,
     _read_activation_record,
     find_edge_executable,
     main,
@@ -293,6 +294,52 @@ def test_native_shell_starts_the_winui_client_with_named_pipe_credentials():
             assert not any(argument.startswith("--app=") for argument in args)
         finally:
             shell.close()
+
+
+def test_normalize_process_exit_code_folds_unsigned_crash_codes_to_signed():
+    # A crashed native process reports its raw unsigned 32-bit NTSTATUS
+    # (e.g. 0xC000027B); sys.exit() cannot carry that (it overflows a C
+    # long), and the resulting OverflowError gets swallowed into a
+    # meaningless generic code before it ever reaches the console. The
+    # signed twin is representable and matches what other hosts (e.g.
+    # .NET's Process.ExitCode) already report for the identical crash.
+    assert _normalize_process_exit_code(0xC000027B) == -1073741189
+    # An ordinary small exit code is untouched.
+    assert _normalize_process_exit_code(0) == 0
+    assert _normalize_process_exit_code(1) == 1
+    # The boundary: the largest value that still fits a signed 32-bit int
+    # unchanged, and the first value that must fold.
+    assert _normalize_process_exit_code(0x7FFFFFFF) == 0x7FFFFFFF
+    assert _normalize_process_exit_code(0x80000000) == -0x80000000
+
+
+def test_native_window_crash_reports_a_representable_exit_code_and_explains_itself(capsys):
+    with tempfile.TemporaryDirectory() as tmp:
+        native = Path(tmp) / "Haven.Desktop.exe"
+        native.write_bytes(b"test native executable placeholder")
+
+        class _CrashingProcess(_FakeProcess):
+            def wait(self, timeout=None):
+                # The raw unsigned form a real Windows crash reports.
+                self.returncode = 0xC000027B
+                return self.returncode
+
+        def launch(args, **kwargs):
+            return _CrashingProcess(args, **kwargs)
+
+        shell = DesktopShell(
+            data_dir=Path(tmp) / "data",
+            native=True,
+            native_path=native,
+            port=0,
+            process_factory=launch,
+        )
+        shell.start()
+        exit_code = shell.wait()
+        assert exit_code == -1073741189
+        error = capsys.readouterr().err
+        assert "0xC000027B" in error
+        assert "-1073741189" in error
 
 
 def test_second_background_launch_activates_the_existing_resident_window():

@@ -100,6 +100,7 @@ public sealed partial class MainWindow
                 _ = LoadRoomsAsync();
                 _ = LoadAutomationsAsync();
                 _ = LoadContextsAsync();
+                _ = LoadDiscoveryCandidatesAsync();
                 break;
             case "models":
                 _ = LoadModelsAsync();

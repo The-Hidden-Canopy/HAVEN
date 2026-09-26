@@ -162,6 +162,28 @@ def _unprotect_activation_token(value: str) -> str | None:
             kernel32.LocalFree(ctypes.cast(output_blob.pbData, ctypes.c_void_p))
 
 
+def _normalize_process_exit_code(code: int) -> int:
+    """Fold a raw Windows process exit code into the signed 32-bit range
+    `sys.exit()` can actually carry.
+
+    `subprocess.Popen.wait()`/`GetExitCodeProcess` reports a crashed
+    process's exit code as its literal unsigned 32-bit value (e.g. a
+    Windows NTSTATUS like `0xC000027B` == 3221226107). `sys.exit(code)`
+    converts `code` through a C `long`, which overflows for any value
+    above `0x7FFFFFFF` -- the resulting `OverflowError` is swallowed
+    somewhere between the interpreter and the parent process, and the
+    process this ran under sees a generic exit code (commonly `-1`)
+    instead of anything that points at the real failure. Folding the
+    value into its signed twin (matching what e.g. .NET's
+    `Process.ExitCode` already reports for the same crash) keeps it
+    representable and diagnosable.
+    """
+
+    if code > 0x7FFFFFFF:
+        return code - 0x100000000
+    return code
+
+
 def _write_activation_record(path: Path, *, port: int, token: str) -> None:
     """Publish the resident shell endpoint atomically."""
 
@@ -841,7 +863,24 @@ class DesktopShell:
         process = self.process
         profile = self._edge_profile
         try:
-            return_code = int(process.wait())
+            return_code = _normalize_process_exit_code(int(process.wait()))
+            if self.native and return_code < 0:
+                # A native crash reports its raw NTSTATUS/exception code here
+                # (e.g. -1073741189 == 0xC000027B) rather than a small, tidy
+                # number. `sys.exit()` cannot represent the *unsigned* 32-bit
+                # form some Windows APIs report (it overflows a C long and
+                # the real code never reaches the console) -- surfacing the
+                # signed, representable form plus its hex is the difference
+                # between "HAVEN exited with code -1" and a code someone can
+                # actually search for.
+                print(
+                    f"HAVEN Desktop: the native window exited abnormally "
+                    f"(code {return_code}, 0x{return_code & 0xFFFFFFFF:08X}). "
+                    "This is a native/WindowsAppSDK-level failure, not a "
+                    "HAVEN bug in the usual sense -- see the exit code above "
+                    "if you need to search for it.",
+                    file=sys.stderr,
+                )
             if profile is not None and os.name == "nt":
                 profile_path = Path(profile.name)
                 deadline = time.monotonic() + 10

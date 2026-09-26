@@ -1,6 +1,8 @@
 <ResourceDictionary
+    x:Class="Haven.Desktop.Themes.DensityComfortableDictionary"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <x:String x:Key="__ThemeSource">/Themes/DensityComfortable.xaml</x:String>
     <!-- Comfortable density (spec 40, default): the sizes every Haven* style
          in App.xaml already shipped with before the density pass. Swapped
          live by ThemeService.Apply alongside the color theme dictionary. -->

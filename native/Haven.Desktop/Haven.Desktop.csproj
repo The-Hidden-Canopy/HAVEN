@@ -15,7 +15,7 @@
     <UseRidGraph>true</UseRidGraph>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <WindowsAppSDKVersion Condition="'$(WindowsAppSDKVersion)' == ''">1.6.250205002</WindowsAppSDKVersion>
+    <WindowsAppSDKVersion Condition="'$(WindowsAppSDKVersion)' == ''">2.5.1</WindowsAppSDKVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -28,15 +28,6 @@
     </Content>
     <Content Include="..\..\haven\web\static\haven-logo-dark.png">
       <Link>Assets\haven-logo-dark.png</Link>
-    </Content>
-    <!-- Loose theme dictionaries: loaded/swap at runtime via
-         ResourceDictionary Source, so they must sit beside the exe.  They are
-         deliberately NOT compiled as Page: runtime xbf loads of freshly
-         swapped dictionaries break theme-resource resolution (the app only
-         parses the loose XAML). -->
-    <Page Remove="Themes\*.xaml" />
-    <Content Include="Themes\*.xaml">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
 </Project>

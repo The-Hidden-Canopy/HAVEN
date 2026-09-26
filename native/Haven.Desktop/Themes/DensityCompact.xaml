@@ -1,6 +1,8 @@
 <ResourceDictionary
+    x:Class="Haven.Desktop.Themes.DensityCompactDictionary"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <x:String x:Key="__ThemeSource">/Themes/DensityCompact.xaml</x:String>
     <!-- Compact density (spec 40): tighter rows for nav/lists/cards/buttons.
          Every key mirrors DensityComfortable.xaml's set - keep them in sync. -->
     <x:Double x:Key="DensityNavItemHeight">30</x:Double>

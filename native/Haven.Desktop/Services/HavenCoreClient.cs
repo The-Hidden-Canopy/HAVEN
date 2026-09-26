@@ -224,6 +224,25 @@ public sealed class HavenCoreClient : IAsyncDisposable
             new { device_id = deviceId, service, brightness_pct = brightnessPct },
             cancellationToken);
 
+    // Everyday (post-setup) discovery: real SSDP/Bluetooth transports, no
+    // demo fixtures -- distinct from ScanSetupDiscoveryAsync's one-time
+    // onboarding scan above.
+    public Task<JsonElement> ScanDiscoveryAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("discovery.scan", new { }, cancellationToken);
+
+    public Task<JsonElement> GetDiscoveryCandidatesAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("discovery.candidates", new { }, cancellationToken);
+
+    public Task<JsonElement> EnrollDiscoveryCandidateAsync(
+        string candidateId,
+        string deviceType,
+        string? room = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "discovery.enroll",
+            new { candidate_id = candidateId, device_type = deviceType, room },
+            cancellationToken);
+
     public Task<JsonElement> ApproveRequestAsync(
         string requestId,
         CancellationToken cancellationToken = default) =>

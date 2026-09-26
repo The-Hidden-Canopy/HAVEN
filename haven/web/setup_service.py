@@ -30,7 +30,8 @@ from pathlib import Path
 from typing import Callable
 
 from ..core.domain import RuleStatus
-from ..devices import CapabilityDescriptor, ControlClass, DeviceManifest
+from ..devices import DeviceManifest
+from ..discovery.capability_presets import CAPABILITY_PRESETS
 from ..discovery.enrollment import enroll_device
 from ..discovery.models import DiscoveredDevice
 from ..integrations.home_assistant.client import LiveHomeAssistantAdapter
@@ -290,33 +291,10 @@ def load_household_declarations(path: Path) -> HouseholdDeclarations:
 
 # Household members supply capabilities at enrollment time, the same way an
 # owner supplies a justification to approve a rule: a scan suggestion is not
-# a decision, so each preset is the explicit capability set for one type.
-_CAPABILITY_PRESETS: dict[str, tuple[CapabilityDescriptor, ...]] = {
-    "light": (
-        CapabilityDescriptor("power", ControlClass.LOW_RISK, writable=True, service="light.turn_off"),
-        CapabilityDescriptor("brightness", ControlClass.MEDIUM, writable=True, service="light.set_brightness"),
-    ),
-    "thermostat": (
-        CapabilityDescriptor("temperature", ControlClass.MEDIUM, writable=True, service="climate.set_temperature"),
-    ),
-    "switch": (
-        CapabilityDescriptor("power", ControlClass.LOW_RISK, writable=True, service="switch.turn_off"),
-    ),
-    "fan": (
-        CapabilityDescriptor("power", ControlClass.LOW_RISK, writable=True, service="fan.turn_off"),
-    ),
-    "cover": (
-        CapabilityDescriptor("close", ControlClass.GUARDED, writable=True, service="cover.close"),
-        CapabilityDescriptor("open", ControlClass.GUARDED, writable=True, service="cover.open"),
-    ),
-    # A camera discovered through the setup wizard's HA-state scan is
-    # observation-only: HA's camera domain doesn't expose PTZ/privacy-shutter
-    # itself (those are separate entities when they exist at all), so this
-    # preset never claims control this discovery path can't back. The richer
-    # `haven.cameras` PTZ/privacy-shutter bridge is for cameras discovered as
-    # hardware, a different discovery path from this one.
-    "camera": (CapabilityDescriptor("live_stream", ControlClass.READ, readable=True),),
-}
+# a decision. This is the same table the everyday `DiscoveryService` enrolls
+# through (`haven.discovery.capability_presets`) -- exactly one place decides
+# what capabilities a device type is allowed to claim, never a forked copy.
+_CAPABILITY_PRESETS = CAPABILITY_PRESETS
 
 
 @dataclass(frozen=True)
