@@ -29,6 +29,11 @@ public sealed partial class MainWindow
         HomeTabDevices.Visibility = tab == "devices" ? Visibility.Visible : Visibility.Collapsed;
         HomeTabAutomations.Visibility = tab == "automations" ? Visibility.Visible : Visibility.Collapsed;
         HomeTabContexts.Visibility = tab == "contexts" ? Visibility.Visible : Visibility.Collapsed;
+        HomeTabDiscover.Visibility = tab == "discover" ? Visibility.Visible : Visibility.Collapsed;
+        if (tab == "discover")
+        {
+            _ = LoadDiscoveryCandidatesAsync();
+        }
         foreach (var button in HomeTabs.Children.OfType<Button>())
         {
             button.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[

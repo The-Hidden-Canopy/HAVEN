@@ -1,6 +1,8 @@
 <ResourceDictionary
+    x:Class="Haven.Desktop.Themes.EmberDarkDictionary"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <x:String x:Key="__ThemeSource">/Themes/EmberDark.xaml</x:String>
     <!-- Ember theme, Dark appearance (spec 34-39).  Flat token set:
          ThemeService swaps one merged dictionary for another live, and the
          window root's RequestedTheme flips the framework controls. -->
