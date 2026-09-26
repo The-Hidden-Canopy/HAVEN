@@ -243,6 +243,65 @@ public sealed class HavenCoreClient : IAsyncDisposable
             new { candidate_id = candidateId, device_type = deviceType, room },
             cancellationToken);
 
+    // External Agent Gateway (Build/Ship/Shape): owner-facing connection/
+    // binding management. No MCP transport calls the gateway itself yet --
+    // this is the same CRUD surface the "External Agents" settings section
+    // manages, independent of whether any transport is wired up.
+    public Task<JsonElement> GetExternalAgentConnectionsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("external_agents.connections.list", new { }, cancellationToken);
+
+    public Task<JsonElement> CreateExternalAgentConnectionAsync(
+        string provider,
+        string displayName,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "external_agents.connections.create",
+            new { provider, display_name = displayName },
+            cancellationToken);
+
+    public Task<JsonElement> SetExternalAgentConnectionEnabledAsync(
+        string connectionId,
+        bool enabled,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "external_agents.connections.enable",
+            new { connection_id = connectionId, enabled },
+            cancellationToken);
+
+    public Task<JsonElement> RevokeExternalAgentConnectionAsync(
+        string connectionId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("external_agents.connections.revoke", new { connection_id = connectionId }, cancellationToken);
+
+    public Task<JsonElement> GetExternalAgentBindingsAsync(
+        string connectionId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("external_agents.bindings.list", new { connection_id = connectionId }, cancellationToken);
+
+    public Task<JsonElement> UpsertExternalAgentBindingAsync(
+        string connectionId,
+        string subjectKey,
+        string subjectLabel,
+        string principalId,
+        IEnumerable<string> scopes,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "external_agents.bindings.upsert",
+            new
+            {
+                connection_id = connectionId,
+                subject_key = subjectKey,
+                subject_label = subjectLabel,
+                principal_id = principalId,
+                scopes = scopes.ToArray(),
+            },
+            cancellationToken);
+
+    public Task<JsonElement> RevokeExternalAgentBindingAsync(
+        string bindingId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("external_agents.bindings.revoke", new { binding_id = bindingId }, cancellationToken);
+
     public Task<JsonElement> ApproveRequestAsync(
         string requestId,
         CancellationToken cancellationToken = default) =>

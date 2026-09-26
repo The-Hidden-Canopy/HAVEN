@@ -793,6 +793,14 @@
                                Text="Calendar, email, browser and provider accounts arrive with their milestones. Connect a home provider any time from Setup." />
                     <Button Content="Open setup" Click="OnReopenSetupClicked" HorizontalAlignment="Left" />
 
+                    <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="External Agents" />
+                    <TextBlock Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap"
+                               Text="Outside assistants (Alexa+, future MCP clients) can request work through a bounded connection; they never gain direct control. A connection starts disabled, and a subject only acts as a household person once you explicitly bind it here." />
+                    <TextBlock x:Name="ExternalAgentsErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
+                    <Button Content="Add connection" Click="OnAddExternalAgentConnectionClicked" HorizontalAlignment="Left"
+                            Style="{StaticResource HavenPrimaryButtonStyle}" />
+                    <StackPanel x:Name="ExternalAgentsList" Spacing="8" />
+
                     <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Notifications" />
                     <TextBlock Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap"
                                Text="System notifications and quiet hours are not configurable yet; nothing is sent while HAVEN is closed." />
