@@ -10,6 +10,7 @@ from pathlib import Path
 
 from haven.graph.candidates import CandidateRelationship, Correlator, candidate_id
 from haven.graph.deterministic import RelationshipProjector
+from haven.graph.model_proposer import ModelRelationshipProposer
 from haven.graph.policy import RelationshipAdmissionPolicy
 from haven.ontology.store import OntologyStore
 
@@ -23,15 +24,35 @@ class RelationshipService:
         policy: RelationshipAdmissionPolicy,
         ontology: OntologyStore,
         state_path: str | Path,
+        model_proposers: tuple[ModelRelationshipProposer, ...] = (),
     ) -> None:
         self._projector = projector
         self._correlator = correlator
         self._policy = policy
         self._ontology = ontology
         self._state_path = Path(state_path)
+        # Optional, additional candidate sources (native product-
+        # consolidation plan, P2: a model proposer feeding the same
+        # admission boundary the deterministic correlator already does).
+        # Empty by default -- every existing caller that only ever passed
+        # `correlator=` keeps behaving exactly as before.
+        self._model_proposers = model_proposers
         self._lock = threading.Lock()
         self._rejected = self._load_rejected()
         self._auto_admitted: set[str] = set()
+
+    def _fresh_candidates(
+        self, *, visible_scopes: tuple[str, ...], exclude_pairs: frozenset[str] | None = None
+    ) -> tuple[CandidateRelationship, ...]:
+        exclude = self._excluded_pairs() if exclude_pairs is None else exclude_pairs
+        merged: dict[str, CandidateRelationship] = {
+            candidate.candidate_id: candidate
+            for candidate in self._correlator.candidates(visible_scopes=visible_scopes, exclude_pairs=exclude)
+        }
+        for proposer in self._model_proposers:
+            for candidate in proposer.candidates(visible_scopes=visible_scopes, exclude_pairs=exclude):
+                merged.setdefault(candidate.candidate_id, candidate)
+        return tuple(sorted(merged.values(), key=lambda item: (-item.confidence, item.candidate_id)))
 
     def _load_rejected(self) -> set[str]:
         try:
@@ -52,9 +73,7 @@ class RelationshipService:
 
     def candidates(self, *, visible_scopes: tuple[str, ...]) -> dict:
         self._projector.project_all(visible_scopes=visible_scopes)
-        fresh = self._correlator.candidates(
-            visible_scopes=visible_scopes, exclude_pairs=self._excluded_pairs()
-        )
+        fresh = self._fresh_candidates(visible_scopes=visible_scopes)
         rows = []
         for candidate in fresh:
             if candidate.candidate_id in self._rejected:
@@ -111,9 +130,7 @@ class RelationshipService:
         if not isinstance(candidate_id_value, str) or not candidate_id_value.strip():
             return None
         wanted = candidate_id_value.strip()
-        for candidate in self._correlator.candidates(
-            visible_scopes=visible_scopes, exclude_pairs=frozenset()
-        ):
+        for candidate in self._fresh_candidates(visible_scopes=visible_scopes, exclude_pairs=frozenset()):
             if candidate.candidate_id == wanted:
                 return candidate
         return None
