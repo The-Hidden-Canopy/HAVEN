@@ -226,6 +226,9 @@ class ComputerActionService:
         )
         return {"ok": True}
 
+    def list_pending(self) -> tuple[ResourceActionRequest, ...]:
+        return tuple(self._pending.values())
+
     def history(self, *, limit: int = 50) -> dict:
         entries = self._ledger.list_by_household(self._director.household_id, limit=limit)
         return {
