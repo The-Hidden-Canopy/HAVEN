@@ -10,6 +10,7 @@ import os
 import posixpath
 import queue
 import re
+import sqlite3
 import sys
 import time
 from http.cookies import SimpleCookie
@@ -56,6 +57,9 @@ from ..external_agents import (
     ExternalAgentStore,
     ExternalDenied,
     ExternalProvider,
+    ExternalReadTools,
+    TransportBridge,
+    hash_credential,
     parse_scopes,
 )
 from ..actions import ActionLedgerStore
@@ -109,6 +113,8 @@ _CHAIN_PATH = re.compile(r"^/api/actions/([^/]+)/chain$")
 _KNOWLEDGE_CLAIM_PATH = re.compile(r"^/api/knowledge/claims/([^/]+)$")
 _KNOWLEDGE_CLAIM_ACTION_PATH = re.compile(r"^/api/knowledge/claims/([^/]+)/(correct|stale|forget)$")
 _AUTHORING_AUTOMATION_ACTION_PATH = re.compile(r"^/api/automations/([^/]+)/(approve|revoke)$")
+_EXTERNAL_AGENTS_CONNECTION_PATH = re.compile(r"^/api/external-agents/connections/([^/]+)/(enable|revoke|bindings|observed-subjects)$")
+_EXTERNAL_AGENTS_BINDING_REVOKE_PATH = re.compile(r"^/api/external-agents/bindings/([^/]+)/revoke$")
 
 # Native events pipe (product pass phase 2): mutating IPC methods publish
 # a domain invalidation on success.  Task/project/claim mutations emit
@@ -479,13 +485,30 @@ class HavenWebServer(ThreadingHTTPServer):
         # native/web "External Agents" view has something real to manage.
         self._external_agents_store = ExternalAgentStore(Path(resolved_data_dir) / "external_agents.db")
         self.external_agents = ExternalAgentService(
-            store=self._external_agents_store, household_id=self.director.household_id, clock=clock
+            store=self._external_agents_store, household_id=self.director.household_id, clock=scope_clock
         )
         self.external_agent_gateway = ExternalAgentGateway(
             store=self._external_agents_store,
             household_id=self.director.household_id,
             resolve_principal=self.director.principal_for,
-            clock=clock,
+            clock=scope_clock,
+        )
+        # WP2/WP3 read path: the admitted, scope-checked read-only tools a
+        # future MCP transport exposes. Composed here (reader = the live
+        # director) so the transport adapter stays a thin admit-and-call
+        # seam; no transport calls it yet.
+        self.external_agent_reads = ExternalReadTools(
+            gateway=self.external_agent_gateway, reader=self.director
+        )
+        # WP2/WP3 transport bridge: credential resolution + admission + tool
+        # dispatch in one place, so the native MCP host (and any future
+        # transport) is a protocol adapter only. Executor = the live
+        # director; rebound in rebuild_director.
+        self.external_agent_transport = TransportBridge(
+            store=self._external_agents_store,
+            gateway=self.external_agent_gateway,
+            reads=self.external_agent_reads,
+            executor=self.director,
         )
         # Authorization + consequence verification in front of
         # `FilesystemProvider.execute_provider()` -- independent of `self.setup`
@@ -648,6 +671,193 @@ class HavenWebServer(ThreadingHTTPServer):
             raise ValueError("desktop bootstrap token must be a non-empty string")
         with self._bootstrap_lock:
             self._bootstrap_token = token
+
+    def _external_agents_handlers(self) -> dict:
+        """Owner-facing external-agent connection/binding management handlers.
+
+        External Agent Gateway (Build/Ship/Shape): no MCP transport reaches
+        `self.external_agent_gateway` yet -- these are the CRUD surface the
+        "External Agents" view needs regardless, so it isn't blocked on the
+        transport landing first. One implementation behind two adapters:
+        `build_ipc_dispatcher` serves them over the native named pipe and
+        `_Handler`'s `/api/external-agents/*` routes call the same functions
+        for the web surface (spec page 17: native and web adapters must not
+        fork validation rules).
+        """
+
+        def _external_agent_connection_dict(connection) -> dict:
+            return {
+                "connection_id": connection.connection_id,
+                "provider": connection.provider.value,
+                "display_name": connection.display_name,
+                "enabled": connection.enabled,
+                "active": connection.active,
+                "unbound_scopes": sorted(scope.value for scope in connection.unbound_scopes),
+                "created_by": connection.created_by,
+                "created_at": connection.created_at.isoformat(),
+                "revoked_at": connection.revoked_at.isoformat() if connection.revoked_at else None,
+            }
+
+        def _external_agent_binding_dict(binding) -> dict:
+            return {
+                "binding_id": binding.binding_id,
+                "connection_id": binding.connection_id,
+                "subject_key": binding.subject_key,
+                "subject_label": binding.subject_label,
+                "principal_id": binding.principal_id,
+                "scopes": sorted(scope.value for scope in binding.scopes),
+                "created_by": binding.created_by,
+                "created_at": binding.created_at.isoformat(),
+                "expires_at": binding.expires_at.isoformat() if binding.expires_at else None,
+                "revoked_at": binding.revoked_at.isoformat() if binding.revoked_at else None,
+            }
+
+        def _require_owner_for_external_agents() -> None:
+            if not self.director.has_declared_owner:
+                raise ValueError("declare a household owner before managing external agent connections")
+
+        def _external_agents_connections_list(_params: dict) -> dict:
+            return {"ok": True, "connections": [_external_agent_connection_dict(c) for c in self.external_agents.list_connections()]}
+
+        def _external_agents_connection_create(params: dict) -> dict:
+            _require_owner_for_external_agents()
+            provider = params.get("provider")
+            display_name = params.get("display_name")
+            if not isinstance(provider, str) or not provider.strip():
+                raise ValueError("a non-empty 'provider' is required")
+            if not isinstance(display_name, str) or not display_name.strip():
+                raise ValueError("a non-empty 'display_name' is required")
+            try:
+                provider_value = ExternalProvider(provider.strip())
+            except ValueError:
+                raise ValueError(f"unknown provider: {provider!r}") from None
+            unbound_scopes = parse_scopes(params.get("unbound_scopes") or [])
+            credential = params.get("credential")
+            credential_hash = None
+            if credential is not None:
+                # Optional bearer credential for the MCP transport: only its
+                # SHA-256 is stored; the raw value never persists or echoes.
+                if not isinstance(credential, str) or not credential.strip():
+                    raise ValueError("a non-empty 'credential' is required when provided")
+                credential_hash = hash_credential(credential.strip())
+            try:
+                connection = self.external_agents.create_connection(
+                    provider=provider_value,
+                    display_name=display_name.strip(),
+                    created_by=self.director.owner.actor_id,
+                    credential_hash=credential_hash,
+                    unbound_scopes=unbound_scopes,
+                )
+            except sqlite3.IntegrityError:
+                # The connections_credential unique index: a credential can
+                # identify exactly one connection.
+                raise ValueError("credential already in use by another connection") from None
+            return {"ok": True, "connection": _external_agent_connection_dict(connection)}
+
+        def _external_agents_connection_enable(params: dict) -> dict:
+            _require_owner_for_external_agents()
+            connection_id = params.get("connection_id")
+            if not isinstance(connection_id, str) or not connection_id.strip():
+                raise ValueError("a non-empty 'connection_id' is required")
+            try:
+                connection = self.external_agents.set_connection_enabled(
+                    connection_id.strip(), bool(params.get("enabled", True)), actor=self.director.owner.actor_id
+                )
+            except ExternalDenied as exc:
+                return {"ok": False, "error": exc.message, "code": exc.code}
+            return {"ok": True, "connection": _external_agent_connection_dict(connection)}
+
+        def _external_agents_connection_revoke(params: dict) -> dict:
+            _require_owner_for_external_agents()
+            connection_id = params.get("connection_id")
+            if not isinstance(connection_id, str) or not connection_id.strip():
+                raise ValueError("a non-empty 'connection_id' is required")
+            try:
+                connection = self.external_agents.revoke_connection(
+                    connection_id.strip(), actor=self.director.owner.actor_id
+                )
+            except ExternalDenied as exc:
+                return {"ok": False, "error": exc.message, "code": exc.code}
+            return {"ok": True, "connection": _external_agent_connection_dict(connection)}
+
+        def _external_agents_bindings_list(params: dict) -> dict:
+            connection_id = params.get("connection_id")
+            if not isinstance(connection_id, str) or not connection_id.strip():
+                raise ValueError("a non-empty 'connection_id' is required")
+            bindings = self.external_agents.list_bindings(connection_id.strip())
+            return {"ok": True, "bindings": [_external_agent_binding_dict(b) for b in bindings]}
+
+        def _external_agents_binding_upsert(params: dict) -> dict:
+            _require_owner_for_external_agents()
+            connection_id = params.get("connection_id")
+            subject_key = params.get("subject_key")
+            subject_label = params.get("subject_label")
+            principal_id = params.get("principal_id")
+            if not isinstance(connection_id, str) or not connection_id.strip():
+                raise ValueError("a non-empty 'connection_id' is required")
+            if not isinstance(subject_key, str) or not subject_key.strip():
+                raise ValueError("a non-empty 'subject_key' is required")
+            if not isinstance(subject_label, str) or not subject_label.strip():
+                raise ValueError("a non-empty 'subject_label' is required")
+            if not isinstance(principal_id, str) or not principal_id.strip():
+                raise ValueError("a non-empty 'principal_id' is required")
+            if self.director.principal_for(principal_id.strip()) is None:
+                raise ValueError(f"unknown household principal: {principal_id!r}")
+            scopes = parse_scopes(params.get("scopes") or [])
+            try:
+                binding = self.external_agents.upsert_binding(
+                    connection_id=connection_id.strip(),
+                    subject_key=subject_key.strip(),
+                    subject_label=subject_label.strip(),
+                    principal_id=principal_id.strip(),
+                    scopes=scopes,
+                    created_by=self.director.owner.actor_id,
+                )
+            except ExternalDenied as exc:
+                return {"ok": False, "error": exc.message, "code": exc.code}
+            return {"ok": True, "binding": _external_agent_binding_dict(binding)}
+
+        def _external_agents_binding_revoke(params: dict) -> dict:
+            _require_owner_for_external_agents()
+            binding_id = params.get("binding_id")
+            if not isinstance(binding_id, str) or not binding_id.strip():
+                raise ValueError("a non-empty 'binding_id' is required")
+            try:
+                binding = self.external_agents.revoke_binding(binding_id.strip(), actor=self.director.owner.actor_id)
+            except ExternalDenied as exc:
+                return {"ok": False, "error": exc.message, "code": exc.code}
+            return {"ok": True, "binding": _external_agent_binding_dict(binding)}
+
+        def _external_agents_observed_subjects(params: dict) -> dict:
+            connection_id = params.get("connection_id")
+            if not isinstance(connection_id, str) or not connection_id.strip():
+                raise ValueError("a non-empty 'connection_id' is required")
+            return {"ok": True, "subjects": list(self.external_agents.observed_subjects(connection_id.strip()))}
+
+        def _external_agents_audit(params: dict) -> dict:
+            connection_id = params.get("connection_id")
+            limit = params.get("limit")
+            return {
+                "ok": True,
+                "audit": list(
+                    self.external_agents.audit(
+                        connection_id=connection_id if isinstance(connection_id, str) and connection_id.strip() else None,
+                        limit=limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else 50,
+                    )
+                ),
+            }
+
+        return {
+            "external_agents.connections.list": _external_agents_connections_list,
+            "external_agents.connections.create": _external_agents_connection_create,
+            "external_agents.connections.enable": _external_agents_connection_enable,
+            "external_agents.connections.revoke": _external_agents_connection_revoke,
+            "external_agents.bindings.list": _external_agents_bindings_list,
+            "external_agents.bindings.upsert": _external_agents_binding_upsert,
+            "external_agents.bindings.revoke": _external_agents_binding_revoke,
+            "external_agents.observed_subjects": _external_agents_observed_subjects,
+            "external_agents.audit": _external_agents_audit,
+        }
 
     def build_ipc_dispatcher(self) -> IpcDispatcher:
         """Build the native-client adapter over existing governed services.
@@ -1855,157 +2065,41 @@ class HavenWebServer(ThreadingHTTPServer):
                 provider_id=params.get("provider_id"), enabled=bool(params.get("enabled", True))
             )
 
-        # External Agent Gateway (Build/Ship/Shape): owner-facing connection/
-        # binding management. No MCP transport reaches `self.external_agent_gateway`
-        # yet -- these are the CRUD surface WP6's "External Agents" view needs
-        # regardless, so it isn't blocked on the transport landing first.
-        def _external_agent_connection_dict(connection) -> dict:
-            return {
-                "connection_id": connection.connection_id,
-                "provider": connection.provider.value,
-                "display_name": connection.display_name,
-                "enabled": connection.enabled,
-                "active": connection.active,
-                "unbound_scopes": sorted(scope.value for scope in connection.unbound_scopes),
-                "created_by": connection.created_by,
-                "created_at": connection.created_at.isoformat(),
-                "revoked_at": connection.revoked_at.isoformat() if connection.revoked_at else None,
-            }
-
-        def _external_agent_binding_dict(binding) -> dict:
-            return {
-                "binding_id": binding.binding_id,
-                "connection_id": binding.connection_id,
-                "subject_key": binding.subject_key,
-                "subject_label": binding.subject_label,
-                "principal_id": binding.principal_id,
-                "scopes": sorted(scope.value for scope in binding.scopes),
-                "created_by": binding.created_by,
-                "created_at": binding.created_at.isoformat(),
-                "expires_at": binding.expires_at.isoformat() if binding.expires_at else None,
-                "revoked_at": binding.revoked_at.isoformat() if binding.revoked_at else None,
-            }
-
-        def _require_owner_for_external_agents() -> None:
-            if not self.director.has_declared_owner:
-                raise ValueError("declare a household owner before managing external agent connections")
-
-        def _external_agents_connections_list(_params: dict) -> dict:
-            return {"ok": True, "connections": [_external_agent_connection_dict(c) for c in self.external_agents.list_connections()]}
-
-        def _external_agents_connection_create(params: dict) -> dict:
-            _require_owner_for_external_agents()
-            provider = params.get("provider")
-            display_name = params.get("display_name")
-            if not isinstance(provider, str) or not provider.strip():
-                raise ValueError("a non-empty 'provider' is required")
-            if not isinstance(display_name, str) or not display_name.strip():
-                raise ValueError("a non-empty 'display_name' is required")
+        # External Agent transport entry point (Build/Ship/Shape WP2/WP3):
+        # the one method a transport adapter (the native MCP host in
+        # Haven.Desktop, any future transport) calls per tool invocation.
+        # Deliberately NOT part of `_external_agents_handlers()` -- that set
+        # is the owner-facing management surface shared with the web REST
+        # twin, and a local web session must never drive the external
+        # gateway as an external connection.
+        def _external_agents_tools_call(params: dict) -> dict:
             try:
-                provider_value = ExternalProvider(provider.strip())
-            except ValueError:
-                raise ValueError(f"unknown provider: {provider!r}") from None
-            unbound_scopes = parse_scopes(params.get("unbound_scopes") or [])
-            connection = self.external_agents.create_connection(
-                provider=provider_value,
-                display_name=display_name.strip(),
-                created_by=self.director.owner.actor_id,
-                unbound_scopes=unbound_scopes,
-            )
-            return {"ok": True, "connection": _external_agent_connection_dict(connection)}
-
-        def _external_agents_connection_enable(params: dict) -> dict:
-            _require_owner_for_external_agents()
-            connection_id = params.get("connection_id")
-            if not isinstance(connection_id, str) or not connection_id.strip():
-                raise ValueError("a non-empty 'connection_id' is required")
-            try:
-                connection = self.external_agents.set_connection_enabled(
-                    connection_id.strip(), bool(params.get("enabled", True)), actor=self.director.owner.actor_id
+                result = self.external_agent_transport.call_tool(
+                    credential=params.get("credential"),
+                    tool=params.get("tool"),
+                    external_request_id=params.get("external_request_id"),
+                    arguments=params.get("arguments") if isinstance(params.get("arguments"), dict) else None,
+                    subject=params.get("subject") if isinstance(params.get("subject"), str) else None,
+                    subject_label=(
+                        params.get("subject_label") if isinstance(params.get("subject_label"), str) else None
+                    ),
+                    protocol_session_id=(
+                        params.get("protocol_session_id") if isinstance(params.get("protocol_session_id"), str) else None
+                    ),
+                    client_metadata=(
+                        params.get("client_metadata") if isinstance(params.get("client_metadata"), dict) else None
+                    ),
                 )
             except ExternalDenied as exc:
                 return {"ok": False, "error": exc.message, "code": exc.code}
-            return {"ok": True, "connection": _external_agent_connection_dict(connection)}
-
-        def _external_agents_connection_revoke(params: dict) -> dict:
-            _require_owner_for_external_agents()
-            connection_id = params.get("connection_id")
-            if not isinstance(connection_id, str) or not connection_id.strip():
-                raise ValueError("a non-empty 'connection_id' is required")
-            try:
-                connection = self.external_agents.revoke_connection(
-                    connection_id.strip(), actor=self.director.owner.actor_id
-                )
-            except ExternalDenied as exc:
-                return {"ok": False, "error": exc.message, "code": exc.code}
-            return {"ok": True, "connection": _external_agent_connection_dict(connection)}
-
-        def _external_agents_bindings_list(params: dict) -> dict:
-            connection_id = params.get("connection_id")
-            if not isinstance(connection_id, str) or not connection_id.strip():
-                raise ValueError("a non-empty 'connection_id' is required")
-            bindings = self.external_agents.list_bindings(connection_id.strip())
-            return {"ok": True, "bindings": [_external_agent_binding_dict(b) for b in bindings]}
-
-        def _external_agents_binding_upsert(params: dict) -> dict:
-            _require_owner_for_external_agents()
-            connection_id = params.get("connection_id")
-            subject_key = params.get("subject_key")
-            subject_label = params.get("subject_label")
-            principal_id = params.get("principal_id")
-            if not isinstance(connection_id, str) or not connection_id.strip():
-                raise ValueError("a non-empty 'connection_id' is required")
-            if not isinstance(subject_key, str) or not subject_key.strip():
-                raise ValueError("a non-empty 'subject_key' is required")
-            if not isinstance(subject_label, str) or not subject_label.strip():
-                raise ValueError("a non-empty 'subject_label' is required")
-            if not isinstance(principal_id, str) or not principal_id.strip():
-                raise ValueError("a non-empty 'principal_id' is required")
-            if self.director.principal_for(principal_id.strip()) is None:
-                raise ValueError(f"unknown household principal: {principal_id!r}")
-            scopes = parse_scopes(params.get("scopes") or [])
-            try:
-                binding = self.external_agents.upsert_binding(
-                    connection_id=connection_id.strip(),
-                    subject_key=subject_key.strip(),
-                    subject_label=subject_label.strip(),
-                    principal_id=principal_id.strip(),
-                    scopes=scopes,
-                    created_by=self.director.owner.actor_id,
-                )
-            except ExternalDenied as exc:
-                return {"ok": False, "error": exc.message, "code": exc.code}
-            return {"ok": True, "binding": _external_agent_binding_dict(binding)}
-
-        def _external_agents_binding_revoke(params: dict) -> dict:
-            _require_owner_for_external_agents()
-            binding_id = params.get("binding_id")
-            if not isinstance(binding_id, str) or not binding_id.strip():
-                raise ValueError("a non-empty 'binding_id' is required")
-            try:
-                binding = self.external_agents.revoke_binding(binding_id.strip(), actor=self.director.owner.actor_id)
-            except ExternalDenied as exc:
-                return {"ok": False, "error": exc.message, "code": exc.code}
-            return {"ok": True, "binding": _external_agent_binding_dict(binding)}
-
-        def _external_agents_observed_subjects(params: dict) -> dict:
-            connection_id = params.get("connection_id")
-            if not isinstance(connection_id, str) or not connection_id.strip():
-                raise ValueError("a non-empty 'connection_id' is required")
-            return {"ok": True, "subjects": list(self.external_agents.observed_subjects(connection_id.strip()))}
-
-        def _external_agents_audit(params: dict) -> dict:
-            connection_id = params.get("connection_id")
-            limit = params.get("limit")
-            return {
-                "ok": True,
-                "audit": list(
-                    self.external_agents.audit(
-                        connection_id=connection_id if isinstance(connection_id, str) and connection_id.strip() else None,
-                        limit=limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else 50,
-                    )
-                ),
-            }
+            # Action tools mutate through the same authority path as
+            # devices.command: on success, invalidate the domains native
+            # views watch (reads never emit, failures never emit).
+            tool = params.get("tool")
+            if isinstance(tool, str) and tool.startswith("haven.action.") and result.get("ok"):
+                self._emit_event("home.state.changed")
+                self._emit_event("authority.pending.changed")
+            return result
 
         handlers = {
                 "host.capabilities": lambda _params: {
@@ -2022,15 +2116,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 "discovery.scan": lambda _params: self.discovery.scan(),
                 "discovery.candidates": lambda _params: self.discovery.candidates(),
                 "discovery.enroll": _discovery_enroll,
-                "external_agents.connections.list": _external_agents_connections_list,
-                "external_agents.connections.create": _external_agents_connection_create,
-                "external_agents.connections.enable": _external_agents_connection_enable,
-                "external_agents.connections.revoke": _external_agents_connection_revoke,
-                "external_agents.bindings.list": _external_agents_bindings_list,
-                "external_agents.bindings.upsert": _external_agents_binding_upsert,
-                "external_agents.bindings.revoke": _external_agents_binding_revoke,
-                "external_agents.observed_subjects": _external_agents_observed_subjects,
-                "external_agents.audit": _external_agents_audit,
+                "external_agents.tools.call": _external_agents_tools_call,
                 "setup.household.people.add": _setup_household_people_add,
                 "setup.household.people.remove": lambda params: self.setup.remove_person(
                     person_id=params.get("person_id")
@@ -2185,6 +2271,11 @@ class HavenWebServer(ThreadingHTTPServer):
                 "email.maildir.set": _email_maildir_set,
             }
 
+        # External-agent management handlers are shared verbatim with the web
+        # surface (`/api/external-agents/*`) -- one validation implementation
+        # behind both adapters (spec page 17: adapters never fork validation).
+        handlers.update(self._external_agents_handlers())
+
         def _with_event(event_name: str, handler):
             def _wrapped(params: dict):
                 # Emit only on success: exceptions propagate to the dispatcher
@@ -2262,14 +2353,24 @@ class HavenWebServer(ThreadingHTTPServer):
         # reading the old (now moved-away) location.
         self.scope_store = ScopeStore(data_dir / "scopes.db")
         self._external_agents_store = ExternalAgentStore(data_dir / "external_agents.db")
+        rebuild_clock = self._director_clock or (lambda: datetime.now(timezone.utc))
         self.external_agents = ExternalAgentService(
-            store=self._external_agents_store, household_id=new.household_id, clock=self._director_clock
+            store=self._external_agents_store, household_id=new.household_id, clock=rebuild_clock
         )
         self.external_agent_gateway = ExternalAgentGateway(
             store=self._external_agents_store,
             household_id=new.household_id,
             resolve_principal=new.principal_for,
-            clock=self._director_clock,
+            clock=rebuild_clock,
+        )
+        self.external_agent_reads = ExternalReadTools(
+            gateway=self.external_agent_gateway, reader=new
+        )
+        self.external_agent_transport = TransportBridge(
+            store=self._external_agents_store,
+            gateway=self.external_agent_gateway,
+            reads=self.external_agent_reads,
+            executor=new,
         )
         self.identity = LocalIdentityProvider(
             path=data_dir / "identity.json",
@@ -2540,6 +2641,19 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "automations": self.director.state()["automations"]})
         elif path == "/api/automations/options":
             self._send_json(200, {"ok": True, "options": self.director.automation_options()})
+        elif path == "/api/external-agents/connections":
+            self._call_external_agents("external_agents.connections.list", {})
+        elif path == "/api/external-agents/audit":
+            self._handle_external_agents_audit()
+        elif _EXTERNAL_AGENTS_CONNECTION_PATH.match(path):
+            match = _EXTERNAL_AGENTS_CONNECTION_PATH.match(path)
+            connection_id, action = unquote(match.group(1)), match.group(2)
+            if action == "bindings":
+                self._call_external_agents("external_agents.bindings.list", {"connection_id": connection_id})
+            elif action == "observed-subjects":
+                self._call_external_agents("external_agents.observed_subjects", {"connection_id": connection_id})
+            else:
+                self._send_json(404, {"error": "not found"})
         else:
             match = _KNOWLEDGE_CLAIM_PATH.match(path)
             if match:
@@ -2713,6 +2827,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path.startswith("/api/knowledge/claims/"):
             self._handle_knowledge_post(path)
+            return
+        if path.startswith("/api/external-agents/"):
+            self._handle_external_agents_post(path)
             return
         if path == "/api/system/diagnostics/probe":
             result = self.diagnostics.probe_provider()
@@ -3050,6 +3167,72 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "not found"})
             return
         self._send_setup_result(result)
+
+    def _call_external_agents(self, method: str, params: dict, *, event: str | None = None) -> None:
+        """Run one shared external-agents handler and shape the HTTP result.
+
+        The handlers are the exact functions the IPC dispatcher serves (see
+        `HavenWebServer._external_agents_handlers`): this adapter adds only
+        HTTP status mapping (200 on success, 400 on a business/validation
+        failure) and the `external_agents.changed` invalidation native
+        clients expect after a web-originated mutation (the IPC side emits
+        the same event via `_IPC_METHOD_EVENTS`).
+        """
+
+        try:
+            result = self.server._external_agents_handlers()[method](params)  # noqa: SLF001
+        except ValueError as exc:
+            self._send_json(400, {"ok": False, "error": str(exc)})
+            return
+        if result.get("ok") and event is not None:
+            self.server._emit_event(event)  # noqa: SLF001
+        self._send_json(200 if result.get("ok") else 400, result)
+
+    def _handle_external_agents_audit(self) -> None:
+        query = parse_qs(urlsplit(self.path).query)
+        params: dict = {}
+        connection_id = query.get("connection_id", [""])[0].strip()
+        if connection_id:
+            params["connection_id"] = connection_id
+        raw_limit = query.get("limit", [""])[0].strip()
+        if raw_limit:
+            try:
+                params["limit"] = int(raw_limit)
+            except ValueError:
+                self._send_json(400, {"ok": False, "error": "limit must be a positive integer"})
+                return
+        self._call_external_agents("external_agents.audit", params)
+
+    def _handle_external_agents_post(self, path: str) -> None:
+        body = self._read_json(optional=True)
+        if body is None:
+            return
+        method = None
+        params = dict(body)
+        event = "external_agents.changed"
+        if path == "/api/external-agents/connections":
+            method = "external_agents.connections.create"
+        else:
+            match = _EXTERNAL_AGENTS_CONNECTION_PATH.match(path)
+            if match is not None:
+                connection_id, action = unquote(match.group(1)), match.group(2)
+                if action == "enable":
+                    method = "external_agents.connections.enable"
+                elif action == "revoke":
+                    method = "external_agents.connections.revoke"
+                elif action == "bindings":
+                    method = "external_agents.bindings.upsert"
+                if method is not None:
+                    params["connection_id"] = connection_id
+            else:
+                match = _EXTERNAL_AGENTS_BINDING_REVOKE_PATH.match(path)
+                if match is not None:
+                    method = "external_agents.bindings.revoke"
+                    params["binding_id"] = unquote(match.group(1))
+        if method is None:
+            self._send_json(404, {"error": "not found"})
+            return
+        self._call_external_agents(method, params, event=event)
 
     def _handle_setup_post(self, path: str) -> None:
         setup = self.server.setup

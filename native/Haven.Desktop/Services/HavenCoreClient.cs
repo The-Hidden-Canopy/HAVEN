@@ -253,10 +253,38 @@ public sealed class HavenCoreClient : IAsyncDisposable
     public Task<JsonElement> CreateExternalAgentConnectionAsync(
         string provider,
         string displayName,
+        string? credential = null,
         CancellationToken cancellationToken = default) =>
         RequestResultAsync(
             "external_agents.connections.create",
-            new { provider, display_name = displayName },
+            new { provider, display_name = displayName, credential },
+            cancellationToken);
+
+    // The MCP host's single entry point (WP2/WP3): one call carries the
+    // presented credential, the tool, and its arguments; the core resolves,
+    // admits, and dispatches. A refusal arrives as an ok:false *result*
+    // (never an envelope failure), so this returns it rather than throwing.
+    public Task<JsonElement> CallExternalAgentToolAsync(
+        string credential,
+        string tool,
+        string externalRequestId,
+        string? subject = null,
+        string? subjectLabel = null,
+        string? protocolSessionId = null,
+        object? arguments = null,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "external_agents.tools.call",
+            new
+            {
+                credential,
+                tool,
+                external_request_id = externalRequestId,
+                subject,
+                subject_label = subjectLabel,
+                protocol_session_id = protocolSessionId,
+                arguments,
+            },
             cancellationToken);
 
     public Task<JsonElement> SetExternalAgentConnectionEnabledAsync(

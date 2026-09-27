@@ -326,3 +326,124 @@ def test_service_scopes_a_connection_from_another_household_as_unknown(store):
     with pytest.raises(ExternalDenied) as exc:
         service.set_connection_enabled("extconn-1", True, actor="owner-1")
     assert exc.value.code == CONNECTION_UNKNOWN
+
+
+# -- request_action/confirm_pending/deny_pending: gateway-level scope enforcement ---
+
+
+class _StubExecutor:
+    """Records what it was called with; never touches real HAVEN state.
+
+    Stands in for `HavenApplication.request_action_as`/`confirm_pending_as`/
+    `deny_pending_as` (see `ActionExecutor` Protocol) so these tests exercise
+    only the gateway's own scope check, not the authority engine -- that
+    path has its own coverage in test_external_agent_actions.py.
+    """
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    def request_action_as(self, principal, device_id, service, parameters=None, *, external_connection_id=None, external_source=None):
+        self.calls.append(("request_action_as", principal, device_id, service, external_connection_id, external_source))
+        return {"ok": True, "status": "executed"}
+
+    def confirm_pending_as(self, principal, request_id, *, external_source=None):
+        self.calls.append(("confirm_pending_as", principal, request_id, external_source))
+        return {"ok": True, "status": "confirmed"}
+
+    def deny_pending_as(self, principal, request_id):
+        self.calls.append(("deny_pending_as", principal, request_id))
+        return {"ok": True, "status": "denied"}
+
+
+def _admitted_with_scopes(store, scopes: frozenset[ExternalScope]):
+    from haven.external_agents.domain import AdmittedRequest, ExternalProvenance
+
+    # `scopes` here stands in for whatever admit() actually resolved (e.g. a
+    # bound principal's own scopes, which carry no read-only restriction --
+    # unlike `unbound_scopes`, which is deliberately capped at construction).
+    connection = _connection(store)
+    principal = anonymous_external_principal(connection)
+    provenance = ExternalProvenance(
+        provider=connection.provider,
+        connection_id=connection.connection_id,
+        external_request_id="req-1",
+        correlation_id="corr-1",
+        tool="haven.action.request",
+        received_at=NOW,
+    )
+    return AdmittedRequest(connection=connection, principal=principal, scopes=scopes, provenance=provenance)
+
+
+def test_request_action_calls_the_executor_with_the_admitted_principal_and_provenance(store):
+    gateway = _gateway(store)
+    admitted = _admitted_with_scopes(store, frozenset({ExternalScope.ACTIONS_REQUEST}))
+    executor = _StubExecutor()
+
+    result = gateway.request_action(admitted, executor, "office_light", "light.turn_off")
+
+    assert result == {"ok": True, "status": "executed"}
+    (kind, principal, device_id, service, connection_id, external_source) = executor.calls[0]
+    assert principal == admitted.principal
+    assert device_id == "office_light"
+    assert service == "light.turn_off"
+    assert connection_id == admitted.connection.connection_id
+    assert external_source == admitted.provenance.receipt_block()
+
+
+def test_request_action_without_actions_request_scope_never_reaches_the_executor(store):
+    gateway = _gateway(store)
+    admitted = _admitted_with_scopes(store, frozenset({ExternalScope.WORLD_READ}))
+    executor = _StubExecutor()
+
+    with pytest.raises(ExternalDenied) as exc:
+        gateway.request_action(admitted, executor, "office_light", "light.turn_off")
+
+    assert exc.value.code == SCOPE_MISSING
+    assert executor.calls == []
+
+
+def test_confirm_pending_calls_the_executor_when_scoped(store):
+    gateway = _gateway(store)
+    admitted = _admitted_with_scopes(store, frozenset({ExternalScope.ACTIONS_REQUEST}))
+    executor = _StubExecutor()
+
+    result = gateway.confirm_pending(admitted, executor, "req-1")
+
+    assert result == {"ok": True, "status": "confirmed"}
+    assert executor.calls[0][:3] == ("confirm_pending_as", admitted.principal, "req-1")
+
+
+def test_confirm_pending_without_scope_never_reaches_the_executor(store):
+    gateway = _gateway(store)
+    admitted = _admitted_with_scopes(store, frozenset())
+    executor = _StubExecutor()
+
+    with pytest.raises(ExternalDenied) as exc:
+        gateway.confirm_pending(admitted, executor, "req-1")
+
+    assert exc.value.code == SCOPE_MISSING
+    assert executor.calls == []
+
+
+def test_deny_pending_calls_the_executor_when_scoped(store):
+    gateway = _gateway(store)
+    admitted = _admitted_with_scopes(store, frozenset({ExternalScope.ACTIONS_REQUEST}))
+    executor = _StubExecutor()
+
+    result = gateway.deny_pending(admitted, executor, "req-1")
+
+    assert result == {"ok": True, "status": "denied"}
+    assert executor.calls[0] == ("deny_pending_as", admitted.principal, "req-1")
+
+
+def test_deny_pending_without_scope_never_reaches_the_executor(store):
+    gateway = _gateway(store)
+    admitted = _admitted_with_scopes(store, frozenset())
+    executor = _StubExecutor()
+
+    with pytest.raises(ExternalDenied) as exc:
+        gateway.deny_pending(admitted, executor, "req-1")
+
+    assert exc.value.code == SCOPE_MISSING
+    assert executor.calls == []

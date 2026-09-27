@@ -109,6 +109,7 @@ public sealed partial class MainWindow
                 SettingsStatusText.Text = "Loading…";
                 _ = LoadSettingsAsync();
                 _ = LoadExternalAgentsAsync();
+                RefreshMcpEndpointControls();
                 break;
         }
     }

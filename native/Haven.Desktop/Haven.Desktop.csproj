@@ -20,6 +20,14 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(WindowsAppSDKVersion)" />
+    <!-- Build/Ship/Shape WP2: the native-hosted MCP endpoint (spec section 9.1
+         prefers a maintained SDK over hand-rolled JSON-RPC). -->
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Kestrel hosts the local-only MCP loopback endpoint inside this process. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
   <ItemGroup>
