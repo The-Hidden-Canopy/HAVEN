@@ -26,11 +26,51 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping, Protocol
 
+from ..core.consequence import ConsequenceClass
+
 
 def _require_text(value: str, *, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
     return value.strip()
+
+
+@dataclass(frozen=True)
+class ProviderOperationalProfile:
+    """Operational capability metadata (native product-consolidation plan,
+    P1 §5.2) -- lets a generic Settings provider card render truthfully
+    (what this can see, what it can touch, how it behaves offline) without
+    Settings hardcoding per-provider knowledge. Every field defaults to the
+    most conservative/honest value, so a provider written before this
+    profile existed needs no change and never overclaims a capability it
+    never declared.
+    """
+
+    discovery: bool = False
+    observation: bool = False
+    read: bool = False
+    mutation: bool = False
+    webhook_push: bool = False
+    required_credential_scopes: tuple[str, ...] = ()
+    destructive_action_classes: tuple[ConsequenceClass, ...] = ()
+    offline_behavior: str | None = None
+    refresh_strategy: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "required_credential_scopes",
+            tuple(_require_text(scope, name="credential scope") for scope in self.required_credential_scopes),
+        )
+        classes = tuple(self.destructive_action_classes)
+        for item in classes:
+            if not isinstance(item, ConsequenceClass):
+                raise ValueError("destructive_action_classes must contain ConsequenceClass values")
+        object.__setattr__(self, "destructive_action_classes", classes)
+        if self.offline_behavior is not None:
+            object.__setattr__(self, "offline_behavior", _require_text(self.offline_behavior, name="offline_behavior"))
+        if self.refresh_strategy is not None:
+            object.__setattr__(self, "refresh_strategy", _require_text(self.refresh_strategy, name="refresh_strategy"))
 
 
 @dataclass(frozen=True)
@@ -68,6 +108,7 @@ class ProviderManifest:
     version: str = "0.0.0"
     homepage: str | None = None
     config_fields: tuple[ProviderConfigField, ...] = field(default_factory=tuple)
+    operational: ProviderOperationalProfile = field(default_factory=ProviderOperationalProfile)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "provider_id", _require_text(self.provider_id, name="provider_id"))
@@ -79,6 +120,8 @@ class ProviderManifest:
         object.__setattr__(self, "description", _require_text(self.description, name="description"))
         object.__setattr__(self, "permissions", tuple(self.permissions))
         object.__setattr__(self, "config_fields", tuple(self.config_fields))
+        if not isinstance(self.operational, ProviderOperationalProfile):
+            raise ValueError("operational must be a ProviderOperationalProfile")
 
 
 class HavenProviderPlugin(Protocol):
@@ -96,4 +139,4 @@ class HavenProviderPlugin(Protocol):
         """Construct the real provider instance a household just approved."""
 
 
-__all__ = ["HavenProviderPlugin", "ProviderConfigField", "ProviderManifest"]
+__all__ = ["HavenProviderPlugin", "ProviderConfigField", "ProviderManifest", "ProviderOperationalProfile"]

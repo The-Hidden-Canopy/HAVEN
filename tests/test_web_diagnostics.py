@@ -275,7 +275,7 @@ def test_backup_lifecycle_create_list_restore_delete() -> None:
                 "haven.json",
                 "household.json",
                 "enrolled_devices.json",
-                "ha_token.txt",
+                "credentials.db",  # ha_token.txt is migrated into this on first boot that reads it
                 "history.db",
                 "resources.db",
                 "ontology.db",

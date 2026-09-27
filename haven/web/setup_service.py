@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..core.domain import RuleStatus
+from ..credentials import CredentialKind, CredentialStore, UnknownCredentialError
 from ..devices import DeviceManifest
 from ..discovery.capability_presets import CAPABILITY_PRESETS
 from ..discovery.enrollment import enroll_device
@@ -74,6 +75,17 @@ def _provider_manifest_to_dict(manifest: ProviderManifest) -> dict:
             {"name": f.name, "label": f.label, "required": f.required, "secret": f.secret}
             for f in manifest.config_fields
         ],
+        "operational": {
+            "discovery": manifest.operational.discovery,
+            "observation": manifest.operational.observation,
+            "read": manifest.operational.read,
+            "mutation": manifest.operational.mutation,
+            "webhook_push": manifest.operational.webhook_push,
+            "required_credential_scopes": list(manifest.operational.required_credential_scopes),
+            "destructive_action_classes": [c.value for c in manifest.operational.destructive_action_classes],
+            "offline_behavior": manifest.operational.offline_behavior,
+            "refresh_strategy": manifest.operational.refresh_strategy,
+        },
     }
 
 _ENROLL_JUSTIFICATION = "enrolled from the setup wizard discovery scan"
@@ -703,11 +715,16 @@ class SetupService:
     ) -> dict:
         if skip:
             # Disconnecting must not leave the credential behind: a stale
-            # `ha_token.txt` on disk after the household said "forget this
-            # connection" is a real privacy leftover, not a harmless orphan
-            # file, even though nothing in HAVEN would read it once
-            # `provider_token_file` is cleared.
-            if self._config.provider_token_file:
+            # secret on disk after the household said "forget this
+            # connection" is a real privacy leftover, not a harmless orphan,
+            # even though nothing in HAVEN would read it once the config no
+            # longer references it.
+            if self._config.provider_credential_id:
+                try:
+                    self._credentials().revoke(self._config.provider_credential_id)
+                except UnknownCredentialError:
+                    pass
+            if self._config.provider_token_file:  # legacy sidecar, pre-migration
                 try:
                     (self._config_dir() / self._config.provider_token_file).unlink()
                 except OSError:
@@ -717,6 +734,7 @@ class SetupService:
                 provider_kind=None,
                 provider_base_url=None,
                 provider_token_file=None,
+                provider_credential_id=None,
             )
             error = self._save()
             if error is not None:
@@ -736,24 +754,32 @@ class SetupService:
             # Adapter errors carry URLs and reasons, never the token; keep it
             # that way rather than stringifying the request.
             return {"ok": False, "error": f"could not reach the Home Assistant provider: {exc}"}
+        # The secret lives DPAPI-encrypted in the credential store, not as a
+        # plaintext sidecar (native product-consolidation plan, P1
+        # "Credentials"). `rotate` when re-connecting the same provider kind
+        # keeps a stable credential_id rather than minting a new row per
+        # reconnect.
+        credential_id = self._config.provider_credential_id or f"provider:{kind}"
         try:
-            config_dir = self._config_dir()
-            config_dir.mkdir(parents=True, exist_ok=True)
-            token_path = config_dir / _TOKEN_FILENAME
-            token_path.write_text(token, encoding="utf-8")
-            try:
-                os.chmod(token_path, 0o600)
-            except OSError:
-                # Advisory even on POSIX and meaningless on Windows, where the
-                # bits exist but no permission boundary honors them.
-                pass
+            credentials = self._credentials()
+            if self._config.provider_credential_id:
+                credentials.rotate(credential_id, new_secret=token)
+            else:
+                credentials.create(
+                    credential_id=credential_id,
+                    provider=kind,
+                    account_label=base_url.strip().rstrip("/"),
+                    kind=CredentialKind.USER,
+                    secret=token,
+                )
         except OSError as exc:
             return {"ok": False, "error": f"could not persist the provider token: {exc}"}
         self._config = replace(
             self._config,
             provider_kind="home_assistant",
             provider_base_url=base_url.strip().rstrip("/"),
-            provider_token_file=_TOKEN_FILENAME,
+            provider_token_file=None,
+            provider_credential_id=credential_id,
         )
         error = self._save()
         if error is not None:
@@ -1408,6 +1434,14 @@ class SetupService:
 
     def _config_dir(self) -> Path:
         return self._store.path.parent
+
+    def _credentials(self) -> CredentialStore:
+        # Constructed fresh per call, the same idiom `_read_provider_token`
+        # and every other SQLite-backed store in this repo use: cheap
+        # (schema-ensure only), and a data-dir move always resolves against
+        # the *current* `_config_dir()` rather than a path cached at
+        # SetupService construction time.
+        return CredentialStore(self._config_dir() / "credentials.db")
 
     def _load_config(self) -> SetupConfig:
         try:

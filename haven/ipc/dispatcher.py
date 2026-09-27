@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from ..core import correlation
 from .protocol import IpcProtocolError, response_message
 
 Handler = Callable[[Mapping[str, Any]], Any]
@@ -39,7 +40,15 @@ class IpcDispatcher:
         if handler is None:
             return response_message(request_id, ok=False, error=f"unknown IPC method: {method}")
         try:
-            result = handler(dict(params))
+            # The wire's own request_id doubles as the correlation id: it is
+            # already unique per call and already crosses the native
+            # boundary, so nothing new has to be invented or threaded in from
+            # outside. Anything downstream (a ledger entry, a log line) that
+            # wants to know "which request caused this" reads
+            # `haven.core.correlation.current()` rather than taking a new
+            # parameter.
+            with correlation.bind(request_id):
+                result = handler(dict(params))
         except (ValueError, KeyError, TypeError) as exc:
             # Input failures are safe to explain to the client.  Unexpected
             # exceptions are handled by the transport with a generic error so

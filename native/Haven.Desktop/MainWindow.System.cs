@@ -383,6 +383,49 @@ public sealed partial class MainWindow
         }
     }
 
+    /// <summary>Diagnostic export (native product-consolidation plan, P0
+    /// "Runtime"): saves the same support-safe bundle `system.diagnostics.export`
+    /// returns to a JSON file the user chooses -- never secrets, since the
+    /// server-side export never includes any.</summary>
+    private async void OnExportDiagnosticsClicked(object sender, RoutedEventArgs args)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.ExportDiagnosticsAsync();
+            if (result.ValueKind == JsonValueKind.Object
+                && result.TryGetProperty("ok", out var exportOk)
+                && !exportOk.GetBoolean())
+            {
+                SettingsErrorText.Text = result.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+                    ? error.GetString() ?? "Diagnostic export failed."
+                    : "Diagnostic export failed.";
+                return;
+            }
+
+            var picker = new Windows.Storage.Pickers.FileSavePicker();
+            picker.FileTypeChoices.Add("JSON diagnostic export", new List<string> { ".json" });
+            picker.SuggestedFileName = $"haven-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}";
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            var file = await picker.PickSaveFileAsync();
+            if (file is null)
+            {
+                return;
+            }
+            var json = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
+            await Windows.Storage.FileIO.WriteTextAsync(file, json);
+            SettingsErrorText.Text = "";
+            SettingsStatusText.Text = $"Diagnostics exported to {file.Path}.";
+        }
+        catch (Exception ex)
+        {
+            SettingsErrorText.Text = ex.Message;
+        }
+    }
+
     private async Task RestoreBackupAsync(string backupId)
     {
         if (_client is null)

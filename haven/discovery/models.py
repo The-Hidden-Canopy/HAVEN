@@ -26,6 +26,14 @@ class DiscoveredDevice:
     transport with no such concept); it is informational only here, though
     a caller MAY fold it into a `PresenceState.confidence` if it is later
     used as a perception source, not a control source.
+
+    `source_ip` is the LAN address a transport observed the response
+    arriving from (SSDP, mDNS) -- `None` for a transport with no IP concept
+    (Bluetooth). It is evidence a correlation layer (`haven.discovery.correlation`)
+    can use to notice "SSDP and mDNS both just described the same physical
+    device", never something a caller should treat as identity on its own
+    (the same device can rotate its address, and one address can host
+    several unrelated services).
     """
 
     candidate_id: str
@@ -35,6 +43,7 @@ class DiscoveredDevice:
     suggested_device_type: str | None = None
     suggested_room: str | None = None
     signal_strength: float | None = None
+    source_ip: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "candidate_id", _require_text(self.candidate_id, name="candidate_id"))
@@ -47,6 +56,8 @@ class DiscoveredDevice:
             )
         if self.suggested_room is not None:
             object.__setattr__(self, "suggested_room", _require_text(self.suggested_room, name="suggested_room"))
+        if self.source_ip is not None:
+            object.__setattr__(self, "source_ip", _require_text(self.source_ip, name="source_ip"))
 
 
 __all__ = ["DiscoveredDevice"]

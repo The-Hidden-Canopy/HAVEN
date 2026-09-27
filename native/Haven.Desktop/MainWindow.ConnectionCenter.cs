@@ -121,20 +121,21 @@ public sealed partial class MainWindow
 
     private string EventChannelStatusText()
     {
-        if (_eventClient is { IsConnected: true, IsStalled: true })
+        var client = EventCoordinator.Client;
+        if (client is { IsConnected: true, IsStalled: true })
         {
-            return _eventClient.LastFrameUtc is { } last
+            return client.LastFrameUtc is { } last
                 ? $"Stalled (last frame {last:HH:mm:ss} UTC)"
                 : "Stalled (no frame received)";
         }
-        if (_eventClient is { IsConnected: true })
+        if (client is { IsConnected: true })
         {
             return "Connected";
         }
-        return _eventReconnectTask is { IsCompleted: false } ? "Reconnecting…" : "Not connected";
+        return EventCoordinator.ReconnectInProgress ? "Reconnecting…" : "Not connected";
     }
 
-    private bool EventChannelIsHealthy() => _eventClient is { IsConnected: true, IsStalled: false };
+    private bool EventChannelIsHealthy() => EventCoordinator.IsConnectedAndFresh;
 
     private Border ConnectionChannelRow(string name, string status, bool healthy, string actionLabel, Func<Task> action)
     {

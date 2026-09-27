@@ -18,6 +18,8 @@ from importlib import metadata
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from haven.integrations.home_assistant import HomeAssistantWorldProvider
 from haven.providers.plugin import ProviderManifest
 from haven.web.server import make_server
@@ -212,10 +214,12 @@ def test_skipping_the_provider_after_connecting_rebuilds_to_real_empty_world() -
         assert server.director.household_id == original_household_id
 
 
-def test_skipping_after_connecting_deletes_the_stale_token_file() -> None:
-    """A disconnected provider must not leave its credential behind on disk
-    -- a real privacy leftover, even though nothing reads it once
-    `provider_token_file` is cleared."""
+def test_skipping_after_connecting_revokes_the_stale_credential() -> None:
+    """A disconnected provider must not leave its credential behind -- a
+    real privacy leftover, even though nothing reads it once the config no
+    longer references a `provider_credential_id`."""
+
+    from haven.credentials import CredentialStore, UnknownCredentialError
 
     with tempfile.TemporaryDirectory() as tmp, _boot(Path(tmp)) as (server, port):
         with patch("haven.integrations.home_assistant.client.urlopen", side_effect=_fake_urlopen):
@@ -224,12 +228,14 @@ def test_skipping_after_connecting_deletes_the_stale_token_file() -> None:
                 "/api/setup/provider",
                 {"kind": "home_assistant", "base_url": "http://ha.local:8123", "token": "secret-token"},
             )
-        token_path = Path(tmp) / "ha_token.txt"
-        assert token_path.exists()
+        credentials = CredentialStore(Path(tmp) / "credentials.db")
+        credential_id = "provider:home_assistant"
+        assert credentials.get_secret(credential_id) == "secret-token"
 
         status, body = _post(port, "/api/setup/provider", {"skip": True})
 
         assert status == 200
         assert body["ok"] is True
-        assert not token_path.exists()
+        with pytest.raises(UnknownCredentialError):
+            credentials.get_secret(credential_id)
         assert server.setup._director is server.director
