@@ -43,6 +43,7 @@ public sealed partial class MainWindow : Window
             _ = StopEventClientAsync();
             _ = StopCoreClientAsync();
             _ = (_mcpHost?.StopAsync() ?? Task.CompletedTask);
+            _temporalVisualService?.Stop();
         };
         SelectHomeTab("rooms");
         SelectModelsTab("local");

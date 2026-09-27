@@ -126,13 +126,56 @@ def test_no_signals_no_fabricated_cards(server) -> None:
     assert cards == []
 
 
+def test_focus_prefers_overdue_over_active_project(server, tmp_path) -> None:
+    _seed(server, tmp_path)
+    focus = _dispatch(server, "today.snapshot", {})["result"]["snapshot"]["regions"]["focus"]
+    assert focus["ok"] is True
+    assert focus["item"]["title"] == "Overdue section draft"
+
+
+def test_focus_is_none_with_no_signals(server) -> None:
+    focus = _dispatch(server, "today.snapshot", {})["result"]["snapshot"]["regions"]["focus"]
+    assert focus == {"ok": True, "item": None}
+
+
+def test_upcoming_is_chronological_and_excludes_the_focus_item(server, tmp_path) -> None:
+    _seed(server, tmp_path)
+    snapshot = _dispatch(server, "today.snapshot", {})["result"]["snapshot"]["regions"]
+    focus_title = snapshot["focus"]["item"]["title"]
+    upcoming_titles = [item["title"] for item in snapshot["upcoming"]["items"]]
+
+    assert focus_title not in upcoming_titles
+    assert upcoming_titles == ["Tomorrow review"]
+    assert all(item["why_now"] for item in snapshot["upcoming"]["items"])
+
+
+def test_upcoming_never_contains_blocked_or_failure_items(server, tmp_path) -> None:
+    _seed(server, tmp_path)
+    upcoming = _dispatch(server, "today.snapshot", {})["result"]["snapshot"]["regions"]["upcoming"]
+    titles = {item["title"] for item in upcoming["items"]}
+    assert "Dependent review" not in titles  # a blocked task belongs to Needs You, not Upcoming
+    assert "Suggested outreach" not in titles  # a suggestion is neither
+
+
 def test_snapshot_aggregates_regions_and_preserves_partial_contract(server) -> None:
     result = _dispatch(server, "today.snapshot", {})["result"]
     snapshot = result["snapshot"]
     assert snapshot["generated_at"]
-    assert set(snapshot["regions"]) == {"attention", "needs_you", "tasks", "files", "activity", "pending", "replies"}
+    assert set(snapshot["regions"]) == {
+        "attention",
+        "focus",
+        "needs_you",
+        "upcoming",
+        "tasks",
+        "files",
+        "activity",
+        "pending",
+        "replies",
+    }
     assert snapshot["regions"]["attention"]["ok"] is True
+    assert snapshot["regions"]["focus"]["ok"] is True
     assert snapshot["regions"]["needs_you"]["ok"] is True
+    assert snapshot["regions"]["upcoming"]["ok"] is True
     assert snapshot["regions"]["tasks"]["ok"] is True
     assert snapshot["regions"]["replies"]["available"] is False
     assert isinstance(snapshot["errors"], list)
@@ -145,7 +188,9 @@ def test_snapshot_keeps_other_regions_when_activity_provider_fails(server, monke
     monkeypatch.setattr(server.windows_provider, "activity", fail_activity)
     snapshot = _dispatch(server, "today.snapshot", {})["result"]["snapshot"]
     assert snapshot["regions"]["attention"]["ok"] is True
+    assert snapshot["regions"]["focus"]["ok"] is True
     assert snapshot["regions"]["needs_you"]["ok"] is True
+    assert snapshot["regions"]["upcoming"]["ok"] is True
     assert snapshot["regions"]["tasks"]["ok"] is True
     assert snapshot["regions"]["activity"]["ok"] is False
     assert {error["region"] for error in snapshot["errors"]} == {"activity"}

@@ -824,6 +824,19 @@ public sealed class HavenCoreClient : IAsyncDisposable
         CancellationToken cancellationToken = default) =>
         RequestResultAsync("today.dismiss", new { card_id = cardId }, cancellationToken);
 
+    public Task<JsonElement> GetNeedsYouAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("needs_you.list", new { }, cancellationToken);
+
+    public Task<JsonElement> SnoozeNeedsYouAsync(
+        string sourceRef,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("needs_you.snooze", new { source_ref = sourceRef }, cancellationToken);
+
+    public Task<JsonElement> DismissNeedsYouAsync(
+        string sourceRef,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("needs_you.dismiss", new { source_ref = sourceRef }, cancellationToken);
+
     public Task<JsonElement> GetRelationshipsForAsync(
         string resourceId,
         CancellationToken cancellationToken = default) =>
