@@ -1157,6 +1157,161 @@ class HavenApplication:
         self._publish_state()
         return {"ok": True, "state": self.state()}
 
+    def request_action_as(
+        self,
+        principal: Principal,
+        device_id: str,
+        service: str,
+        parameters: Mapping | None = None,
+        *,
+        external_connection_id: str | None = None,
+        external_source: tuple[tuple[str, str], ...] | None = None,
+    ) -> dict[str, Any]:
+        """`device_command`'s validation and authority path, for an explicit principal.
+
+        The External Agent Gateway calls this after `ExternalAgentGateway
+        .admit()` resolves a principal (bound person or anonymous GUEST) --
+        never `self.resident`, so a request Alexa+ or a future MCP client
+        makes runs as whoever it was actually admitted as (spec ADR-002:
+        "Alexa is a requester, not an executor"). Deliberately does not
+        reuse `_run_proposal`/`_ask_direct_action`/`_record_block`: those
+        call `self._say(...)`, a physical local voice announcement that
+        assumes a resident is present and speaking through HAVEN's own
+        channel -- wrong for a request that arrived through a different
+        conversation entirely. The one thing this *does* share verbatim is
+        `self.runtime.run_action(...)`: the authority decision itself is
+        never forked (spec non-goal: "no second policy language").
+        """
+
+        if not self.has_declared_owner:
+            return {"ok": False, "error": "no household owner declared yet"}
+        if not self.registry.is_registered(device_id):
+            return {"ok": False, "error": "unknown device"}
+        manifest = self.registry.get(device_id)
+        action_kind = self._DEVICE_COMMAND_KINDS.get(service)
+        capability_name: str | None = None
+        if action_kind is None:
+            capability = next(
+                (cap for cap in manifest.capabilities if cap.service == service and cap.writable), None
+            )
+            if capability is None:
+                return {"ok": False, "error": "unsupported service"}
+            action_kind = ActionKind.UNSCOPED_EXECUTION
+            capability_name = capability.name
+        elif not any(capability.service == service for capability in manifest.capabilities):
+            return {"ok": False, "error": "unsupported service"}
+        proposal_parameters: tuple[tuple[str, Any], ...] = ()
+        if action_kind is ActionKind.SET_LIGHT_BRIGHTNESS:
+            brightness = (parameters or {}).get("brightness_pct")
+            if isinstance(brightness, bool) or not isinstance(brightness, int):
+                return {"ok": False, "error": "an integer 'brightness_pct' is required"}
+            proposal_parameters = (("brightness_pct", brightness),)
+
+        now = self._clock()
+        justification = f"external device control: {service}"
+        try:
+            receipt = self.runtime.run_action(
+                principal=principal,
+                action_kind=action_kind,
+                capability=capability_name,
+                target_device_id=device_id,
+                target_selector=None,
+                parameters=proposal_parameters,
+                justification=justification,
+                world=self.world.observe(now),
+                now=now,
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": f"could not resolve target: {exc}"}
+        if external_source is not None:
+            receipt = replace(receipt, external_source=external_source)
+        self.receipts.append(receipt)
+
+        status = receipt.decision.status
+        if status == DecisionStatus.ALLOW:
+            self._publish_state()
+            return {
+                "ok": True,
+                "status": "executed",
+                "receipt_id": receipt.receipt_id,
+                "state": self.state(),
+            }
+        if status == DecisionStatus.CONFIRMATION_REQUIRED:
+            request = receipt.requested_action
+            proposal = ActionProposal(
+                action_kind=action_kind,
+                capability=capability_name,
+                target_device_id=device_id,
+                target_selector=None,
+                parameters=proposal_parameters,
+                justification=justification,
+                source_text=justification,
+            )
+            pending = PendingRequest(
+                request_id=request.request_id,
+                rule_id=request.rule_id,
+                title="Confirm device action",
+                detail=f"An external connection requested '{service}' on {device_id}.",
+                expires_at=now + timedelta(minutes=5),
+                requested_by=principal.actor_id,
+                external_connection_id=external_connection_id,
+            )
+            self._pending[pending.request_id] = pending
+            self._direct_actions[pending.request_id] = proposal
+            self._publish_state()
+            return {
+                "ok": True,
+                "status": "confirmation_required",
+                "request_id": pending.request_id,
+                "expires_at": pending.expires_at.isoformat(),
+            }
+        self._publish_state()
+        return {
+            "ok": True,
+            "status": "denied",
+            "reason": receipt.decision.explanation,
+            "receipt_id": receipt.receipt_id,
+        }
+
+    def confirm_pending_as(
+        self,
+        principal: Principal,
+        request_id: str,
+        *,
+        external_source: tuple[tuple[str, str], ...] | None = None,
+    ) -> dict[str, Any]:
+        """Confirm a pending direct action as an explicit principal.
+
+        Refuses a pending request `request_action_as` did not create
+        (`requested_by` unset, or set to a different principal) -- an
+        external caller can only ever confirm its own request, matching
+        the spec's pending-handle state machine (28.2: wrong
+        connection/principal cannot confirm).
+        """
+
+        pending = self._pending.get(request_id)
+        if pending is None or request_id not in self._direct_actions:
+            return {"ok": False, "error": "unknown request"}
+        if pending.requested_by != principal.actor_id:
+            return {"ok": False, "error": "principal mismatch"}
+        receipt = self._confirm_direct_action(request_id, pending, principal=principal, external_source=external_source)
+        self._publish_state()
+        return {"ok": True, "status": "confirmed", "receipt_id": receipt.receipt_id, "state": self.state()}
+
+    def deny_pending_as(self, principal: Principal, request_id: str) -> dict[str, Any]:
+        """Deny a pending direct action as an explicit principal, without the
+        physical `_say` announcement `deny()` makes for a local resident."""
+
+        pending = self._pending.get(request_id)
+        if pending is None or request_id not in self._direct_actions:
+            return {"ok": False, "error": "unknown request"}
+        if pending.requested_by != principal.actor_id:
+            return {"ok": False, "error": "principal mismatch"}
+        del self._pending[request_id]
+        self._direct_actions.pop(request_id, None)
+        self._publish_state()
+        return {"ok": True, "status": "denied"}
+
     def _chat_intent(self, text: str, focus: str | None = None) -> None:
         """Route one utterance through the provider's proposed intent.
 

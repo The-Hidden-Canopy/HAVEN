@@ -24,7 +24,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Callable, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 from haven.core.domain import Principal, RoleTier
 
@@ -62,6 +62,33 @@ class PrincipalResolver(Protocol):
     def __call__(self, principal_id: str) -> Principal | None: ...
 
 
+class ActionExecutor(Protocol):
+    """What the gateway needs to actually run a bounded action.
+
+    `HavenApplication.request_action_as`/`confirm_pending_as`/
+    `deny_pending_as` satisfy this shape. Depending on the Protocol, not the
+    concrete class, keeps `external_agents` free of any `haven.web` import
+    (ADR-001) -- a future non-HAVEN host of this package supplies its own.
+    """
+
+    def request_action_as(
+        self,
+        principal: Principal,
+        device_id: str,
+        service: str,
+        parameters: Mapping[str, Any] | None = None,
+        *,
+        external_connection_id: str | None = None,
+        external_source: tuple[tuple[str, str], ...] | None = None,
+    ) -> dict[str, Any]: ...
+
+    def confirm_pending_as(
+        self, principal: Principal, request_id: str, *, external_source: tuple[tuple[str, str], ...] | None = None
+    ) -> dict[str, Any]: ...
+
+    def deny_pending_as(self, principal: Principal, request_id: str) -> dict[str, Any]: ...
+
+
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
@@ -91,12 +118,14 @@ class ExternalAgentGateway:
         store: ExternalAgentStore,
         household_id: str,
         resolve_principal: PrincipalResolver,
-        clock: Callable[[], datetime] = _DEFAULT_CLOCK,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._store = store
         self._household_id = household_id
         self._resolve_principal = resolve_principal
-        self._clock = clock
+        # None-tolerant: a composition root that threads an optional clock
+        # through must never leave the gateway without one.
+        self._clock = clock or _DEFAULT_CLOCK
 
     def admit(self, request: ExternalRequest, *, correlation_id: str | None = None) -> AdmittedRequest:
         now = self._clock()
@@ -157,6 +186,50 @@ class ExternalAgentGateway:
             connection=connection, principal=principal, scopes=scopes, provenance=provenance, binding=binding
         )
 
+    def request_action(
+        self,
+        admitted: AdmittedRequest,
+        executor: ActionExecutor,
+        device_id: str,
+        service: str,
+        parameters: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Request one bounded device/resource action as the admitted principal.
+
+        Defense in depth, not redundant validation: `admit()` already
+        refused this call if the connection/binding didn't grant
+        `actions.request` for the scope it was asked to check, but this
+        re-check protects against an `AdmittedRequest` obtained for a
+        *different* required scope (e.g. `world.read`) being reused here by
+        mistake -- the one thing this gateway must never do is let a
+        possessed permissive factor compensate for a missing one (spec 8.2).
+        """
+
+        self._require_scope(admitted, ExternalScope.ACTIONS_REQUEST)
+        return executor.request_action_as(
+            admitted.principal,
+            device_id,
+            service,
+            parameters,
+            external_connection_id=admitted.connection.connection_id,
+            external_source=admitted.provenance.receipt_block(),
+        )
+
+    def confirm_pending(self, admitted: AdmittedRequest, executor: ActionExecutor, request_id: str) -> dict[str, Any]:
+        self._require_scope(admitted, ExternalScope.ACTIONS_REQUEST)
+        return executor.confirm_pending_as(
+            admitted.principal, request_id, external_source=admitted.provenance.receipt_block()
+        )
+
+    def deny_pending(self, admitted: AdmittedRequest, executor: ActionExecutor, request_id: str) -> dict[str, Any]:
+        self._require_scope(admitted, ExternalScope.ACTIONS_REQUEST)
+        return executor.deny_pending_as(admitted.principal, request_id)
+
+    @staticmethod
+    def _require_scope(admitted: AdmittedRequest, scope: ExternalScope) -> None:
+        if scope not in admitted.scopes:
+            raise ExternalDenied(SCOPE_MISSING, f"admitted request does not carry scope: {scope.value}")
+
     def _record_security_event(
         self, kind: str, *, connection: ExternalAgentConnection, request: ExternalRequest, at: datetime
     ) -> None:
@@ -178,10 +251,10 @@ class ExternalAgentService:
     receipts keep the provenance that existed at action time (spec 8.6).
     """
 
-    def __init__(self, *, store: ExternalAgentStore, household_id: str, clock: Callable[[], datetime] = _DEFAULT_CLOCK) -> None:
+    def __init__(self, *, store: ExternalAgentStore, household_id: str, clock: Callable[[], datetime] | None = None) -> None:
         self._store = store
         self._household_id = household_id
-        self._clock = clock
+        self._clock = clock or _DEFAULT_CLOCK
 
     def list_connections(self) -> tuple[ExternalAgentConnection, ...]:
         return self._store.list_connections(self._household_id)

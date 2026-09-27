@@ -22,7 +22,7 @@ Two independent efforts landed in this window; only the first is Build/Ship/Shap
 
 ## What is NOT done yet (tracked in `TASKS.md` under "Amazon Build, Ship, Shape")
 
-No MCP transport, no Alexa+ simulator, no Ring integration, no Bedrock provider, no Governed MCP OSS package, no External Agents UI. `ExternalAgentGateway.admit()` is callable today; nothing calls it yet. See `TASKS.md`'s Build/Ship/Shape section for exactly which work packages are blocked on a team decision (MCP SDK choice; Ring credentials vs. simulator-only) versus simply not started.
+No Alexa+ simulator, no Ring integration, no Bedrock provider, no Governed MCP OSS package. The External Agents management surface exists natively (Settings) and — since the WP6 REST twin landed — over `/api/external-agents/*`; a web panel view remains unbuilt. The MCP transport decision is made and built: `native/Haven.Desktop` hosts `POST /mcp` (loopback-only, bearer-gated) via the official `ModelContextProtocol.AspNetCore` SDK, forwarding to the Python `TransportBridge` (`haven/external_agents/transport.py`, exposed as IPC `external_agents.tools.call`) — five tools (`haven_world_get`, `haven_rooms_list`, `haven_action_request/confirm/deny`), every one admitted by `ExternalAgentGateway` and governed by the existing authority engine. Native side is build-verified (0 warnings); end-to-end MCP client click-through is blocked by the dev machine's WinUI compositing, same as every native milestone. See `TASKS.md`'s Build/Ship/Shape section for exactly which work packages remain blocked on a team decision (Ring credentials vs. simulator-only; WP7/WP8).
 
 ## Verification as of this file
 
