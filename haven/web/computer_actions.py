@@ -52,6 +52,7 @@ from typing import Any, Callable, Mapping
 from uuid import uuid4
 
 from ..actions import ActionLedgerEntry, ActionLedgerStore, ResourceActionDecision, ResourceActionRequest, ResourceAuthorityEngine
+from ..core import correlation
 from ..core.domain import ConfirmationToken, DecisionStatus
 from ..execution import ProviderCommand
 from ..integrations.computer.filesystem import FILESYSTEM_ACTION_RISK, FilesystemProvider
@@ -246,6 +247,7 @@ class ComputerActionService:
                     "recorded_at": entry.recorded_at.isoformat(),
                     "success": entry.success,
                     "detail": entry.detail,
+                    "correlation_id": entry.correlation_id,
                 }
                 for entry in entries
             ],
@@ -358,6 +360,7 @@ class ComputerActionService:
                 recorded_at=self._clock(),
                 success=success,
                 detail=detail,
+                correlation_id=correlation.current(),
             )
         )
 

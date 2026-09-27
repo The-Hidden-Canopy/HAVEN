@@ -169,20 +169,22 @@ def test_enroll_lets_the_household_override_the_suggested_room():
     assert service._director.registry.get("a").room == "bedroom"
 
 
-def test_default_discovery_providers_always_includes_ssdp():
+def test_default_discovery_providers_always_includes_ssdp_and_mdns():
+    from haven.integrations.wifi.mdns import MdnsDiscoveryProvider
     from haven.integrations.wifi.ssdp import SsdpDiscoveryProvider
 
     with patch("haven.integrations.bluetooth.CtypesBluetoothLibrary.load", side_effect=FileNotFoundError()):
         providers = default_discovery_providers()
 
     assert any(isinstance(provider, SsdpDiscoveryProvider) for provider in providers)
+    assert any(isinstance(provider, MdnsDiscoveryProvider) for provider in providers)
 
 
 def test_default_discovery_providers_degrades_gracefully_with_no_bluetooth_library():
     with patch("haven.integrations.bluetooth.CtypesBluetoothLibrary.load", side_effect=FileNotFoundError()):
         providers = default_discovery_providers()
 
-    assert len(providers) == 1  # SSDP only -- one fewer transport, not a crash
+    assert len(providers) == 2  # SSDP + mDNS only -- one fewer transport, not a crash
 
 
 def test_default_discovery_providers_includes_bluetooth_when_the_library_loads():
@@ -192,3 +194,17 @@ def test_default_discovery_providers_includes_bluetooth_when_the_library_loads()
         providers = default_discovery_providers()
 
     assert any(isinstance(provider, BluetoothProvider) for provider in providers)
+
+
+def test_candidates_view_surfaces_cross_transport_correlation():
+    ssdp_like = _candidate("wifi-ssdp:uuid-1", provider_id="wifi-ssdp", source="wifi.ssdp", source_ip="192.168.1.50")
+    mdns_like = _candidate("wifi-mdns:tv", provider_id="wifi-mdns", source="wifi.mdns", source_ip="192.168.1.50")
+    unrelated = _candidate("wifi-ssdp:uuid-2", provider_id="wifi-ssdp", source="wifi.ssdp", source_ip="192.168.1.60")
+
+    service = _service(FixtureDiscoveryProvider((ssdp_like, mdns_like, unrelated)))
+    result = service.scan()
+
+    by_id = {row["candidate_id"]: row for row in result["candidates"]}
+    assert by_id[ssdp_like.candidate_id]["correlated_with"] == (mdns_like.candidate_id,)
+    assert by_id[mdns_like.candidate_id]["correlated_with"] == (ssdp_like.candidate_id,)
+    assert by_id[unrelated.candidate_id]["correlated_with"] == ()

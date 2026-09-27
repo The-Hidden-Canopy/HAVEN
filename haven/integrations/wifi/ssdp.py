@@ -79,6 +79,7 @@ def parse_ssdp_response(response: str, *, source_ip: str, now: datetime) -> Disc
         discovered_at=now,
         source="wifi.ssdp",
         suggested_device_type=_guess_device_type(headers.get("st", "")),
+        source_ip=source_ip,
     )
 
 

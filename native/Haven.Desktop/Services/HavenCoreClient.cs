@@ -546,6 +546,9 @@ public sealed class HavenCoreClient : IAsyncDisposable
     public Task<JsonElement> GetSystemDiagnosticsAsync(CancellationToken cancellationToken = default) =>
         RequestResultAsync("system.diagnostics", new { }, cancellationToken);
 
+    public Task<JsonElement> ExportDiagnosticsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("system.diagnostics.export", new { }, cancellationToken);
+
     public Task<JsonElement> ProbeSystemProviderAsync(CancellationToken cancellationToken = default) =>
         RequestResultAsync("system.probe", new { }, cancellationToken);
 

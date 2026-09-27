@@ -22,6 +22,7 @@ _CONFIG_KEYS = (
     "provider_kind",
     "provider_base_url",
     "provider_token_file",
+    "provider_credential_id",
     "voice_enabled",
     "intelligence_enabled",
 )
@@ -53,8 +54,14 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
 class SetupConfig:
     """One installation's setup state; `None` fields mean "not chosen yet".
 
-    Token material is never stored here: `provider_token_file` is only the
-    filename of a sidecar the provider step writes next to the config.
+    Token material is never stored here. `provider_credential_id` (current)
+    is a reference into `haven.credentials.CredentialStore` -- the actual
+    secret lives DPAPI-encrypted in `credentials.db`, not in this file.
+    `provider_token_file` (legacy) is the filename of a plaintext sidecar an
+    older installation wrote next to the config; `_read_provider_token`
+    migrates it into the credential store the first time it is seen and
+    clears this field, so it should be empty on any installation that has
+    booted since the migration landed.
 
     `household_id` is minted and persisted on the first normal boot (see
     `haven.web.application.ensure_household_id`). An explicit demo run never
@@ -70,13 +77,21 @@ class SetupConfig:
     provider_kind: str | None = None
     provider_base_url: str | None = None
     provider_token_file: str | None = None
+    provider_credential_id: str | None = None
     voice_enabled: bool = False
     intelligence_enabled: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.version, int) or isinstance(self.version, bool) or self.version != _CONFIG_VERSION:
             raise ValueError(f"unsupported setup config version: {self.version!r}")
-        for name in ("data_dir", "household_id", "provider_kind", "provider_base_url", "provider_token_file"):
+        for name in (
+            "data_dir",
+            "household_id",
+            "provider_kind",
+            "provider_base_url",
+            "provider_token_file",
+            "provider_credential_id",
+        ):
             value = getattr(self, name)
             if value is None:
                 continue
@@ -134,7 +149,14 @@ class SetupConfigStore:
             value = data.get(name, False)
             if not isinstance(value, bool):
                 raise SetupConfigError(f"setup config field {name!r} must be a boolean")
-        for name in ("data_dir", "household_id", "provider_kind", "provider_base_url", "provider_token_file"):
+        for name in (
+            "data_dir",
+            "household_id",
+            "provider_kind",
+            "provider_base_url",
+            "provider_token_file",
+            "provider_credential_id",
+        ):
             value = data.get(name)
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise SetupConfigError(
@@ -148,6 +170,7 @@ class SetupConfigStore:
             provider_kind=data.get("provider_kind"),
             provider_base_url=data.get("provider_base_url"),
             provider_token_file=data.get("provider_token_file"),
+            provider_credential_id=data.get("provider_credential_id"),
             voice_enabled=data.get("voice_enabled", False),
             intelligence_enabled=data.get("intelligence_enabled", False),
         )
@@ -163,6 +186,7 @@ class SetupConfigStore:
                 "provider_kind": config.provider_kind,
                 "provider_base_url": config.provider_base_url,
                 "provider_token_file": config.provider_token_file,
+                "provider_credential_id": config.provider_credential_id,
                 "voice_enabled": config.voice_enabled,
                 "intelligence_enabled": config.intelligence_enabled,
             },

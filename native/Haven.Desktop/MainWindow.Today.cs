@@ -278,6 +278,7 @@ public sealed partial class MainWindow
             TodayNeedsYouCountChip.Visibility = Visibility.Collapsed;
             TodayPendingBanner.Visibility = Visibility.Collapsed;
             ShellNeedsYouBadge.Visibility = Visibility.Collapsed;
+            HeroNeedsYouButton.Visibility = Visibility.Collapsed;
             TodayNeedsYouHost.Children.Add(new TextBlock
             {
                 Text = "Needs You is temporarily unavailable.",
@@ -298,6 +299,8 @@ public sealed partial class MainWindow
 
         ShellNeedsYouBadge.Visibility = count > 0 ? Visibility.Visible : Visibility.Collapsed;
         ShellNeedsYouBadgeText.Text = count.ToString();
+        HeroNeedsYouButton.Visibility = count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        HeroNeedsYouCountText.Text = count.ToString();
 
         if (count == 0)
         {

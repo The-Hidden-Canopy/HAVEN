@@ -10,8 +10,16 @@ those. `enroll_device()` is the only way a `DiscoveredDevice` becomes a
 the same way `HavenRuntime.approve_rule()` does for a rule.
 """
 
+from .correlation import CorrelationGroup, correlate
 from .enrollment import enroll_device
 from .models import DiscoveredDevice
 from .provider import DiscoveryProvider, FixtureDiscoveryProvider
 
-__all__ = ["DiscoveredDevice", "DiscoveryProvider", "FixtureDiscoveryProvider", "enroll_device"]
+__all__ = [
+    "CorrelationGroup",
+    "DiscoveredDevice",
+    "DiscoveryProvider",
+    "FixtureDiscoveryProvider",
+    "correlate",
+    "enroll_device",
+]

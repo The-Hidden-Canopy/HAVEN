@@ -16,6 +16,7 @@ from haven.integrations.bluetooth.native import (
     CtypesBluetoothLibrary,
     HbStatus,
     NativeBluetoothError,
+    _find_dev_build,
 )
 
 
@@ -29,6 +30,44 @@ def test_load_raises_when_no_library_can_be_found():
     with patch("haven.integrations.bluetooth.native.ctypes.util.find_library", return_value=None):
         with pytest.raises(FileNotFoundError):
             CtypesBluetoothLibrary.load()
+
+
+def test_load_falls_back_to_a_local_dev_build_when_nothing_is_on_path(tmp_path):
+    """A developer who just ran `build_windows.cmd` locally should not also
+    have to fix up PATH/find_library to exercise the real backend."""
+
+    build_dir = tmp_path / "native" / "haven-bt" / "build"
+    build_dir.mkdir(parents=True)
+    dll = build_dir / "havenbt_winrt.dll"
+    dll.write_bytes(b"not a real dll, just a path to find")
+
+    fake = _fake_lib()
+    with patch("haven.integrations.bluetooth.native.ctypes.util.find_library", return_value=None), patch(
+        "haven.integrations.bluetooth.native.platform.system", return_value="Windows"
+    ), patch("haven.integrations.bluetooth.native._REPO_ROOT", tmp_path), patch(
+        "haven.integrations.bluetooth.native.ctypes.CDLL", return_value=fake
+    ) as cdll:
+        CtypesBluetoothLibrary.load()
+
+    cdll.assert_called_once_with(str(dll))
+
+
+def test_find_dev_build_returns_none_when_nothing_was_built(tmp_path):
+    with patch("haven.integrations.bluetooth.native.platform.system", return_value="Windows"), patch(
+        "haven.integrations.bluetooth.native._REPO_ROOT", tmp_path
+    ):
+        assert _find_dev_build() is None
+
+
+def test_find_dev_build_never_picks_the_fixture_backend(tmp_path):
+    build_dir = tmp_path / "native" / "haven-bt" / "build"
+    build_dir.mkdir(parents=True)
+    (build_dir / "havenbt_fixture.dll").write_bytes(b"fixture, not real hardware")
+
+    with patch("haven.integrations.bluetooth.native.platform.system", return_value="Windows"), patch(
+        "haven.integrations.bluetooth.native._REPO_ROOT", tmp_path
+    ):
+        assert _find_dev_build() is None
 
 
 def test_load_configures_prototypes_and_creates_a_context():

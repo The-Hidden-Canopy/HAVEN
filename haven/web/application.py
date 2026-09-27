@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from haven.core.domain import Principal, RoleTier
+from haven.credentials import CredentialKind, CredentialStore, UnknownCredentialError
 from haven.devices import DeviceRegistry
 from haven.execution import ExecutionProviderRegistry
 from haven.integrations.home_assistant.client import LiveHomeAssistantAdapter
@@ -328,14 +329,48 @@ def _load_declarations_or_empty(store: SetupConfigStore) -> HouseholdDeclaration
 
 
 def _read_provider_token(store: SetupConfigStore, config: SetupConfig) -> str | None:
+    """The provider secret, from the credential store -- migrating a legacy
+    plaintext `provider_token_file` sidecar the first time one is seen
+    (native product-consolidation plan, P1: "migrate existing secret
+    sidecars into the credential abstraction with backward-compatible
+    import"). Migration is best-effort: any failure just falls back to
+    reading the legacy file directly, exactly like before this migration
+    existed, so a boot never fails over it.
+    """
+
+    credentials = CredentialStore(store.path.parent / "credentials.db")
+
+    if config.provider_credential_id:
+        try:
+            return credentials.get_secret(config.provider_credential_id)
+        except UnknownCredentialError:
+            return None
+
     token_file = config.provider_token_file
     if not token_file:
         return None
+    token_path = store.path.parent / token_file
     try:
-        token = (store.path.parent / token_file).read_text(encoding="utf-8").strip()
+        token = token_path.read_text(encoding="utf-8").strip()
     except OSError:
         return None
-    return token or None
+    if not token:
+        return None
+
+    try:
+        credential_id = f"provider:{config.provider_kind or 'unknown'}"
+        credentials.create(
+            credential_id=credential_id,
+            provider=config.provider_kind or "unknown",
+            account_label=config.provider_base_url or credential_id,
+            kind=CredentialKind.USER,
+            secret=token,
+        )
+        store.save(replace(config, provider_credential_id=credential_id, provider_token_file=None))
+        token_path.unlink()
+    except Exception:
+        pass  # the legacy file still has the token; migration can retry next boot
+    return token
 
 
 __all__ = ["HA_PROVIDER_ID", "build_application", "ensure_household_id"]

@@ -87,6 +87,12 @@ class ActionLedgerEntry:
     recorded_at: datetime
     success: bool | None = None
     detail: str | None = None
+    # One id threaded native action -> IPC -> application service -> authority
+    # -> provider -> here (native product-consolidation plan, P0 "Runtime":
+    # a correlation id through the whole path). `None` for entries recorded
+    # outside an IPC/HTTP request (e.g. a scheduled automation), which have
+    # nothing to correlate against.
+    correlation_id: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("entry_id", "household_id", "provider_id", "action", "requested_by", "reason"):
@@ -99,6 +105,8 @@ class ActionLedgerEntry:
         object.__setattr__(self, "recorded_at", require_aware_utc(self.recorded_at, name="recorded_at"))
         if self.detail is not None:
             object.__setattr__(self, "detail", _require_text(self.detail, name="detail"))
+        if self.correlation_id is not None:
+            object.__setattr__(self, "correlation_id", _require_text(self.correlation_id, name="correlation_id"))
 
 
 def action_ledger_entry_to_dict(entry: ActionLedgerEntry) -> dict:
@@ -116,6 +124,7 @@ def action_ledger_entry_to_dict(entry: ActionLedgerEntry) -> dict:
         "recorded_at": _datetime_to_str(entry.recorded_at),
         "success": entry.success,
         "detail": entry.detail,
+        "correlation_id": entry.correlation_id,
     }
 
 
@@ -141,6 +150,7 @@ def action_ledger_entry_from_dict(payload: object) -> ActionLedgerEntry:
         recorded_at=_datetime_from_str(payload["recorded_at"], name=f"{name} 'recorded_at'"),
         success=payload.get("success"),
         detail=payload.get("detail"),
+        correlation_id=payload.get("correlation_id"),
     )
 
 

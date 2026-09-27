@@ -21,11 +21,13 @@ public sealed class HavenEventClient : IAsyncDisposable
     private const string PipePrefix = "\\\\.\\pipe\\";
     private const string RpcPrefix = "haven-";
     private const string EventsPrefix = "haven-events-";
-    private static readonly TimeSpan WatchdogInterval = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan StalledThreshold = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DefaultWatchdogInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DefaultStalledThreshold = TimeSpan.FromSeconds(30);
 
     private readonly string _pipeName;
     private readonly string _authToken;
+    private readonly TimeSpan _watchdogInterval;
+    private readonly TimeSpan _stalledThreshold;
     private readonly JsonSerializerOptions _json = new() { PropertyNameCaseInsensitive = true };
     private NamedPipeClientStream? _pipe;
     private CancellationTokenSource? _readLoopCts;
@@ -34,10 +36,18 @@ public sealed class HavenEventClient : IAsyncDisposable
     private long _lastFrameUtcTicks;
     private int _stalledNotified;
 
-    public HavenEventClient(string rpcPipeName, string authToken)
+    /// <summary>`watchdogInterval`/`stalledThreshold` default to the
+    /// production 5s/30s pair; a test injects shorter values so stall
+    /// detection can be exercised deterministically without a real 30s
+    /// wait (native product-consolidation plan, P0: "deterministic tests
+    /// for ... stall callback").</summary>
+    public HavenEventClient(
+        string rpcPipeName, string authToken, TimeSpan? watchdogInterval = null, TimeSpan? stalledThreshold = null)
     {
         _pipeName = DerivePipeName(rpcPipeName);
         _authToken = authToken;
+        _watchdogInterval = watchdogInterval ?? DefaultWatchdogInterval;
+        _stalledThreshold = stalledThreshold ?? DefaultStalledThreshold;
     }
 
     public static string DerivePipeName(string rpcPipeName)
@@ -119,7 +129,7 @@ public sealed class HavenEventClient : IAsyncDisposable
 
             _readLoopCts = new CancellationTokenSource();
             _readLoop = Task.Run(() => ReadLoopAsync(_readLoopCts.Token));
-            _watchdog ??= new Timer(_ => WatchdogTick(), null, WatchdogInterval, WatchdogInterval);
+            _watchdog ??= new Timer(_ => WatchdogTick(), null, _watchdogInterval, _watchdogInterval);
         }
         catch
         {
@@ -184,7 +194,7 @@ public sealed class HavenEventClient : IAsyncDisposable
             return;
         }
         var last = Interlocked.Read(ref _lastFrameUtcTicks);
-        if (last == 0 || DateTime.UtcNow.Ticks - last < StalledThreshold.Ticks)
+        if (last == 0 || DateTime.UtcNow.Ticks - last < _stalledThreshold.Ticks)
         {
             return;
         }

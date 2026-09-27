@@ -200,23 +200,27 @@
                      (spec 21.1) via TodayHeroFlatBackground. -->
                 <StackPanel x:Name="TodayPanel" Spacing="16">
                     <Border x:Name="TodayHero" Style="{StaticResource HavenCardStyle}"
-                            Padding="0" MinHeight="210" MaxHeight="280"
+                            Padding="0" MinHeight="210" MaxHeight="300"
                             AutomationProperties.Name="Today overview">
                         <Grid>
                             <Border x:Name="TodayHeroFlatBackground" Background="{ThemeResource HavenSurface2Brush}"
                                     Visibility="Collapsed" />
                             <Image x:Name="TodayHeroImage" Stretch="UniformToFill" />
                             <Rectangle Fill="{ThemeResource HavenHeroOverlayBrush}" />
-                            <!-- Column 1 is reserved for the hero-level Needs
-                                 You count (spec 16.2's "far right if contrast
-                                 is guaranteed") once quick actions move into
-                                 the hero - Slice E, not this pass. -->
-                            <Grid Padding="24" ColumnSpacing="24">
+                            <!-- Quick actions and the Needs You count now live
+                                 in the hero itself (spec 16.3/16.2) - the hero
+                                 is the home page's launch point, not a banner
+                                 above separate sections. -->
+                            <Grid Padding="24" ColumnSpacing="16" RowSpacing="14">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <StackPanel Spacing="6" VerticalAlignment="Center" MaxWidth="640">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <StackPanel Grid.Row="0" Spacing="6" VerticalAlignment="Center" MaxWidth="640">
                                     <TextBlock Text="A clear place to begin" Style="{StaticResource HavenMetadataTextStyle}"
                                                Foreground="{ThemeResource HavenHeroForegroundBrush}" Opacity="0.85" />
                                     <TextBlock x:Name="TodayGreeting" Style="{StaticResource HavenDisplayTextStyle}" Text="Welcome"
@@ -227,6 +231,54 @@
                                                Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap"
                                                Foreground="{ThemeResource HavenHeroForegroundBrush}" Opacity="0.85" />
                                 </StackPanel>
+                                <!-- Needs You count (spec 16.2): far right,
+                                     only when count > 0 (spec 5.2 - never a
+                                     zero badge); opens the same review pane
+                                     as "Review all" / the pending banner. -->
+                                <Button Grid.Row="0" Grid.Column="1" x:Name="HeroNeedsYouButton"
+                                        Click="OnNeedsYouReviewAllClicked" VerticalAlignment="Top"
+                                        Visibility="Collapsed" Background="{ThemeResource HavenWarningTintBrush}"
+                                        BorderThickness="0" CornerRadius="10" Padding="10,6"
+                                        AutomationProperties.Name="Needs You count">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <TextBlock x:Name="HeroNeedsYouCountText" FontWeight="SemiBold"
+                                                   Foreground="{ThemeResource HavenWarningBrush}" />
+                                        <TextBlock Text="Needs You" Foreground="{ThemeResource HavenWarningBrush}" />
+                                    </StackPanel>
+                                </Button>
+                                <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                                            Orientation="Horizontal" Spacing="6">
+                                    <Button Click="OnQuickActionTaskClicked" Background="#26FFFFFF" BorderThickness="0" Padding="10,7" CornerRadius="8">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <SymbolIcon Symbol="Accept" Foreground="{ThemeResource HavenHeroForegroundBrush}" />
+                                            <TextBlock Text="New task" FontSize="12.5" Foreground="{ThemeResource HavenHeroForegroundBrush}" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Click="OnQuickActionProjectClicked" Background="#26FFFFFF" BorderThickness="0" Padding="10,7" CornerRadius="8">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <SymbolIcon Symbol="Folder" Foreground="{ThemeResource HavenHeroForegroundBrush}" />
+                                            <TextBlock Text="New project" FontSize="12.5" Foreground="{ThemeResource HavenHeroForegroundBrush}" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Click="OnQuickActionNoteClicked" Background="#26FFFFFF" BorderThickness="0" Padding="10,7" CornerRadius="8">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <SymbolIcon Symbol="Memo" Foreground="{ThemeResource HavenHeroForegroundBrush}" />
+                                            <TextBlock Text="Note" FontSize="12.5" Foreground="{ThemeResource HavenHeroForegroundBrush}" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Click="OnQuickActionFindClicked" Background="#26FFFFFF" BorderThickness="0" Padding="10,7" CornerRadius="8">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <SymbolIcon Symbol="Find" Foreground="{ThemeResource HavenHeroForegroundBrush}" />
+                                            <TextBlock Text="Find" FontSize="12.5" Foreground="{ThemeResource HavenHeroForegroundBrush}" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Click="OnQuickActionOpenClicked" Background="#26FFFFFF" BorderThickness="0" Padding="10,7" CornerRadius="8">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <SymbolIcon Symbol="World" Foreground="{ThemeResource HavenHeroForegroundBrush}" />
+                                            <TextBlock Text="Open" FontSize="12.5" Foreground="{ThemeResource HavenHeroForegroundBrush}" />
+                                        </StackPanel>
+                                    </Button>
+                                </StackPanel>
                             </Grid>
                         </Grid>
                     </Border>
@@ -236,49 +288,6 @@
                             <Button x:Name="TodayPendingButton" Content="Review" Click="OnTodayPendingClicked" VerticalAlignment="Center" />
                         </StackPanel>
                     </Border>
-                    <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Quick actions" />
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <Button Click="OnQuickActionTaskClicked" Background="Transparent" BorderBrush="Transparent" BorderThickness="0" Padding="10,8">
-                            <StackPanel Spacing="6">
-                                <Border Width="38" Height="38" CornerRadius="10" Background="{ThemeResource HavenAccentTintBrush}">
-                                    <SymbolIcon Symbol="Accept" Foreground="{ThemeResource HavenAccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                </Border>
-                                <TextBlock Text="New task" FontSize="12" HorizontalAlignment="Center" Foreground="{ThemeResource HavenTextBrush}" />
-                            </StackPanel>
-                        </Button>
-                        <Button Click="OnQuickActionProjectClicked" Background="Transparent" BorderBrush="Transparent" BorderThickness="0" Padding="10,8">
-                            <StackPanel Spacing="6">
-                                <Border Width="38" Height="38" CornerRadius="10" Background="{ThemeResource HavenOrangeTintBrush}">
-                                    <SymbolIcon Symbol="Folder" Foreground="{ThemeResource HavenOrangeBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                </Border>
-                                <TextBlock Text="New project" FontSize="12" HorizontalAlignment="Center" Foreground="{ThemeResource HavenTextBrush}" />
-                            </StackPanel>
-                        </Button>
-                        <Button Click="OnQuickActionNoteClicked" Background="Transparent" BorderBrush="Transparent" BorderThickness="0" Padding="10,8">
-                            <StackPanel Spacing="6">
-                                <Border Width="38" Height="38" CornerRadius="10" Background="{ThemeResource HavenSuccessTintBrush}">
-                                    <SymbolIcon Symbol="Memo" Foreground="{ThemeResource HavenSuccessBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                </Border>
-                                <TextBlock Text="Add note" FontSize="12" HorizontalAlignment="Center" Foreground="{ThemeResource HavenTextBrush}" />
-                            </StackPanel>
-                        </Button>
-                        <Button Click="OnQuickActionFindClicked" Background="Transparent" BorderBrush="Transparent" BorderThickness="0" Padding="10,8">
-                            <StackPanel Spacing="6">
-                                <Border Width="38" Height="38" CornerRadius="10" Background="{ThemeResource HavenAccentTintBrush}">
-                                    <SymbolIcon Symbol="Find" Foreground="{ThemeResource HavenAccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                </Border>
-                                <TextBlock Text="Find file" FontSize="12" HorizontalAlignment="Center" Foreground="{ThemeResource HavenTextBrush}" />
-                            </StackPanel>
-                        </Button>
-                        <Button Click="OnQuickActionOpenClicked" Background="Transparent" BorderBrush="Transparent" BorderThickness="0" Padding="10,8">
-                            <StackPanel Spacing="6">
-                                <Border Width="38" Height="38" CornerRadius="10" Background="{ThemeResource HavenVioletTintBrush}">
-                                    <SymbolIcon Symbol="World" Foreground="{ThemeResource HavenVioletBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                </Border>
-                                <TextBlock Text="Open app" FontSize="12" HorizontalAlignment="Center" Foreground="{ThemeResource HavenTextBrush}" />
-                            </StackPanel>
-                        </Button>
-                    </StackPanel>
                     <TextBlock x:Name="TodayStatus" Style="{StaticResource HavenMetadataTextStyle}" />
 
                     <!-- Dense dashboard grid (Needs You spec 17): Focus beside
@@ -887,7 +896,11 @@
                     <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="About" />
                     <TextBlock x:Name="AboutVersionText" Style="{StaticResource HavenMetadataTextStyle}" />
                     <TextBlock x:Name="ProbeResultText" TextWrapping="Wrap" Style="{StaticResource HavenMetadataTextStyle}" />
-                    <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Diagnostics" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Diagnostics" VerticalAlignment="Center" />
+                        <Button Content="Export diagnostics…" Click="OnExportDiagnosticsClicked" VerticalAlignment="Center"
+                                ToolTipService.ToolTip="A support-safe snapshot (version, provider/model/scheduler state, recent receipts) - never secrets." />
+                    </StackPanel>
                     <StackPanel x:Name="DiagnosticsList" Spacing="4" />
                 </StackPanel>
             </StackPanel>

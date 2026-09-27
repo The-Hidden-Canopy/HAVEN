@@ -19,9 +19,9 @@ directly from the shared `DeviceRegistry` rather than a forked record.
 
 from __future__ import annotations
 
-from haven.discovery import DiscoveredDevice, DiscoveryProvider, enroll_device
+from haven.discovery import DiscoveredDevice, DiscoveryProvider, correlate, enroll_device
 from haven.discovery.capability_presets import CAPABILITY_PRESETS
-from haven.integrations.wifi import SsdpDiscoveryProvider
+from haven.integrations.wifi import MdnsDiscoveryProvider, SsdpDiscoveryProvider
 
 _ENROLL_JUSTIFICATION = "enrolled from the Discover scan"
 
@@ -29,14 +29,19 @@ _ENROLL_JUSTIFICATION = "enrolled from the Discover scan"
 def default_discovery_providers() -> tuple[DiscoveryProvider, ...]:
     """The real transports this installation can actually scan with.
 
-    SSDP is stdlib-only and always available. Bluetooth is included only
-    when a HAVEN-BT native library is actually installed -- today, on every
-    machine, since no platform backend has been built yet (see
-    `native/haven-bt/README.md`) -- so its absence degrades to "one fewer
-    transport", never a crash or a fabricated capability.
+    SSDP and mDNS/DNS-SD are both stdlib-only and always available. Bluetooth is included only
+    when a HAVEN-BT native library (`havenbt.dll`/`.so`/`.dylib`) is
+    actually loadable via `ctypes.util.find_library("havenbt")` -- on
+    Windows a real, hardware-verified WinRT backend exists in
+    `native/haven-bt/src/platform/windows/winrt_backend.cpp` (see
+    `native/haven-bt/README.md`), but nothing in the current build/install
+    pipeline compiles it and places the resulting DLL somewhere this lookup
+    finds it, so on a normal installed machine this still degrades to "one
+    fewer transport", never a crash or a fabricated capability. Linux/BlueZ
+    and macOS/CoreBluetooth backends are not built at all.
     """
 
-    providers: list[DiscoveryProvider] = [SsdpDiscoveryProvider()]
+    providers: list[DiscoveryProvider] = [SsdpDiscoveryProvider(), MdnsDiscoveryProvider()]
     try:
         from haven.integrations.bluetooth import BluetoothProvider, CtypesBluetoothLibrary
 
@@ -84,7 +89,8 @@ class DiscoveryService:
     def candidates(self) -> dict:
         """The most recent scan's results, without re-scanning."""
 
-        return {"ok": True, "candidates": [self._view(candidate) for candidate in self._last_scan]}
+        groups = correlate(self._last_scan)
+        return {"ok": True, "candidates": [self._view(candidate, groups) for candidate in self._last_scan]}
 
     def enroll(self, candidate_id: str, *, device_type: str, room: str | None = None) -> dict:
         if not self._director.has_declared_owner:
@@ -116,7 +122,8 @@ class DiscoveryService:
     def _lookup_candidate(self, candidate_id: str) -> DiscoveredDevice | None:
         return next((item for item in self._last_scan if item.candidate_id == candidate_id), None)
 
-    def _view(self, candidate: DiscoveredDevice) -> dict:
+    def _view(self, candidate: DiscoveredDevice, groups: dict | None = None) -> dict:
+        group = (groups if groups is not None else correlate(self._last_scan)).get(candidate.candidate_id)
         return {
             "candidate_id": candidate.candidate_id,
             "provider_id": candidate.provider_id,
@@ -125,6 +132,12 @@ class DiscoveryService:
             "suggested_room": candidate.suggested_room,
             "signal_strength": candidate.signal_strength,
             "discovered_at": candidate.discovered_at.isoformat(),
+            # Which other candidate ids (if any) this scan believes name the
+            # same physical device, per haven.discovery.correlation -- a
+            # native Discover view can group these instead of rendering
+            # unrelated-looking duplicate rows (spec §4.4). Evidence, not a
+            # merge: every id here is still its own full candidate.
+            "correlated_with": tuple(cid for cid in (group.candidate_ids if group else ()) if cid != candidate.candidate_id),
             "enrolled": self._director.registry.is_registered(candidate.candidate_id),
             "supported": candidate.suggested_device_type in CAPABILITY_PRESETS,
         }

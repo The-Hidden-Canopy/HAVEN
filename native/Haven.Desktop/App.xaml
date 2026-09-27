@@ -65,17 +65,23 @@
             <SolidColorBrush x:Key="HavenWarningTintBrush" Color="{ThemeResource HavenWarningTintColor}" />
             <SolidColorBrush x:Key="HavenDangerTintBrush" Color="{ThemeResource HavenDangerTintColor}" />
 
-            <!-- Temporal hero overlay (Needs You spec 16.2): a left-to-right
-                 scrim, strongest under the greeting/date text and fading
-                 into the image on the right, so any of the six bundled
-                 daypart images stays text-safe without a separate opaque
-                 card. Static for now (theme-tinted overlay variants per
-                 spec 14 are a later pass); dark-scrim/light-foreground
-                 reads acceptably against every current daypart asset. -->
+            <!-- Temporal hero overlay (Needs You spec 16.2, 14): a
+                 left-to-right scrim, strongest under the greeting/date text
+                 and fading into the image on the right, so any of the six
+                 bundled daypart images stays text-safe without a separate
+                 opaque card. `HeroOverlayTintColor`/`HeroOverlayTintColorFade`
+                 are theme tokens (defined per color theme in Themes/*.xaml,
+                 spec 14's table) so ThemeService swapping the merged
+                 dictionary retints this automatically, no code-behind
+                 theme-change handling needed. Appearance (light/dark) is
+                 intentionally NOT a second axis here yet: the hero keeps a
+                 dark scrim + light foreground regardless of app appearance
+                 (spec 14.1's light-mode "brighter scrim or light text card"
+                 alternative is not implemented). -->
             <LinearGradientBrush x:Key="HavenHeroOverlayBrush" StartPoint="0,0" EndPoint="1,0">
-                <GradientStop Color="#CC0B0B14" Offset="0.0" />
-                <GradientStop Color="#8F0B0B14" Offset="0.5" />
-                <GradientStop Color="#000B0B14" Offset="0.9" />
+                <GradientStop Color="{ThemeResource HeroOverlayTintColor}" Offset="0.0" />
+                <GradientStop Color="{ThemeResource HeroOverlayTintColorFade}" Offset="0.5" />
+                <GradientStop Color="#00000000" Offset="0.9" />
             </LinearGradientBrush>
             <SolidColorBrush x:Key="HavenHeroForegroundBrush" Color="#FFFFFFFF" />
 

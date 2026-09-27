@@ -2,14 +2,18 @@
 
 This binds the exact C functions and structures declared in
 `native/haven-bt/include/haven_bt.h`. No native library ships with this
-Python package: `CtypesBluetoothLibrary.load()` opens whatever
-`havenbt`/`libhavenbt` is installed on the host, and there is currently
-nothing to find, because no platform backend has been built (see
-`native/haven-bt/README.md`). Every other piece of code in this module is
-real and tested by mocking `ctypes.CDLL` -- the same pattern
-`test_home_assistant_client.py` uses for `urlopen` -- which proves the
-argument marshaling and calling convention are correct without requiring a
-compiled library to exist.
+Python package or is built as part of the normal install/CI pipeline --
+`CtypesBluetoothLibrary.load()` opens whatever `havenbt`/`libhavenbt` it can
+find. A real, hardware-verified Windows/WinRT backend exists
+(`native/haven-bt/src/platform/windows/winrt_backend.cpp`, see
+`native/haven-bt/README.md`), but nothing currently compiles it and places
+the DLL on this process's library search path automatically, so on a normal
+installed machine `load()` still finds nothing -- not because the backend
+doesn't exist, but because it hasn't been wired into packaging yet. Every
+other piece of code in this module is real and tested by mocking
+`ctypes.CDLL` -- the same pattern `test_home_assistant_client.py` uses for
+`urlopen` -- which proves the argument marshaling and calling convention are
+correct without requiring a compiled library to exist.
 """
 
 from __future__ import annotations
@@ -17,6 +21,31 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import platform
+from pathlib import Path
+
+# `native/haven-bt/build_windows.cmd` defaults to this exact filename.
+# Checked only as a last resort after `ctypes.util.find_library` -- a real
+# system install belongs on the actual library search path, this is purely
+# "a developer just ran the build script locally" convenience. Deliberately
+# excludes the fixture build (`havenbt_fixture.dll`): that is a simulated
+# device, and silently treating it as a real backend would mean
+# `default_discovery_providers()` could report a fabricated device as real
+# hardware -- exactly the "discovery overreach" anti-pattern this repo's own
+# engineering plan calls out.
+_DEV_BUILD_CANDIDATES = ("havenbt_winrt.dll",)
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _find_dev_build() -> str | None:
+    if platform.system() != "Windows":
+        return None
+    build_dir = _REPO_ROOT / "native" / "haven-bt" / "build"
+    for name in _DEV_BUILD_CANDIDATES:
+        candidate = build_dir / name
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
 
 HB_MAX_NAME_LEN = 64
 HB_MAX_UUID_LEN = 37
@@ -130,11 +159,14 @@ class CtypesBluetoothLibrary:
 
     @classmethod
     def load(cls, path: str | None = None) -> "CtypesBluetoothLibrary":
-        resolved = path or ctypes.util.find_library("havenbt")
+        resolved = path or ctypes.util.find_library("havenbt") or _find_dev_build()
         if not resolved:
             raise FileNotFoundError(
                 "could not locate a HAVEN-BT native library ('havenbt'); "
-                "no platform backend has been built yet -- see native/haven-bt/README.md"
+                "no platform backend is on this process's library search path -- "
+                "see native/haven-bt/README.md (a real Windows backend exists and "
+                "is hardware-verified, but nothing currently builds/installs it "
+                "automatically)"
             )
         lib = ctypes.CDLL(resolved)
         _configure_prototypes(lib)

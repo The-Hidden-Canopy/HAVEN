@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
 
-from haven.providers.plugin import ProviderConfigField, ProviderManifest
+from haven.core.consequence import ConsequenceClass
+from haven.providers.plugin import ProviderConfigField, ProviderManifest, ProviderOperationalProfile
 from haven.web.demo import DemoDirector
 from haven.web.provider_install import find_installed_provider, load_installed_provider_config, save_installed_provider
 from haven.web.setup_config import SetupConfigStore
@@ -44,6 +45,37 @@ class FakeHuePluginForSetupServiceTest:
 
 
 FAKE_HUE_PLUGIN = FakeHuePluginForSetupServiceTest()
+
+
+class FakeCommsPluginWithOperationalProfile:
+    """A fixture provider that actually declares §5.2's operational
+    metadata, unlike `FakeHuePluginForSetupServiceTest` (which -- like most
+    providers written before this profile existed -- relies entirely on
+    the all-conservative defaults)."""
+
+    def describe(self) -> ProviderManifest:
+        return ProviderManifest(
+            provider_id="fake_mail",
+            kind="communications",
+            capabilities=frozenset({"email.read", "email.send"}),
+            display_name="Fake Mail",
+            description="test fixture",
+            operational=ProviderOperationalProfile(
+                observation=True,
+                read=True,
+                mutation=True,
+                required_credential_scopes=("mail.read", "mail.send"),
+                destructive_action_classes=(ConsequenceClass.REVERSIBLE_EXTERNAL,),
+                offline_behavior="queues outbound mail locally until reachable again",
+                refresh_strategy="poll:60s",
+            ),
+        )
+
+    def build(self, *, config):
+        return object()
+
+
+FAKE_COMMS_PLUGIN = FakeCommsPluginWithOperationalProfile()
 
 
 class _BrokenPlugin:
@@ -87,6 +119,42 @@ def test_list_provider_packages_shows_a_discovered_but_not_yet_installed_package
     assert row["installed"] is False
     assert row["enabled"] is False
     assert row["active"] is False
+
+
+def test_list_provider_packages_defaults_operational_profile_conservatively(monkeypatch):
+    ep = metadata.EntryPoint(name="philips_hue", value=f"{__name__}:FAKE_HUE_PLUGIN", group="haven.providers")
+    _patch_entry_points(monkeypatch, ep)
+    with tempfile.TemporaryDirectory() as tmp:
+        service = _service(Path(tmp))
+        result = service.list_provider_packages()
+    operational = result["providers"][0]["manifest"]["operational"]
+    assert operational == {
+        "discovery": False,
+        "observation": False,
+        "read": False,
+        "mutation": False,
+        "webhook_push": False,
+        "required_credential_scopes": [],
+        "destructive_action_classes": [],
+        "offline_behavior": None,
+        "refresh_strategy": None,
+    }
+
+
+def test_list_provider_packages_surfaces_a_declared_operational_profile(monkeypatch):
+    ep = metadata.EntryPoint(name="fake_mail", value=f"{__name__}:FAKE_COMMS_PLUGIN", group="haven.providers")
+    _patch_entry_points(monkeypatch, ep)
+    with tempfile.TemporaryDirectory() as tmp:
+        service = _service(Path(tmp))
+        result = service.list_provider_packages()
+    operational = result["providers"][0]["manifest"]["operational"]
+    assert operational["observation"] is True
+    assert operational["read"] is True
+    assert operational["mutation"] is True
+    assert operational["required_credential_scopes"] == ["mail.read", "mail.send"]
+    assert operational["destructive_action_classes"] == ["reversible_external"]
+    assert operational["offline_behavior"] == "queues outbound mail locally until reachable again"
+    assert operational["refresh_strategy"] == "poll:60s"
 
 
 def test_list_provider_packages_reports_a_broken_package_without_crashing(monkeypatch):

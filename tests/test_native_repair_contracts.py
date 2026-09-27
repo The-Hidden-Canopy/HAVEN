@@ -1,8 +1,13 @@
 """Source-level contracts for the native repair pass.
 
-The repository does not include a runnable .NET/WinUI toolchain in this
+The repository does not include a runnable .NET/WinUI toolchain in every
 environment, so these checks protect the high-risk lifecycle and Today
-contracts alongside the Python integration tests.
+contracts alongside the Python integration tests even where `dotnet` is
+unavailable. Where it *is* available, `native/Haven.Desktop.Tests` (xunit)
+now additionally exercises the reconnect/stall/shutdown behavior these
+checks only grep for -- real named pipes, real timing, real assertions
+against `EventClientCoordinator` -- so these stay as a fast, always-on
+floor rather than the only net.
 """
 
 from __future__ import annotations
@@ -12,10 +17,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE = ROOT / "native" / "Haven.Desktop"
+CORE_CLIENT = ROOT / "native" / "Haven.Core.Client"
 
 
 def test_event_client_suppresses_intentional_disconnect_and_exposes_stall_state():
-    text = (NATIVE / "Services" / "HavenEventClient.cs").read_text(encoding="utf-8")
+    text = (CORE_CLIENT / "HavenEventClient.cs").read_text(encoding="utf-8")
     assert "public bool IsStalled" in text
     assert "public DateTime? LastFrameUtc" in text
     assert "if (!cancellationToken.IsCancellationRequested)" in text
@@ -23,14 +29,19 @@ def test_event_client_suppresses_intentional_disconnect_and_exposes_stall_state(
     assert "if (!IsConnected)" in text
 
 
-def test_main_window_owns_event_reconnect_and_shutdown_lifecycle():
+def test_event_reconnect_and_shutdown_lifecycle_is_owned_by_the_coordinator():
+    # Pipe-lifecycle coordination (lock, backoff, dispose-and-replace) was
+    # extracted out of MainWindow.Events.cs into EventClientCoordinator
+    # (native/Haven.Core.Client) specifically so it could be unit-tested
+    # without a WinUI host -- see native/Haven.Desktop.Tests.
+    coordinator = (CORE_CLIENT / "EventClientCoordinator.cs").read_text(encoding="utf-8")
     events = (NATIVE / "MainWindow.Events.cs").read_text(encoding="utf-8")
     window = (NATIVE / "MainWindow.xaml.cs").read_text(encoding="utf-8")
     connection = (NATIVE / "Services" / "ConnectionService.cs").read_text(encoding="utf-8")
-    assert "private readonly SemaphoreSlim _eventLifecycleLock" in events
+    assert "private readonly SemaphoreSlim _lifecycleLock" in coordinator
+    assert "await previous.DisposeAsync();" in coordinator
     assert "HeartbeatMissed" in events
     assert "RequestEventClientReconnect();" in events
-    assert "await previous.DisposeAsync();" in events
     assert "_ = StopEventClientAsync();" in window
     assert "_ = StopCoreClientAsync();" in window
     assert "_stopCts.Cancel();" in connection
