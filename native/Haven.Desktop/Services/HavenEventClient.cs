@@ -63,6 +63,17 @@ public sealed class HavenEventClient : IAsyncDisposable
 
     public bool IsConnected => _pipe is { IsConnected: true };
 
+    public bool IsStalled => Volatile.Read(ref _stalledNotified) != 0;
+
+    public DateTime? LastFrameUtc
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _lastFrameUtcTicks);
+            return ticks == 0 ? null : new DateTime(ticks, DateTimeKind.Utc);
+        }
+    }
+
     public async Task ConnectAsync(CancellationToken cancellationToken = default)
     {
         if (_pipe is { IsConnected: true })
@@ -71,42 +82,54 @@ public sealed class HavenEventClient : IAsyncDisposable
         }
         await DisposePipeAsync();
         var pipe = new NamedPipeClientStream(".", _pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        await pipe.ConnectAsync(5000, cancellationToken);
-        _pipe = pipe;
-        Interlocked.Exchange(ref _lastFrameUtcTicks, DateTime.UtcNow.Ticks);
-        Interlocked.Exchange(ref _stalledNotified, 0);
-
-        var requestId = Guid.NewGuid().ToString("N");
-        var request = JsonSerializer.SerializeToUtf8Bytes(
-            new
-            {
-                version = ProtocolVersion,
-                kind = "request",
-                request_id = requestId,
-                method = "host.authenticate",
-                @params = new { token = _authToken },
-            },
-            _json);
-        var frame = new byte[4 + request.Length];
-        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(0, 4), (uint)request.Length);
-        request.CopyTo(frame.AsSpan(4));
-        await pipe.WriteAsync(frame, cancellationToken);
-        await pipe.FlushAsync(cancellationToken);
-        using (var authResponse = await ReadDocumentAsync(cancellationToken))
+        try
         {
-            var root = authResponse.RootElement;
-            if (!root.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
-            {
-                var error = root.TryGetProperty("error", out var errorValue)
-                    ? errorValue.GetString()
-                    : "HAVEN Core rejected the events-pipe authentication.";
-                throw new InvalidOperationException(error);
-            }
-        }
+            await pipe.ConnectAsync(5000, cancellationToken);
+            _pipe = pipe;
+            Interlocked.Exchange(ref _lastFrameUtcTicks, DateTime.UtcNow.Ticks);
+            Interlocked.Exchange(ref _stalledNotified, 0);
 
-        _readLoopCts = new CancellationTokenSource();
-        _readLoop = Task.Run(() => ReadLoopAsync(_readLoopCts.Token));
-        _watchdog ??= new Timer(_ => WatchdogTick(), null, WatchdogInterval, WatchdogInterval);
+            var requestId = Guid.NewGuid().ToString("N");
+            var request = JsonSerializer.SerializeToUtf8Bytes(
+                new
+                {
+                    version = ProtocolVersion,
+                    kind = "request",
+                    request_id = requestId,
+                    method = "host.authenticate",
+                    @params = new { token = _authToken },
+                },
+                _json);
+            var frame = new byte[4 + request.Length];
+            BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(0, 4), (uint)request.Length);
+            request.CopyTo(frame.AsSpan(4));
+            await pipe.WriteAsync(frame, cancellationToken);
+            await pipe.FlushAsync(cancellationToken);
+            using (var authResponse = await ReadDocumentAsync(cancellationToken))
+            {
+                var root = authResponse.RootElement;
+                if (!root.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
+                {
+                    var error = root.TryGetProperty("error", out var errorValue)
+                        ? errorValue.GetString()
+                        : "HAVEN Core rejected the events-pipe authentication.";
+                    throw new InvalidOperationException(error);
+                }
+            }
+
+            _readLoopCts = new CancellationTokenSource();
+            _readLoop = Task.Run(() => ReadLoopAsync(_readLoopCts.Token));
+            _watchdog ??= new Timer(_ => WatchdogTick(), null, WatchdogInterval, WatchdogInterval);
+        }
+        catch
+        {
+            if (ReferenceEquals(_pipe, pipe))
+            {
+                _pipe = null;
+            }
+            await pipe.DisposeAsync();
+            throw;
+        }
     }
 
     private async Task ReadLoopAsync(CancellationToken cancellationToken)
@@ -147,12 +170,19 @@ public sealed class HavenEventClient : IAsyncDisposable
         }
         finally
         {
-            ConnectionLost?.Invoke();
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                ConnectionLost?.Invoke();
+            }
         }
     }
 
     private void WatchdogTick()
     {
+        if (!IsConnected)
+        {
+            return;
+        }
         var last = Interlocked.Read(ref _lastFrameUtcTicks);
         if (last == 0 || DateTime.UtcNow.Ticks - last < StalledThreshold.Ticks)
         {

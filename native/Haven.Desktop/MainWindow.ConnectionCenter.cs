@@ -87,12 +87,12 @@ public sealed partial class MainWindow
 
         section.Children.Add(ConnectionChannelRow(
             "Live updates (events)",
-            _eventClient is { IsConnected: true } ? "Connected" : "Not connected",
-            _eventClient is { IsConnected: true },
+            EventChannelStatusText(),
+            EventChannelIsHealthy(),
             "Reconnect",
             async () =>
             {
-                EnsureEventClientAsync();
+                RequestEventClientReconnect();
                 await Task.CompletedTask;
             }));
 
@@ -118,6 +118,23 @@ public sealed partial class MainWindow
     }
 
     private bool RpcChannelIsHealthy() => _connection?.State == ConnectionService.StateConnected;
+
+    private string EventChannelStatusText()
+    {
+        if (_eventClient is { IsConnected: true, IsStalled: true })
+        {
+            return _eventClient.LastFrameUtc is { } last
+                ? $"Stalled (last frame {last:HH:mm:ss} UTC)"
+                : "Stalled (no frame received)";
+        }
+        if (_eventClient is { IsConnected: true })
+        {
+            return "Connected";
+        }
+        return _eventReconnectTask is { IsCompleted: false } ? "Reconnecting…" : "Not connected";
+    }
+
+    private bool EventChannelIsHealthy() => _eventClient is { IsConnected: true, IsStalled: false };
 
     private Border ConnectionChannelRow(string name, string status, bool healthy, string actionLabel, Func<Task> action)
     {

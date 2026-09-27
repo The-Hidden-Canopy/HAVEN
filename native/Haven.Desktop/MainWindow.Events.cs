@@ -16,6 +16,10 @@ public sealed partial class MainWindow
     private readonly HashSet<string> _dirtyDomains = new();
     private bool _eventRefreshInFlight;
     private bool _eventRefreshRequested;
+    private readonly SemaphoreSlim _eventLifecycleLock = new(1, 1);
+    private readonly CancellationTokenSource _eventLifecycleCts = new();
+    private Task? _eventReconnectTask;
+    private bool _eventStopping;
 
     private static readonly Dictionary<string, string[]> EventDomains = new()
     {
@@ -54,42 +58,171 @@ public sealed partial class MainWindow
 
     private void EnsureEventClientAsync()
     {
-        if (_eventClient is { IsConnected: true }
+        if (_eventStopping
             || string.IsNullOrWhiteSpace(_connectionPipeName)
-            || string.IsNullOrWhiteSpace(_connectionToken))
+            || string.IsNullOrWhiteSpace(_connectionToken)
+            || _connection is not { IsOnline: true })
         {
             return;
         }
-        var client = new HavenEventClient(_connectionPipeName, _connectionToken!)
+        if (_eventClient is { IsConnected: true, IsStalled: false })
         {
-            EventReceived = (eventName, _payload) =>
-                DispatcherQueue.TryEnqueue(() => OnDomainEvent(eventName)),
-            ConnectionLost = () => DispatcherQueue.TryEnqueue(async () => await OnEventConnectionLostAsync()),
-        };
-        _eventClient = client;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await client.ConnectAsync();
-            }
-            catch (Exception)
-            {
-                // The RPC channel's liveness probe reports core health; the
-                // events channel reconnects quietly on the next reconcile.
-            }
-        });
+            return;
+        }
+        RequestEventClientReconnect();
     }
 
-    private async Task OnEventConnectionLostAsync()
+    private void RequestEventClientReconnect()
     {
-        if (_eventClient is null || _connection is not { IsOnline: true })
+        if (_eventStopping || _connection is not { IsOnline: true })
         {
             return;
         }
         MarkAllDomainsDirty();
-        await Task.Delay(2000);
-        EnsureEventClientAsync();
+        if (_eventReconnectTask is { IsCompleted: false })
+        {
+            return;
+        }
+        _eventReconnectTask = ReconnectEventClientAsync();
+    }
+
+    private async Task ReconnectEventClientAsync()
+    {
+        var retryDelay = TimeSpan.FromSeconds(2);
+        while (!_eventStopping && _connection is { IsOnline: true })
+        {
+            try
+            {
+                await _eventLifecycleLock.WaitAsync(_eventLifecycleCts.Token);
+                try
+                {
+                    if (_eventStopping || _connection is not { IsOnline: true })
+                    {
+                        return;
+                    }
+                    if (_eventClient is { IsConnected: true, IsStalled: false })
+                    {
+                        return;
+                    }
+
+                    var previous = _eventClient;
+                    _eventClient = null;
+                    if (previous is not null)
+                    {
+                        await previous.DisposeAsync();
+                    }
+
+                    var client = new HavenEventClient(_connectionPipeName!, _connectionToken!);
+                    client.EventReceived = (eventName, _payload) =>
+                        DispatcherQueue.TryEnqueue(() => OnDomainEvent(eventName));
+                    client.HeartbeatMissed = () => DispatcherQueue.TryEnqueue(
+                        () => OnEventHeartbeatMissed(client));
+                    client.ConnectionLost = () => DispatcherQueue.TryEnqueue(
+                        () => _ = OnEventConnectionLostAsync(client));
+                    _eventClient = client;
+                    try
+                    {
+                        await client.ConnectAsync(_eventLifecycleCts.Token);
+                        return;
+                    }
+                    catch (Exception)
+                    {
+                        if (ReferenceEquals(_eventClient, client))
+                        {
+                            _eventClient = null;
+                        }
+                        await client.DisposeAsync();
+                    }
+                }
+                finally
+                {
+                    _eventLifecycleLock.Release();
+                }
+            }
+            catch (OperationCanceledException) when (_eventLifecycleCts.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception)
+            {
+                // A failed events channel must not take down the RPC channel.
+            }
+
+            try
+            {
+                await Task.Delay(retryDelay, _eventLifecycleCts.Token);
+            }
+            catch (OperationCanceledException) when (_eventLifecycleCts.IsCancellationRequested)
+            {
+                return;
+            }
+            retryDelay = TimeSpan.FromMilliseconds(Math.Min(retryDelay.TotalMilliseconds * 2, 10000));
+        }
+    }
+
+    private void OnEventHeartbeatMissed(HavenEventClient source)
+    {
+        if (!ReferenceEquals(_eventClient, source) || _eventStopping)
+        {
+            return;
+        }
+        MarkAllDomainsDirty();
+        RequestEventClientReconnect();
+    }
+
+    private async Task OnEventConnectionLostAsync(HavenEventClient source)
+    {
+        if (!ReferenceEquals(_eventClient, source)
+            || _eventStopping
+            || _connection is not { IsOnline: true })
+        {
+            return;
+        }
+        MarkAllDomainsDirty();
+        try
+        {
+            await Task.Delay(2000, _eventLifecycleCts.Token);
+        }
+        catch (OperationCanceledException) when (_eventLifecycleCts.IsCancellationRequested)
+        {
+            return;
+        }
+        RequestEventClientReconnect();
+    }
+
+    private async Task StopEventClientAsync()
+    {
+        if (_eventStopping)
+        {
+            return;
+        }
+        _eventStopping = true;
+        _eventLifecycleCts.Cancel();
+        try
+        {
+            if (_eventReconnectTask is not null)
+            {
+                await _eventReconnectTask;
+            }
+        }
+        catch (Exception)
+        {
+            // Shutdown is best-effort; the process is exiting.
+        }
+        await _eventLifecycleLock.WaitAsync();
+        try
+        {
+            var client = _eventClient;
+            _eventClient = null;
+            if (client is not null)
+            {
+                await client.DisposeAsync();
+            }
+        }
+        finally
+        {
+            _eventLifecycleLock.Release();
+        }
     }
 
     private void OnDomainEvent(string eventName)
@@ -142,6 +275,9 @@ public sealed partial class MainWindow
         {
             try
             {
+                // A short debounce keeps a burst of coalesced domain events
+                // from repainting the current page once per provider frame.
+                await Task.Delay(150);
                 var completion = new TaskCompletionSource();
                 if (!DispatcherQueue.TryEnqueue(() =>
                 {

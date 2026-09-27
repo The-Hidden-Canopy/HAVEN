@@ -816,6 +816,9 @@ public sealed class HavenCoreClient : IAsyncDisposable
     public Task<JsonElement> GetTodayCardsAsync(CancellationToken cancellationToken = default) =>
         RequestResultAsync("today.cards", new { }, cancellationToken);
 
+    public Task<JsonElement> GetTodaySnapshotAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("today.snapshot", new { }, cancellationToken);
+
     public Task<JsonElement> DismissTodayCardAsync(
         string cardId,
         CancellationToken cancellationToken = default) =>
