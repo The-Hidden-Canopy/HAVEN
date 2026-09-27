@@ -37,7 +37,13 @@ public sealed partial class MainWindow : Window
         RootGrid().SizeChanged += OnRootSizeChanged;
         // The MCP listener dies with the window: stop it cleanly so the
         // loopback port is released before process exit.
-        Closed += (_, _) => _ = (_mcpHost?.StopAsync() ?? Task.CompletedTask);
+        Closed += (_, _) =>
+        {
+            _connection?.Stop();
+            _ = StopEventClientAsync();
+            _ = StopCoreClientAsync();
+            _ = (_mcpHost?.StopAsync() ?? Task.CompletedTask);
+        };
         SelectHomeTab("rooms");
         SelectModelsTab("local");
         SelectNavigation("today");
@@ -58,6 +64,16 @@ public sealed partial class MainWindow : Window
     }
 
     private Grid RootGrid() => (Grid)Content;
+
+    private async Task StopCoreClientAsync()
+    {
+        var client = _client;
+        _client = null;
+        if (client is not null)
+        {
+            await client.DisposeAsync();
+        }
+    }
 
     public void ApplyTitleBarColors()
     {

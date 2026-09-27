@@ -181,13 +181,32 @@
                     <TextBlock x:Name="PageDescription" Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap" />
                 </StackPanel>
 
-                <!-- Today (spec 24/25): greeting + quick actions; the real
-                     dashboard lands with milestone G. -->
+                <!-- Today (spec 24/25): temporal hero + evidence-backed regions. -->
                 <StackPanel x:Name="TodayPanel" Spacing="16">
-                    <StackPanel Spacing="2">
-                        <TextBlock x:Name="TodayGreeting" Style="{StaticResource HavenDisplayTextStyle}" Text="Welcome" />
-                        <TextBlock x:Name="TodayDate" Style="{StaticResource HavenMetadataTextStyle}" />
-                    </StackPanel>
+                    <Border x:Name="TodayHero" Style="{StaticResource HavenCardStyle}"
+                            Padding="24" AutomationProperties.Name="Today temporal overview">
+                        <Grid ColumnSpacing="24">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="6" VerticalAlignment="Center">
+                                <TextBlock Text="A clear place to begin" Style="{StaticResource HavenMetadataTextStyle}" />
+                                <TextBlock x:Name="TodayGreeting" Style="{StaticResource HavenDisplayTextStyle}" Text="Welcome" />
+                                <TextBlock x:Name="TodayDate" Style="{StaticResource HavenBodyTextStyle}" />
+                                <TextBlock x:Name="TodayHeroContext" Text="Your most important signals, in one calm view."
+                                           Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <Border Grid.Column="1" Width="88" Height="88" CornerRadius="44"
+                                    Background="{ThemeResource HavenAccentTintBrush}"
+                                    BorderBrush="{ThemeResource HavenAccentBrush}" BorderThickness="1"
+                                    AutomationProperties.Name="Time context">
+                                <SymbolIcon Symbol="Clock" Width="34" Height="34"
+                                            Foreground="{ThemeResource HavenAccentBrush}"
+                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                        </Grid>
+                    </Border>
                     <Border x:Name="TodayPendingBanner" Style="{StaticResource HavenCardStyle}" Visibility="Collapsed">
                         <StackPanel Orientation="Horizontal" Spacing="12">
                             <TextBlock x:Name="TodayPendingText" VerticalAlignment="Center" Style="{StaticResource HavenBodyTextStyle}" />

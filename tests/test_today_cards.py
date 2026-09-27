@@ -124,3 +124,26 @@ def test_dismissal_hides_cards_and_persists(server, tmp_path) -> None:
 def test_no_signals_no_fabricated_cards(server) -> None:
     cards = _dispatch(server, "today.cards", {})["result"]["cards"]
     assert cards == []
+
+
+def test_snapshot_aggregates_regions_and_preserves_partial_contract(server) -> None:
+    result = _dispatch(server, "today.snapshot", {})["result"]
+    snapshot = result["snapshot"]
+    assert snapshot["generated_at"]
+    assert set(snapshot["regions"]) == {"attention", "tasks", "files", "activity", "pending", "replies"}
+    assert snapshot["regions"]["attention"]["ok"] is True
+    assert snapshot["regions"]["tasks"]["ok"] is True
+    assert snapshot["regions"]["replies"]["available"] is False
+    assert isinstance(snapshot["errors"], list)
+
+
+def test_snapshot_keeps_other_regions_when_activity_provider_fails(server, monkeypatch) -> None:
+    def fail_activity():
+        raise RuntimeError("provider offline")
+
+    monkeypatch.setattr(server.windows_provider, "activity", fail_activity)
+    snapshot = _dispatch(server, "today.snapshot", {})["result"]["snapshot"]
+    assert snapshot["regions"]["attention"]["ok"] is True
+    assert snapshot["regions"]["tasks"]["ok"] is True
+    assert snapshot["regions"]["activity"]["ok"] is False
+    assert {error["region"] for error in snapshot["errors"]} == {"activity"}

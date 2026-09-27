@@ -32,6 +32,7 @@ public sealed class ConnectionService
     private readonly Func<Task<HavenCoreClient>> _connectOnce;
     private readonly Action<string> _onStateChanged;
     private readonly Func<Task> _onReconciled;
+    private readonly CancellationTokenSource _stopCts = new();
     private int _attempt;
     private volatile bool _stopping;
     private CancellationTokenSource? _backoffCts;
@@ -66,8 +67,11 @@ public sealed class ConnectionService
 
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
+        using var runCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, _stopCts.Token);
+        var runToken = runCts.Token;
         SetState(StateConnecting);
-        while (!_stopping && !cancellationToken.IsCancellationRequested)
+        while (!_stopping && !runToken.IsCancellationRequested)
         {
             try
             {
@@ -82,14 +86,14 @@ public sealed class ConnectionService
                 {
                     // Reconcile failures demote to DEGRADED but keep the pipe.
                     SetState(StateDegraded);
-                    await WatchForFailureAsync(client, cancellationToken);
+                    await WatchForFailureAsync(client, runToken);
                     continue;
                 }
-                await WatchForFailureAsync(client, cancellationToken);
+                await WatchForFailureAsync(client, runToken);
             }
             catch (Exception)
             {
-                if (_stopping || cancellationToken.IsCancellationRequested)
+                if (_stopping || runToken.IsCancellationRequested)
                 {
                     break;
                 }
@@ -101,9 +105,11 @@ public sealed class ConnectionService
                 }
                 SetState(StateReconnecting);
                 _backoffCts = new CancellationTokenSource();
+                using var retryCts = CancellationTokenSource.CreateLinkedTokenSource(
+                    _backoffCts.Token, runToken);
                 try
                 {
-                    await Task.Delay(BackoffForAttempt(_attempt - 1), _backoffCts.Token);
+                    await Task.Delay(BackoffForAttempt(_attempt - 1), retryCts.Token);
                 }
                 catch (OperationCanceledException)
                 {
@@ -143,6 +149,8 @@ public sealed class ConnectionService
     public void Stop()
     {
         _stopping = true;
+        _stopCts.Cancel();
+        _backoffCts?.Cancel();
     }
 
     private void SetState(string state)
