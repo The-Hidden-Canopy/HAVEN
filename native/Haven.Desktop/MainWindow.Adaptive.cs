@@ -162,6 +162,9 @@ public sealed partial class MainWindow
                 ShowPage(_currentTag);
                 SplashOverlay.Visibility = Visibility.Collapsed;
                 EnsureEventClientAsync();
+                // The MCP endpoint rides the same core connection; ApplyAsync
+                // no-ops when disabled or already serving the configured port.
+                await EnsureMcpHostAsync();
             });
         _connectionTask = _connection.RunAsync();
     }

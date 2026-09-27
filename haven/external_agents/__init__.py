@@ -24,9 +24,12 @@ from .domain import (
 )
 from .errors import ExternalDenied
 from .gateway import ExternalAgentGateway, ExternalAgentService, PrincipalResolver, anonymous_external_principal
+from .reads import READ_TOOL_SCOPES, ExternalReadTools, WorldReader
 from .store import ExternalAgentStore
+from .transport import ACTION_TOOL_SCOPES, TOOL_SCOPES, TransportBridge, hash_credential
 
 __all__ = [
+    "ACTION_TOOL_SCOPES",
     "AdmittedRequest",
     "ExternalAgentConnection",
     "ExternalAgentGateway",
@@ -35,13 +38,19 @@ __all__ = [
     "ExternalDenied",
     "ExternalProvenance",
     "ExternalProvider",
+    "ExternalReadTools",
     "ExternalRequest",
     "ExternalScope",
     "MUTATING_SCOPES",
     "PrincipalBinding",
     "PrincipalResolver",
+    "READ_TOOL_SCOPES",
     "SCOPE_PRESETS",
+    "TOOL_SCOPES",
+    "TransportBridge",
     "UNBOUND_GRANTABLE_SCOPES",
+    "WorldReader",
     "anonymous_external_principal",
+    "hash_credential",
     "parse_scopes",
 ]

@@ -35,6 +35,9 @@ public sealed partial class MainWindow : Window
         };
         RootGrid().Loaded += OnLoaded;
         RootGrid().SizeChanged += OnRootSizeChanged;
+        // The MCP listener dies with the window: stop it cleanly so the
+        // loopback port is released before process exit.
+        Closed += (_, _) => _ = (_mcpHost?.StopAsync() ?? Task.CompletedTask);
         SelectHomeTab("rooms");
         SelectModelsTab("local");
         SelectNavigation("today");

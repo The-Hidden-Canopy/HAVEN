@@ -124,11 +124,14 @@ public sealed partial class MainWindow
         }
         providerBox.SelectedIndex = 0;
         var name = new TextBox { PlaceholderText = "e.g. Alexa+", MinWidth = 240 };
+        var credential = new PasswordBox { MinWidth = 240 };
         var fields = new StackPanel { Spacing = 8 };
         fields.Children.Add(new TextBlock { Text = "Provider" });
         fields.Children.Add(providerBox);
         fields.Children.Add(new TextBlock { Text = "Display name" });
         fields.Children.Add(name);
+        fields.Children.Add(new TextBlock { Text = "Bearer credential (optional — needed for the MCP endpoint)" });
+        fields.Children.Add(credential);
         var dialog = new ContentDialog
         {
             Title = "Add external agent connection",
@@ -144,7 +147,10 @@ public sealed partial class MainWindow
         try
         {
             var provider = providerBox.SelectedItem as string ?? ExternalAgentProviders[0];
-            var result = await _client.CreateExternalAgentConnectionAsync(provider, name.Text.Trim());
+            var result = await _client.CreateExternalAgentConnectionAsync(
+                provider,
+                name.Text.Trim(),
+                string.IsNullOrWhiteSpace(credential.Password) ? null : credential.Password.Trim());
             if (!ApplyExternalAgentResult(result, "connection"))
             {
                 return;
