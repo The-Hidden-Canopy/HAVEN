@@ -137,8 +137,19 @@
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <StackPanel x:Name="ProfileText" VerticalAlignment="Center">
-                        <TextBlock Text="Personal" FontSize="13" FontWeight="SemiBold"
-                                   Foreground="{ThemeResource HavenTextBrush}" />
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="Personal" FontSize="13" FontWeight="SemiBold"
+                                       Foreground="{ThemeResource HavenTextBrush}" />
+                            <!-- Shell-level Needs You badge (spec 8.3): visible from
+                                 every page, zero count removes it entirely, warning
+                                 (not accent) color, never animated. -->
+                            <Border x:Name="ShellNeedsYouBadge" CornerRadius="8" Padding="6,0" MinWidth="16"
+                                    Background="{ThemeResource HavenWarningTintBrush}" Visibility="Collapsed"
+                                    AutomationProperties.Name="Needs You count">
+                                <TextBlock x:Name="ShellNeedsYouBadgeText" FontSize="10.5" HorizontalAlignment="Center"
+                                           FontWeight="SemiBold" Foreground="{ThemeResource HavenWarningBrush}" />
+                            </Border>
+                        </StackPanel>
                         <Button x:Name="ConnectionCenterButton" Click="OnConnectionCenterClicked"
                                 Style="{StaticResource HavenQuietButtonStyle}"
                                 Padding="0" MinHeight="0" HorizontalContentAlignment="Left"
@@ -181,30 +192,42 @@
                     <TextBlock x:Name="PageDescription" Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap" />
                 </StackPanel>
 
-                <!-- Today (spec 24/25): temporal hero + evidence-backed regions. -->
+                <!-- Today (Needs You spec 11-16): image-backed temporal hero.
+                     The daypart image is decorative (spec 21.2 - the
+                     greeting/date already convey time context), so the
+                     AutomationProperties.Name lives on the hero border, not
+                     the image. High contrast swaps to a flat themed surface
+                     (spec 21.1) via TodayHeroFlatBackground. -->
                 <StackPanel x:Name="TodayPanel" Spacing="16">
                     <Border x:Name="TodayHero" Style="{StaticResource HavenCardStyle}"
-                            Padding="24" AutomationProperties.Name="Today temporal overview">
-                        <Grid ColumnSpacing="24">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Spacing="6" VerticalAlignment="Center">
-                                <TextBlock Text="A clear place to begin" Style="{StaticResource HavenMetadataTextStyle}" />
-                                <TextBlock x:Name="TodayGreeting" Style="{StaticResource HavenDisplayTextStyle}" Text="Welcome" />
-                                <TextBlock x:Name="TodayDate" Style="{StaticResource HavenBodyTextStyle}" />
-                                <TextBlock x:Name="TodayHeroContext" Text="Your most important signals, in one calm view."
-                                           Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap" />
-                            </StackPanel>
-                            <Border Grid.Column="1" Width="88" Height="88" CornerRadius="44"
-                                    Background="{ThemeResource HavenAccentTintBrush}"
-                                    BorderBrush="{ThemeResource HavenAccentBrush}" BorderThickness="1"
-                                    AutomationProperties.Name="Time context">
-                                <SymbolIcon Symbol="Clock" Width="34" Height="34"
-                                            Foreground="{ThemeResource HavenAccentBrush}"
-                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Border>
+                            Padding="0" MinHeight="210" MaxHeight="280"
+                            AutomationProperties.Name="Today overview">
+                        <Grid>
+                            <Border x:Name="TodayHeroFlatBackground" Background="{ThemeResource HavenSurface2Brush}"
+                                    Visibility="Collapsed" />
+                            <Image x:Name="TodayHeroImage" Stretch="UniformToFill" />
+                            <Rectangle Fill="{ThemeResource HavenHeroOverlayBrush}" />
+                            <!-- Column 1 is reserved for the hero-level Needs
+                                 You count (spec 16.2's "far right if contrast
+                                 is guaranteed") once quick actions move into
+                                 the hero - Slice E, not this pass. -->
+                            <Grid Padding="24" ColumnSpacing="24">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="6" VerticalAlignment="Center" MaxWidth="640">
+                                    <TextBlock Text="A clear place to begin" Style="{StaticResource HavenMetadataTextStyle}"
+                                               Foreground="{ThemeResource HavenHeroForegroundBrush}" Opacity="0.85" />
+                                    <TextBlock x:Name="TodayGreeting" Style="{StaticResource HavenDisplayTextStyle}" Text="Welcome"
+                                               Foreground="{ThemeResource HavenHeroForegroundBrush}" />
+                                    <TextBlock x:Name="TodayDate" Style="{StaticResource HavenBodyTextStyle}"
+                                               Foreground="{ThemeResource HavenHeroForegroundBrush}" />
+                                    <TextBlock x:Name="TodayHeroContext" Text="Your most important signals, in one calm view."
+                                               Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap"
+                                               Foreground="{ThemeResource HavenHeroForegroundBrush}" Opacity="0.85" />
+                                </StackPanel>
+                            </Grid>
                         </Grid>
                     </Border>
                     <Border x:Name="TodayPendingBanner" Style="{StaticResource HavenCardStyle}" Visibility="Collapsed">
@@ -258,12 +281,14 @@
                     </StackPanel>
                     <TextBlock x:Name="TodayStatus" Style="{StaticResource HavenMetadataTextStyle}" />
 
-                    <!-- Dense dashboard grid (spec 21): Focus/Upcoming on top,
-                         Tasks spanning two rows beside Recent files/Pending
-                         replies, Recent activity full-width beneath. Each
-                         region is a named host StackPanel inside a collapsible
-                         card - empty regions collapse rather than leaving a
-                         dead rectangle (see RenderTodayCards). -->
+                    <!-- Dense dashboard grid (Needs You spec 17): Focus beside
+                         Needs You (the two questions "what should I do" and
+                         "what is waiting on me"), Tasks beside Upcoming,
+                         Recent files beside Recent activity, Pending replies
+                         full-width beneath and only when evidence exists.
+                         Each region is a named host StackPanel inside a
+                         collapsible card - empty regions collapse rather
+                         than leaving a dead rectangle (see LoadTodaySnapshotAsync). -->
                     <Grid x:Name="TodayGrid" ColumnSpacing="16" RowSpacing="16">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -282,14 +307,23 @@
                                 <StackPanel x:Name="TodayFocusHost" Spacing="8" />
                             </StackPanel>
                         </Border>
-                        <Border x:Name="TodayUpcomingCard" Grid.Row="0" Grid.Column="1" Style="{StaticResource HavenCardStyle}">
+                        <Border x:Name="TodayNeedsYouCard" Grid.Row="0" Grid.Column="1" Style="{StaticResource HavenCardStyle}">
                             <StackPanel Spacing="8">
-                                <TextBlock Text="Upcoming" Style="{StaticResource HavenSectionTextStyle}" />
-                                <StackPanel x:Name="TodayUpcomingHost" Spacing="8" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="Needs You" Style="{StaticResource HavenSectionTextStyle}" />
+                                    <Border x:Name="TodayNeedsYouCountChip" CornerRadius="10" Padding="7,1"
+                                            Background="{ThemeResource HavenWarningTintBrush}" Visibility="Collapsed">
+                                        <TextBlock x:Name="TodayNeedsYouCountText" FontSize="11.5"
+                                                   FontWeight="SemiBold" Foreground="{ThemeResource HavenWarningBrush}" />
+                                    </Border>
+                                    <Button x:Name="TodayNeedsYouReviewAllButton" Content="Review all"
+                                            Click="OnNeedsYouReviewAllClicked" Style="{StaticResource HavenQuietButtonStyle}" />
+                                </StackPanel>
+                                <StackPanel x:Name="TodayNeedsYouHost" Spacing="8" />
                             </StackPanel>
                         </Border>
 
-                        <Border x:Name="TodayTasksCard" Grid.Row="1" Grid.RowSpan="2" Grid.Column="0" Style="{StaticResource HavenCardStyle}">
+                        <Border x:Name="TodayTasksCard" Grid.Row="1" Grid.Column="0" Style="{StaticResource HavenCardStyle}">
                             <StackPanel Spacing="8">
                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                     <TextBlock Text="Tasks" Style="{StaticResource HavenSectionTextStyle}" />
@@ -298,7 +332,14 @@
                                 <StackPanel x:Name="TodayTasksHost" Spacing="6" />
                             </StackPanel>
                         </Border>
-                        <Border x:Name="TodayFilesCard" Grid.Row="1" Grid.Column="1" Style="{StaticResource HavenCardStyle}">
+                        <Border x:Name="TodayUpcomingCard" Grid.Row="1" Grid.Column="1" Style="{StaticResource HavenCardStyle}">
+                            <StackPanel Spacing="8">
+                                <TextBlock Text="Upcoming" Style="{StaticResource HavenSectionTextStyle}" />
+                                <StackPanel x:Name="TodayUpcomingHost" Spacing="8" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border x:Name="TodayFilesCard" Grid.Row="2" Grid.Column="0" Style="{StaticResource HavenCardStyle}">
                             <StackPanel Spacing="8">
                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                     <TextBlock Text="Recent files" Style="{StaticResource HavenSectionTextStyle}" />
@@ -307,17 +348,22 @@
                                 <StackPanel x:Name="TodayFilesHost" Spacing="6" />
                             </StackPanel>
                         </Border>
-                        <Border x:Name="TodayRepliesCard" Grid.Row="2" Grid.Column="1" Style="{StaticResource HavenCardStyle}">
-                            <StackPanel Spacing="8">
-                                <TextBlock Text="Pending replies" Style="{StaticResource HavenSectionTextStyle}" />
-                                <StackPanel x:Name="TodayRepliesHost" Spacing="6" />
-                            </StackPanel>
-                        </Border>
-
-                        <Border x:Name="TodayActivityCard" Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource HavenCardStyle}">
+                        <Border x:Name="TodayActivityCard" Grid.Row="2" Grid.Column="1" Style="{StaticResource HavenCardStyle}">
                             <StackPanel Spacing="8">
                                 <TextBlock Text="Recent activity" Style="{StaticResource HavenSectionTextStyle}" />
                                 <StackPanel x:Name="TodayActivityHost" Spacing="6" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Collapsed by default (spec Appendix C): shown only
+                             when the `replies` region reports a connected
+                             evidence source, never to advertise the missing
+                             capability. -->
+                        <Border x:Name="TodayRepliesCard" Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+                                Style="{StaticResource HavenCardStyle}" Visibility="Collapsed">
+                            <StackPanel Spacing="8">
+                                <TextBlock Text="Pending replies" Style="{StaticResource HavenSectionTextStyle}" />
+                                <StackPanel x:Name="TodayRepliesHost" Spacing="6" />
                             </StackPanel>
                         </Border>
                     </Grid>
@@ -886,6 +932,39 @@
                 </StackPanel>
                 <TextBlock x:Name="ComposerStatus" Style="{StaticResource HavenMetadataTextStyle}" HorizontalAlignment="Center" />
             </StackPanel>
+        </Grid>
+
+        <!-- Needs You review pane (spec 8.2): a right-side overlay, not a
+             modal dialog, so Today stays visible behind it. First release is
+             Review-only (spec 9.2) - no inline approve/deny here; every item
+             still routes to its own governed surface. -->
+        <Grid x:Name="NeedsYouOverlay" Grid.RowSpan="3" Grid.ColumnSpan="3" Visibility="Collapsed"
+              Background="#66000000">
+            <Border HorizontalAlignment="Right" Width="400" Background="{ThemeResource HavenSurface1Brush}"
+                    BorderBrush="{ThemeResource HavenStrokeBrush}" BorderThickness="1,0,0,0">
+                <Grid Padding="20" RowSpacing="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="NeedsYouPaneTitle" Grid.Column="0" Text="Needs You"
+                                   Style="{StaticResource HavenSectionTextStyle}" VerticalAlignment="Center" />
+                        <Button Grid.Column="1" Content="Close" Click="OnNeedsYouCloseClicked"
+                                Style="{StaticResource HavenQuietButtonStyle}" />
+                    </Grid>
+                    <TextBlock x:Name="NeedsYouPaneStatus" Grid.Row="1" Style="{StaticResource HavenMetadataTextStyle}"
+                               TextWrapping="Wrap" />
+                    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="NeedsYouPaneHost" Spacing="10" />
+                    </ScrollViewer>
+                </Grid>
+            </Border>
         </Grid>
 
         <Grid x:Name="SetupOverlay" Grid.RowSpan="3" Grid.ColumnSpan="3" Visibility="Collapsed"
