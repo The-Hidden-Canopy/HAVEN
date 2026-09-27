@@ -65,6 +65,20 @@
             <SolidColorBrush x:Key="HavenWarningTintBrush" Color="{ThemeResource HavenWarningTintColor}" />
             <SolidColorBrush x:Key="HavenDangerTintBrush" Color="{ThemeResource HavenDangerTintColor}" />
 
+            <!-- Temporal hero overlay (Needs You spec 16.2): a left-to-right
+                 scrim, strongest under the greeting/date text and fading
+                 into the image on the right, so any of the six bundled
+                 daypart images stays text-safe without a separate opaque
+                 card. Static for now (theme-tinted overlay variants per
+                 spec 14 are a later pass); dark-scrim/light-foreground
+                 reads acceptably against every current daypart asset. -->
+            <LinearGradientBrush x:Key="HavenHeroOverlayBrush" StartPoint="0,0" EndPoint="1,0">
+                <GradientStop Color="#CC0B0B14" Offset="0.0" />
+                <GradientStop Color="#8F0B0B14" Offset="0.5" />
+                <GradientStop Color="#000B0B14" Offset="0.9" />
+            </LinearGradientBrush>
+            <SolidColorBrush x:Key="HavenHeroForegroundBrush" Color="#FFFFFFFF" />
+
             <!-- Data-visualization series and heat ramp (spec 37).  Each theme
                  defines its own eight-slot Series1-8Color set (fixed hue
                  order, CVD-validated); heat stays on the fixed status tints

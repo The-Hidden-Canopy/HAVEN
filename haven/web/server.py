@@ -1865,7 +1865,9 @@ class HavenWebServer(ThreadingHTTPServer):
                     errors.append({"region": name, "message": "Temporarily unavailable"})
 
             read_region("attention", self.today.cards)
+            read_region("focus", self.today.focus)
             read_region("needs_you", self.needs_you.list_open)
+            read_region("upcoming", self.today.upcoming)
             read_region(
                 "tasks",
                 lambda: self.tasks_service.list(

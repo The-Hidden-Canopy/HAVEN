@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "family": "haven-default",
+  "assets": {
+    "dawn": "ms-appx:///Assets/Today/Temporal/dawn.jpg",
+    "morning": "ms-appx:///Assets/Today/Temporal/morning.jpg",
+    "midday": "ms-appx:///Assets/Today/Temporal/midday.jpg",
+    "afternoon": "ms-appx:///Assets/Today/Temporal/afternoon.jpg",
+    "evening": "ms-appx:///Assets/Today/Temporal/evening.jpg",
+    "night": "ms-appx:///Assets/Today/Temporal/night.jpg"
+  }
+}

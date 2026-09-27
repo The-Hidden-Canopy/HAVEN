@@ -76,6 +76,52 @@ class TodayService:
         live.sort(key=lambda card: (_GROUP_RANK[card["group"]], card["at"] or "", card["card_id"]))
         return {"ok": True, "cards": live, "dismissed_count": len(self._dismissed)}
 
+    def focus(self) -> dict:
+        """The single highest-consequence continuation (spec 18): overdue
+        work first, then due-today, then the most recently active project
+        with open tasks. Reuses the same card shape `cards()` already
+        produces so native rendering needs no second contract -- Needs You
+        covers "what is blocked on me", this covers "what should I do
+        first", and the two are never merged (spec 18's own rule)."""
+
+        visible = self._identity.visible_scope_ids()
+        now = self._clock()
+        deadlines = [
+            card for card in self._deadline_cards(visible, now) if card["card_id"] not in self._dismissed
+        ]
+        overdue = sorted((c for c in deadlines if c["why_now"] == "Overdue"), key=lambda c: c["at"])
+        due_today = sorted((c for c in deadlines if c["why_now"] == "Due today"), key=lambda c: c["at"])
+        active_projects = sorted(
+            (
+                card
+                for card in self._commitment_cards(visible, now)
+                if card["card_id"].startswith("project:") and card["card_id"] not in self._dismissed
+            ),
+            key=lambda c: c["at"],
+            reverse=True,
+        )
+        candidates = overdue + due_today + active_projects
+        return {"ok": True, "item": candidates[0] if candidates else None}
+
+    def upcoming(self, *, limit: int = 6) -> dict:
+        """Chronological, bounded, purely time-bound evidence (spec 19) --
+        due tasks and calendar commitments only, never failures or blocked
+        work (those belong to Needs You). Whichever condition `focus()`
+        already surfaced as the one primary continuation is excluded here,
+        so Today never renders the same underlying condition twice in one
+        viewport (spec 3.4's dedup rule, applied across regions too)."""
+
+        visible = self._identity.visible_scope_ids()
+        now = self._clock()
+        focus_id = (self.focus().get("item") or {}).get("card_id")
+        items = [
+            card
+            for card in self._deadline_cards(visible, now)
+            if card["card_id"] not in self._dismissed and card["card_id"] != focus_id
+        ]
+        items.sort(key=lambda c: c["at"])
+        return {"ok": True, "items": items[:limit]}
+
     def dismiss(self, *, card_id: str | None) -> dict:
         if not isinstance(card_id, str) or not card_id.strip():
             return {"ok": False, "error": "a non-empty 'card_id' is required"}
