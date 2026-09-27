@@ -29,6 +29,10 @@
             <Color x:Key="HavenDangerTintColor">#33EF4444</Color>
             <Color x:Key="HavenFocusRingColor">#990D9488</Color>
             <Color x:Key="HavenPermissionGlowColor">#667C3AED</Color>
+            <!-- Temporal hero overlay tint (Needs You spec 14): blue-green,
+                 same as CanopyDark (hero stays dark-scrim/light-text). -->
+            <Color x:Key="HeroOverlayTintColor">#D90E2420</Color>
+            <Color x:Key="HeroOverlayTintColorFade">#400E2420</Color>
 
             <!-- Data-visualization categorical series (spec 37): fixed hue
                  order, validated for CVD-safe adjacent separation and contrast

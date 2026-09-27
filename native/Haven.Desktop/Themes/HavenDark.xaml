@@ -29,6 +29,12 @@
             <Color x:Key="HavenDangerTintColor">#33EF4444</Color>
             <Color x:Key="HavenFocusRingColor">#993B82F6</Color>
             <Color x:Key="HavenPermissionGlowColor">#408B5CF6</Color>
+            <!-- Temporal hero overlay tint (Needs You spec 14): "deep navy
+                 edge gradient; mild blue-violet tint", per color-theme,
+                 shared across Dark/Light appearance (the hero keeps a dark
+                 scrim + light text regardless of app appearance). -->
+            <Color x:Key="HeroOverlayTintColor">#D9141033</Color>
+            <Color x:Key="HeroOverlayTintColorFade">#40141033</Color>
 
             <!-- Data-visualization categorical series (spec 37): fixed hue
                  order, validated for CVD-safe adjacent separation and contrast

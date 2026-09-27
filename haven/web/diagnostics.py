@@ -21,16 +21,47 @@ the restore response says so.
 from __future__ import annotations
 
 import shutil
+import subprocess
 import time
 from datetime import datetime, timedelta, timezone
+from importlib.metadata import PackageNotFoundError, version as _package_version_lookup
 from pathlib import Path
 
 from ..core.domain import RuleStatus
+from ..ipc.named_pipe import installation_id_for_data_dir
 from ..models import ModelState
 from .installation_files import installation_file_names
 from .setup_service import _ENROLLED_FILENAME, load_enrolled_sidecar
 
 _ONE_SECOND = timedelta(seconds=1)
+_RECEIPT_EXPORT_LIMIT = 20
+
+
+def _package_version() -> str | None:
+    try:
+        return _package_version_lookup("haven-household")
+    except PackageNotFoundError:
+        return None
+
+
+def _git_commit(repo_root: Path) -> str | None:
+    """Best-effort only: a packaged/non-git install has no `.git` to ask,
+    and that is not a diagnostic failure worth surfacing as one."""
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
 
 
 class SystemDiagnostics:
@@ -107,6 +138,58 @@ class SystemDiagnostics:
                     "state": director.voice.to_dict()["state"],
                 },
                 "uptime_seconds": time.monotonic() - server._started_monotonic,
+            },
+        }
+
+    def export(self) -> dict:
+        """A support-safe snapshot beyond the System page's own summary
+        (native product-consolidation plan, P0 "Runtime": a diagnostic
+        export covering version, commit, installation id, provider state,
+        model assignments, event-channel state, pending confirmations,
+        scheduler state, and the last N receipts -- never secrets).
+
+        Every field here already crosses a UI surface today (the System
+        page, the pending-confirmation banner, `computer.action.history`) --
+        this only collects them into one bundle so a household doesn't have
+        to reconstruct one from several screenshots when asking for help.
+        """
+
+        server = self._server
+        base = self.collect()["diagnostics"]
+        data_dir = Path(base["data_dir"])
+
+        try:
+            pending = server.director.state().get("pending", [])
+            pending_count = len(pending) if isinstance(pending, list) else 0
+        except Exception:
+            pending_count = None
+
+        try:
+            model_assignments = dict(server.models.assignments())
+        except Exception:
+            model_assignments = {}
+
+        try:
+            recent_receipts = server.computer_actions.history(limit=_RECEIPT_EXPORT_LIMIT)["entries"]
+        except Exception:
+            recent_receipts = []
+
+        return {
+            "ok": True,
+            "export": {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "version": _package_version(),
+                "commit": _git_commit(Path(__file__).resolve().parents[2]),
+                "installation_id": installation_id_for_data_dir(data_dir),
+                "diagnostics": base,
+                "pending_confirmations": pending_count,
+                "model_assignments": model_assignments,
+                # Native client reports its own live RPC/event-channel state
+                # (Settings -> channel health, EventChannelStatusText) -- Core
+                # has no server-side view of a specific client's pipe, so
+                # this export deliberately does not fabricate one.
+                "event_channel": "reported client-side only; see Settings > channel health",
+                "recent_receipts": recent_receipts,
             },
         }
 

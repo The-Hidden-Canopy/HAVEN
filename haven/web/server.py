@@ -2292,6 +2292,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 },
                 "models.job.cancel": _models_job_cancel,
                 "system.diagnostics": lambda _params: self.diagnostics.collect(),
+                "system.diagnostics.export": lambda _params: self.diagnostics.export(),
                 "system.probe": lambda _params: self.diagnostics.probe_provider(),
                 "system.backups": lambda _params: {"ok": True, "backups": self.backups.list()["backups"]},
                 "system.backup.create": lambda _params: {"ok": True, "backup": self.backups.create()},
@@ -2729,6 +2730,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, self.setup_service.list_provider_packages())
         elif path == "/api/system/diagnostics":
             self._send_json(200, self.diagnostics.collect())
+        elif path == "/api/system/diagnostics/export":
+            self._send_json(200, self.diagnostics.export())
         elif path == "/api/system/backups":
             self._send_json(200, {"ok": True, "backups": self.backups.list()["backups"]})
         elif path == "/api/system/service":

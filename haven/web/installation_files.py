@@ -22,7 +22,8 @@ from pathlib import Path
 
 _FIXED_NAMES = (
     "haven.json",
-    "ha_token.txt",
+    "ha_token.txt",  # legacy plaintext sidecar; migrated into credentials.db on first boot that reads it
+    "credentials.db",
     "enrolled_devices.json",
     "household.json",
     "rules.json",

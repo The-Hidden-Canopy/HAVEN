@@ -31,6 +31,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- HavenEventClient + EventClientCoordinator live in a plain net8.0
+         library (no WinUI types) so native-proof-loop work (the product
+         plan's P0 "deterministic tests for concurrent reconnect requests,
+         stall callback, shutdown during reconnect and token/pipe
+         replacement") can unit-test the pipe lifecycle without a WinUI
+         test host. -->
+    <ProjectReference Include="..\Haven.Core.Client\Haven.Core.Client.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="..\..\haven\web\static\haven-logo-light.png">
       <Link>Assets\haven-logo-light.png</Link>
     </Content>

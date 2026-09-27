@@ -29,6 +29,10 @@
             <Color x:Key="HavenDangerTintColor">#33EF4444</Color>
             <Color x:Key="HavenFocusRingColor">#99E5E7EB</Color>
             <Color x:Key="HavenPermissionGlowColor">#408B5CF6</Color>
+            <!-- Temporal hero overlay tint (Needs You spec 14): "desaturating
+                 or neutral overlay; high local contrast." -->
+            <Color x:Key="HeroOverlayTintColor">#D916171A</Color>
+            <Color x:Key="HeroOverlayTintColorFade">#4016171A</Color>
 
             <!-- Data-visualization categorical series (spec 37): fixed hue
                  order, validated for CVD-safe adjacent separation and contrast
