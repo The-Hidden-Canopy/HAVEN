@@ -1814,6 +1814,64 @@ class HavenWebServer(ThreadingHTTPServer):
         def _today_dismiss(params: dict) -> dict:
             return self.today.dismiss(card_id=params.get("card_id"))
 
+        def _today_snapshot(_params: dict) -> dict:
+            """Return one coherent, partially-degrading Today projection.
+
+            The native client uses one request because the IPC transport is a
+            strict request/response stream.  Each region is still isolated so
+            an unavailable provider does not erase the evidence that remains
+            available from the other regions.
+            """
+
+            regions: dict[str, dict] = {}
+            errors: list[dict[str, str]] = []
+
+            def read_region(name: str, reader) -> None:
+                try:
+                    value = reader()
+                    if not isinstance(value, dict):
+                        raise TypeError("provider returned a non-object result")
+                    regions[name] = value
+                except Exception:
+                    regions[name] = {"ok": False, "available": False}
+                    errors.append({"region": name, "message": "Temporarily unavailable"})
+
+            read_region("attention", self.today.cards)
+            read_region(
+                "tasks",
+                lambda: self.tasks_service.list(
+                    self.identity.visible_scope_ids(), view="today"
+                ),
+            )
+            read_region("files", lambda: _computer_files({}))
+            read_region("activity", lambda: _computer_activity({}))
+
+            try:
+                pending = self.director.state().get("pending", [])
+                if not isinstance(pending, list):
+                    pending = []
+                regions["pending"] = {"ok": True, "count": len(pending)}
+            except Exception:
+                regions["pending"] = {"ok": False, "available": False}
+                errors.append({"region": "pending", "message": "Temporarily unavailable"})
+
+            # Reply-tracking is deliberately explicit: an unavailable
+            # evidence source is different from an empty inbox.
+            regions["replies"] = {
+                "ok": True,
+                "available": False,
+                "reason": "No reply-tracking evidence source is connected.",
+                "replies": [],
+            }
+            return {
+                "ok": True,
+                "snapshot": {
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "regions": regions,
+                    "errors": errors,
+                },
+            }
+
 
         def _sync_status(_params: dict) -> dict:
             return self.sync_engine.status()
@@ -2250,6 +2308,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 "relationships.for": _relationships_for,
                 "today.cards": _today_cards,
                 "today.dismiss": _today_dismiss,
+                "today.snapshot": _today_snapshot,
                 "browser.tabs.list": _browser_tabs,
                 "browser.tab.focus": _browser_focus,
                 "browser.tab.open": _browser_open,

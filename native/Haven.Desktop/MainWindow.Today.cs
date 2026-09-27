@@ -17,66 +17,77 @@ public sealed partial class MainWindow
         var hour = DateTime.Now.Hour;
         TodayGreeting.Text = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
         TodayDate.Text = DateTime.Now.ToString("dddd, MMMM d");
+        TodayHeroContext.Text = hour < 12
+            ? "Start with the signal that deserves your first attention."
+            : hour < 18
+                ? "Keep momentum with the signal that matters most now."
+                : "Close the day with a calm view of what still needs you.";
         TodayStatus.Text = "";
+        await LoadTodaySnapshotAsync();
+    }
+
+    // -- today cards (spec page 25) ------------------------------------------------
+    // Dense dashboard grid (Native Product Pass spec 21): the once-flat
+    // TodayCardsHost stack is now six named regions (Focus / Upcoming / Tasks
+    // / Recent files / Pending replies / Recent activity). One typed snapshot
+    // establishes a coherent generated-at boundary, while each region keeps
+    // its own partial-failure and empty-data behavior - no fabricated rows.
+
+    private async Task LoadTodayCardsAsync()
+    {
+        await LoadTodaySnapshotAsync();
+    }
+
+    private async Task LoadTodaySnapshotAsync()
+    {
         if (_client is null)
         {
             return;
         }
         try
         {
-            var state = await _client.GetStateAsync();
-            var pending = state.TryGetProperty("pending", out var pendingValue) ? pendingValue.GetArrayLength() : 0;
-            TodayPendingBanner.Visibility = pending > 0 ? Visibility.Visible : Visibility.Collapsed;
-            TodayPendingText.Text = pending > 0
-                ? $"{pending} action{(pending == 1 ? " is" : "s are")} waiting for your approval."
+            var result = await _client.GetTodaySnapshotAsync();
+            var snapshot = result.GetProperty("snapshot");
+            var regions = snapshot.GetProperty("regions");
+            var pending = regions.GetProperty("pending");
+            var pendingCount = pending.TryGetProperty("count", out var count) && count.ValueKind == JsonValueKind.Number
+                ? count.GetInt32()
+                : 0;
+            TodayPendingBanner.Visibility = pendingCount > 0 ? Visibility.Visible : Visibility.Collapsed;
+            TodayPendingText.Text = pendingCount > 0
+                ? $"{pendingCount} action{(pendingCount == 1 ? " is" : "s are")} waiting for your approval."
+                : "";
+
+            // One snapshot preserves a coherent generated-at boundary while
+            // each region keeps its own partial-failure semantics.
+            var cardsTask = RenderTodayCardsAsync(Task.FromResult(regions.GetProperty("attention")));
+            var tasksTask = RenderTodayRegionAsync(TodayTasksCard, TodayTasksHost, Task.FromResult(regions.GetProperty("tasks")), "tasks", MakeTodayTaskRow, take: 6);
+            var filesTask = RenderTodayRegionAsync(TodayFilesCard, TodayFilesHost, Task.FromResult(regions.GetProperty("files")), "files", MakeTodayFileRow, take: 5);
+            var activityTask = RenderTodayRegionAsync(TodayActivityCard, TodayActivityHost, Task.FromResult(regions.GetProperty("activity")), "events", MakeTodayActivityRow, take: 6);
+
+            TodayRepliesHost.Children.Clear();
+            TodayRepliesHost.Children.Add(new TextBlock
+            {
+                Text = "HAVEN doesn't have a reply-tracking evidence source yet, so this can't be populated honestly.",
+                Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                TextWrapping = TextWrapping.Wrap,
+                Opacity = 0.72,
+            });
+
+            var hasContent = await Task.WhenAll(cardsTask, tasksTask, filesTask, activityTask);
+            TodayGrid.Visibility = Visibility.Visible;
+            TodayEmptyCard.Visibility = hasContent.Any(x => x) ? Visibility.Collapsed : Visibility.Visible;
+            var errors = snapshot.TryGetProperty("errors", out var errorValues)
+                ? errorValues.GetArrayLength()
+                : 0;
+            TodayStatus.Text = errors > 0
+                ? $"{errors} Today section{(errors == 1 ? " is" : "s are")} temporarily unavailable."
                 : "";
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            TodayStatus.Text = $"Could not load today's summary: {ex.Message}";
+            TodayStatus.Text = "Could not load today's summary. Try again when HAVEN Core is connected.";
         }
-        await LoadTodayCardsAsync();
-    }
-
-    // -- today cards (spec page 25) ------------------------------------------------
-    // Dense dashboard grid (Native Product Pass spec 21): the once-flat
-    // TodayCardsHost stack is now six named regions (Focus / Upcoming / Tasks
-    // / Recent files / Pending replies / Recent activity). Independent data
-    // sources fetch in parallel; each region's card collapses on empty data
-    // rather than leaving a dead rectangle - no region is ever populated
-    // with a fabricated placeholder ("no false capability").
-
-    private async Task LoadTodayCardsAsync()
-    {
-        if (_client is null)
-        {
-            return;
-        }
-        // Independent evidence sources: one failing or coming back empty
-        // never hides the others ("Today cards should degrade individually
-        // based on their evidence sources rather than making the entire
-        // dashboard fail" - spec 14). Fired together, awaited together.
-        var cardsTask = RenderTodayCardsAsync(_client.GetTodayCardsAsync());
-        var tasksTask = RenderTodayRegionAsync(TodayTasksCard, TodayTasksHost, _client.GetTasksAsync("today"), "tasks", MakeTodayTaskRow, take: 6);
-        var filesTask = RenderTodayRegionAsync(TodayFilesCard, TodayFilesHost, _client.GetComputerFilesAsync(), "files", MakeTodayFileRow, take: 5);
-        var activityTask = RenderTodayRegionAsync(TodayActivityCard, TodayActivityHost, _client.GetComputerActivityAsync(), "events", MakeTodayActivityRow, take: 6);
-
-        // Pending replies: an honest gap, not a fabricated feed - HAVEN has no
-        // reply-tracking evidence source yet (no comms provider surfaces
-        // "awaiting your reply" state). Say so rather than showing nothing
-        // unexplained or inventing data.
-        TodayRepliesHost.Children.Clear();
-        TodayRepliesHost.Children.Add(new TextBlock
-        {
-            Text = "HAVEN doesn't have a reply-tracking evidence source yet, so this can't be populated honestly.",
-            Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
-            TextWrapping = TextWrapping.Wrap,
-            Opacity = 0.72,
-        });
-
-        var hasContent = await Task.WhenAll(cardsTask, tasksTask, filesTask, activityTask);
-        TodayGrid.Visibility = Visibility.Visible;
-        TodayEmptyCard.Visibility = hasContent.Any(x => x) ? Visibility.Collapsed : Visibility.Visible;
     }
 
     /// <summary>Fetch one region's data, render up to <paramref name="take"/> rows via
@@ -97,6 +108,10 @@ public sealed partial class MainWindow
         try
         {
             var result = await fetch;
+            if (result.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.False)
+            {
+                throw new InvalidOperationException("This section is temporarily unavailable.");
+            }
             var rows = Enumerate(result.GetProperty(arrayProperty)).Take(take).ToList();
             if (rows.Count == 0)
             {
@@ -110,12 +125,12 @@ public sealed partial class MainWindow
             }
             return true;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             card.Visibility = Visibility.Visible;
             host.Children.Add(new TextBlock
             {
-                Text = ex.Message,
+                Text = "This section is temporarily unavailable. Try again when HAVEN Core is connected.",
                 Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenDangerBrush"],
                 TextWrapping = TextWrapping.Wrap,
             });
@@ -132,13 +147,13 @@ public sealed partial class MainWindow
         {
             rows = Enumerate((await fetch).GetProperty("cards")).ToList();
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             TodayFocusCard.Visibility = Visibility.Visible;
             TodayUpcomingCard.Visibility = Visibility.Collapsed;
             TodayFocusHost.Children.Add(new TextBlock
             {
-                Text = $"Could not load Today's cards: {ex.Message}",
+                Text = "Today's attention cards are temporarily unavailable.",
                 Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenDangerBrush"],
                 TextWrapping = TextWrapping.Wrap,
             });
@@ -294,9 +309,9 @@ public sealed partial class MainWindow
                     await _client.DismissTodayCardAsync(cardId);
                     await LoadTodayCardsAsync();
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
-                    TodayStatus.Text = ex.Message;
+                    TodayStatus.Text = "The card could not be dismissed. Try again when HAVEN Core is connected.";
                 }
             };
             actions.Children.Add(dismiss);

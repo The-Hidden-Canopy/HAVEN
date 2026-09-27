@@ -28,6 +28,7 @@ from typing import Any, Mapping, Protocol
 from .domain import AdmittedRequest, ExternalRequest, ExternalScope
 from .errors import INVALID_ARGUMENTS, ExternalDenied
 from .gateway import ExternalAgentGateway
+from .projections import WorldReadProjection
 
 # The read-only tool vocabulary and the scope each tool requires. The
 # transport adapter declares exactly this scope in the `ExternalRequest` it
@@ -76,18 +77,19 @@ class ExternalReadTools:
         return self.rooms_list(admitted)
 
     def world_get(self, admitted: AdmittedRequest) -> dict[str, Any]:
-        """The world state the native/web surfaces render, verbatim."""
+        """Return only the explicit world projection for ``world.read``."""
 
         # Same-package seam: the gateway owns the scope-denial message.
         ExternalAgentGateway._require_scope(admitted, ExternalScope.WORLD_READ)  # noqa: SLF001
-        return {"ok": True, "state": dict(self._reader.state())}
+        projection = WorldReadProjection.from_state(self._reader.state()).to_dict()
+        return {"ok": True, "state": projection}
 
     def rooms_list(self, admitted: AdmittedRequest) -> dict[str, Any]:
-        """Just the room list (with devices/people) from the world state."""
+        """Return rooms from the same explicit world projection."""
 
         ExternalAgentGateway._require_scope(admitted, ExternalScope.WORLD_READ)  # noqa: SLF001
-        rooms = self._reader.state().get("rooms", [])
-        return {"ok": True, "rooms": list(rooms)}
+        projection = WorldReadProjection.from_state(self._reader.state()).to_dict()
+        return {"ok": True, "rooms": projection["rooms"]}
 
 
 __all__ = ["READ_TOOL_SCOPES", "ExternalReadTools", "WorldReader"]

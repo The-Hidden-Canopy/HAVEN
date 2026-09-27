@@ -12,6 +12,10 @@ native/haven-bt/build/
 # WinUI/.NET desktop build output is generated locally and must not be committed.
 native/Haven.Desktop/bin/
 native/Haven.Desktop/obj/
+# Screenshot/publish snapshots are generated output, not source.
+native/Haven.Desktop/bin-shot/
+# Root-level one-off repair scripts are local scratch, not product code.
+tmp-*.py
 *.so
 *.dll
 *.dylib

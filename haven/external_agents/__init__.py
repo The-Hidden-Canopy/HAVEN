@@ -25,6 +25,7 @@ from .domain import (
 from .errors import ExternalDenied
 from .gateway import ExternalAgentGateway, ExternalAgentService, PrincipalResolver, anonymous_external_principal
 from .reads import READ_TOOL_SCOPES, ExternalReadTools, WorldReader
+from .projections import WorldReadProjection
 from .store import ExternalAgentStore
 from .transport import ACTION_TOOL_SCOPES, TOOL_SCOPES, TransportBridge, hash_credential
 
@@ -50,6 +51,7 @@ __all__ = [
     "TransportBridge",
     "UNBOUND_GRANTABLE_SCOPES",
     "WorldReader",
+    "WorldReadProjection",
     "anonymous_external_principal",
     "hash_credential",
     "parse_scopes",

@@ -113,6 +113,15 @@ def test_world_get_returns_the_world_state(store):
 
     assert result["ok"] is True
     assert result["state"]["rooms"][0]["id"] == "office"
+    assert set(result["state"]) == {
+        "revision",
+        "observed_at",
+        "rooms",
+        "presence",
+        "contexts",
+        "devices",
+        "freshness",
+    }
 
 
 def test_rooms_list_returns_only_the_rooms(store):
@@ -239,5 +248,42 @@ def test_server_composition_wires_the_read_tools_to_the_live_director():
             assert {room["id"] for room in result["rooms"]} == {
                 room["id"] for room in director.state()["rooms"]
             }
+        finally:
+            server.server_close()
+
+
+def test_server_world_read_does_not_export_internal_application_state():
+    with tempfile.TemporaryDirectory() as tmp:
+        server, director = make_server(0, data_dir=Path(tmp) / "data", clock=lambda: NOW, demo=True)
+        try:
+            connection = server.external_agents.create_connection(
+                provider=ExternalProvider.ALEXA_PLUS,
+                display_name="Alexa+",
+                created_by=director.owner.actor_id,
+                unbound_scopes=frozenset({ExternalScope.WORLD_READ}),
+                enabled=True,
+            )
+
+            result = server.external_agent_reads.call(
+                ExternalRequest(
+                    connection_id=connection.connection_id,
+                    tool="haven.world.get",
+                    required_scope=ExternalScope.WORLD_READ,
+                    external_request_id="mcp_rpc_2",
+                )
+            )
+
+            assert set(result["state"]) == {
+                "revision",
+                "observed_at",
+                "rooms",
+                "presence",
+                "contexts",
+                "devices",
+                "freshness",
+            }
+            assert not {"memory", "activity", "conversation", "automations", "scheduler", "system", "voice"} & set(
+                result["state"]
+            )
         finally:
             server.server_close()
