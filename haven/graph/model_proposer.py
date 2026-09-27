@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Mapping, Protocol
 
+from ..resources.store import ResourceStore
 from .candidates import CandidateRelationship, candidate_id
 
 _DEFAULT_CLOCK = lambda: datetime.now(timezone.utc)  # noqa: E731
@@ -69,12 +70,14 @@ class ModelRelationshipProposer:
         *,
         model_id: str,
         propose: Callable[[str, tuple[str, ...]], list[Mapping[str, object]]] | ModelSuggestionSource,
+        resources: ResourceStore,
         clock=_DEFAULT_CLOCK,
     ) -> None:
         if not isinstance(model_id, str) or not model_id.strip():
             raise ValueError("model_id must be a non-empty string")
         self._model_id = model_id.strip()
         self._propose = propose
+        self._resources = resources
         self._clock = clock
         self.last_rejected: tuple[RejectedSuggestion, ...] = ()
 
@@ -143,6 +146,32 @@ class ModelRelationshipProposer:
             )
         self.last_rejected = tuple(rejected)
         return tuple(candidates)
+
+    def candidates(
+        self, *, visible_scopes: tuple[str, ...], exclude_pairs: frozenset[str] = frozenset()
+    ) -> tuple[CandidateRelationship, ...]:
+        """Every visible resource's suggestions, merged -- the same
+        per-scope iteration `Correlator.candidates()` uses, so
+        `RelationshipService` can treat this proposer and the deterministic
+        correlator as interchangeable candidate sources."""
+
+        all_candidates: dict[str, CandidateRelationship] = {}
+        all_rejected: list[RejectedSuggestion] = []
+        seen_scopes: set[str] = set()
+        for scope_id in visible_scopes:
+            if scope_id in seen_scopes:
+                continue
+            seen_scopes.add(scope_id)
+            for record in self._resources.list_by_scope(scope_id):
+                if record.stale:
+                    continue
+                for candidate in self.candidates_for(
+                    record.resource_id, visible_scopes=(scope_id,), exclude_pairs=exclude_pairs
+                ):
+                    all_candidates.setdefault(candidate.candidate_id, candidate)
+                all_rejected.extend(self.last_rejected)
+        self.last_rejected = tuple(all_rejected)
+        return tuple(sorted(all_candidates.values(), key=lambda item: (-item.confidence, item.candidate_id)))
 
 
 __all__ = ["ModelRelationshipProposer", "ModelSuggestionSource", "RejectedSuggestion"]
