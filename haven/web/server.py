@@ -88,6 +88,8 @@ from ..graph import Correlator, RelationshipAdmissionPolicy, RelationshipProject
 from ..sync import FolderSyncTransport, LocalSyncEngine
 from ..integrations.browser import BrowserHub, BrowserObservationProvider, domain_of
 from ..today import TodayService
+from ..attention import NeedsYouService
+from ..attention.sources import AuthoritySource, KnowledgeSource, ModelSource, ProjectSource, TaskSource
 from ..integrations.computer.windows import WindowObservationProvider
 from .browser_actions import BrowserActionService
 from .comms_service import CommsService
@@ -520,6 +522,23 @@ class HavenWebServer(ThreadingHTTPServer):
             resource_store=self.resources,
             ledger=self.action_ledger,
             clock=clock,
+        )
+        # Needs You (spec: HAVEN_Needs_You_Temporal_Home_Spec_REFRESHED.docx
+        # sections 3-10): a cross-domain projection of conditions that
+        # require a human decision. It never mutates a domain itself --
+        # every source adapter below only reads a store/service this class
+        # already owns.
+        self.needs_you = NeedsYouService(
+            sources=[
+                AuthoritySource(director=self.director, computer_actions=self.computer_actions, identity=self.identity),
+                ModelSource(model_jobs=self.model_jobs, identity=self.identity),
+                TaskSource(tasks_store=self.tasks_store, identity=self.identity),
+                ProjectSource(projects_store=self.projects_store, tasks_store=self.tasks_store, identity=self.identity),
+                KnowledgeSource(knowledge=self.knowledge, identity=self.identity),
+            ],
+            identity=self.identity,
+            state_path=Path(resolved_data_dir) / "needs_you.json",
+            clock=scope_clock,
         )
         # Diagnostics reads through the server itself; backups own the
         # `backups/` subtree of the same single-root data dir.
@@ -1814,6 +1833,15 @@ class HavenWebServer(ThreadingHTTPServer):
         def _today_dismiss(params: dict) -> dict:
             return self.today.dismiss(card_id=params.get("card_id"))
 
+        def _needs_you_list(_params: dict) -> dict:
+            return self.needs_you.list_open()
+
+        def _needs_you_snooze(params: dict) -> dict:
+            return self.needs_you.snooze(source_ref=params.get("source_ref"))
+
+        def _needs_you_dismiss(params: dict) -> dict:
+            return self.needs_you.dismiss(source_ref=params.get("source_ref"))
+
         def _today_snapshot(_params: dict) -> dict:
             """Return one coherent, partially-degrading Today projection.
 
@@ -1837,6 +1865,7 @@ class HavenWebServer(ThreadingHTTPServer):
                     errors.append({"region": name, "message": "Temporarily unavailable"})
 
             read_region("attention", self.today.cards)
+            read_region("needs_you", self.needs_you.list_open)
             read_region(
                 "tasks",
                 lambda: self.tasks_service.list(
@@ -2309,6 +2338,9 @@ class HavenWebServer(ThreadingHTTPServer):
                 "today.cards": _today_cards,
                 "today.dismiss": _today_dismiss,
                 "today.snapshot": _today_snapshot,
+                "needs_you.list": _needs_you_list,
+                "needs_you.snooze": _needs_you_snooze,
+                "needs_you.dismiss": _needs_you_dismiss,
                 "browser.tabs.list": _browser_tabs,
                 "browser.tab.focus": _browser_focus,
                 "browser.tab.open": _browser_open,
@@ -2481,6 +2513,22 @@ class HavenWebServer(ThreadingHTTPServer):
         self.computer_actions.set_director(new)
         self.computer_actions.set_resource_store(self.resources)
         self.computer_actions.set_ledger(self.action_ledger)
+        # Rebuilt (not just rebound) because every source adapter closes
+        # over the collaborators above, all of which are fresh objects
+        # after a data-dir move; the on-disk snooze/dismiss state reloads
+        # from the same relative path under the (possibly new) data dir.
+        self.needs_you = NeedsYouService(
+            sources=[
+                AuthoritySource(director=new, computer_actions=self.computer_actions, identity=self.identity),
+                ModelSource(model_jobs=self.model_jobs, identity=self.identity),
+                TaskSource(tasks_store=self.tasks_store, identity=self.identity),
+                ProjectSource(projects_store=self.projects_store, tasks_store=self.tasks_store, identity=self.identity),
+                KnowledgeSource(knowledge=self.knowledge, identity=self.identity),
+            ],
+            identity=self.identity,
+            state_path=data_dir / "needs_you.json",
+            clock=rebuild_clock,
+        )
         # Mirrors the same wiring `__init__` does for the first director:
         # discovery scans must list the new world's real HA entities, not
         # the one this composition replaced.

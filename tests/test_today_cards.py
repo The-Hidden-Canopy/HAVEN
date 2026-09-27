@@ -130,8 +130,9 @@ def test_snapshot_aggregates_regions_and_preserves_partial_contract(server) -> N
     result = _dispatch(server, "today.snapshot", {})["result"]
     snapshot = result["snapshot"]
     assert snapshot["generated_at"]
-    assert set(snapshot["regions"]) == {"attention", "tasks", "files", "activity", "pending", "replies"}
+    assert set(snapshot["regions"]) == {"attention", "needs_you", "tasks", "files", "activity", "pending", "replies"}
     assert snapshot["regions"]["attention"]["ok"] is True
+    assert snapshot["regions"]["needs_you"]["ok"] is True
     assert snapshot["regions"]["tasks"]["ok"] is True
     assert snapshot["regions"]["replies"]["available"] is False
     assert isinstance(snapshot["errors"], list)
@@ -144,6 +145,7 @@ def test_snapshot_keeps_other_regions_when_activity_provider_fails(server, monke
     monkeypatch.setattr(server.windows_provider, "activity", fail_activity)
     snapshot = _dispatch(server, "today.snapshot", {})["result"]["snapshot"]
     assert snapshot["regions"]["attention"]["ok"] is True
+    assert snapshot["regions"]["needs_you"]["ok"] is True
     assert snapshot["regions"]["tasks"]["ok"] is True
     assert snapshot["regions"]["activity"]["ok"] is False
     assert {error["region"] for error in snapshot["errors"]} == {"activity"}
