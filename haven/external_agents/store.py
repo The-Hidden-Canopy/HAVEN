@@ -23,7 +23,7 @@ from typing import Any
 
 from .domain import ExternalAgentConnection, ExternalProvider, ExternalScope, PrincipalBinding
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -78,6 +78,17 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 CREATE INDEX IF NOT EXISTS audit_household ON audit(household_id, occurred_at);
 CREATE INDEX IF NOT EXISTS audit_connection ON audit(connection_id, occurred_at);
+
+CREATE TABLE IF NOT EXISTS request_idempotency (
+    household_id TEXT NOT NULL,
+    connection_id TEXT NOT NULL,
+    external_request_id TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    result TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (household_id, connection_id, external_request_id)
+);
+CREATE INDEX IF NOT EXISTS request_idempotency_created ON request_idempotency(household_id, created_at);
 """
 
 # Audit rows kept per household; older rows are pruned on write. Receipts
@@ -167,6 +178,13 @@ class ExternalAgentStore:
                 # records this version cannot interpret.
                 raise RuntimeError(
                     f"external_agents.db schema {row[0]} is newer than this HAVEN supports ({SCHEMA_VERSION})"
+                )
+            elif int(row[0]) < SCHEMA_VERSION:
+                # The schema script is additive and idempotent. Keep old
+                # connection/binding/audit rows and only advance the marker
+                # after the new request ledger exists.
+                conn.execute(
+                    "UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(SCHEMA_VERSION),)
                 )
             conn.commit()
         finally:
@@ -370,6 +388,80 @@ class ExternalAgentStore:
             }
             for row in rows
         )
+
+    # -- request idempotency -------------------------------------------------
+
+    def claim_request(
+        self,
+        *,
+        household_id: str,
+        connection_id: str,
+        external_request_id: str,
+        request_hash: str,
+        created_at: datetime,
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Atomically claim a transport request or return its prior result.
+
+        A request id is scoped to both the household and connection. Reusing
+        it with a different semantic payload is an input error; retrying the
+        exact payload returns the completed result, while a concurrent retry
+        is refused rather than executing a mutation twice.
+        """
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT request_hash, result FROM request_idempotency "
+                    "WHERE household_id = ? AND connection_id = ? AND external_request_id = ?",
+                    (household_id, connection_id, external_request_id),
+                ).fetchone()
+                if row is None:
+                    conn.execute(
+                        "INSERT INTO request_idempotency "
+                        "(household_id, connection_id, external_request_id, request_hash, result, created_at) "
+                        "VALUES (?, ?, ?, ?, NULL, ?)",
+                        (household_id, connection_id, external_request_id, request_hash, created_at.isoformat()),
+                    )
+                    conn.commit()
+                    return "claimed", None
+                if row[0] != request_hash:
+                    raise ValueError("external_request_id was reused for a different request")
+                if row[1] is None:
+                    return "in_flight", None
+                return "complete", json.loads(row[1])
+            finally:
+                conn.close()
+
+    def complete_request(
+        self,
+        *,
+        household_id: str,
+        connection_id: str,
+        external_request_id: str,
+        request_hash: str,
+        result: dict[str, Any],
+    ) -> None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                updated = conn.execute(
+                    "UPDATE request_idempotency SET result = ? "
+                    "WHERE household_id = ? AND connection_id = ? AND external_request_id = ? "
+                    "AND request_hash = ? AND result IS NULL",
+                    (
+                        json.dumps(result, sort_keys=True, default=str),
+                        household_id,
+                        connection_id,
+                        external_request_id,
+                        request_hash,
+                    ),
+                ).rowcount
+                if updated != 1:
+                    raise ValueError("request idempotency claim is missing or already completed")
+                conn.commit()
+            finally:
+                conn.close()
 
 
 __all__ = ["AUDIT_RETENTION", "ExternalAgentStore", "SCHEMA_VERSION"]

@@ -20,6 +20,7 @@ from haven.actions import (
     ResourceActionRequest,
     ResourceAuthorityEngine,
 )
+from haven.core import correlation
 from haven.core.domain import DecisionStatus, RiskTier
 from haven.integrations.computer.windows import PROVIDER_ID, WindowObservationProvider
 from haven.resources.store import ResourceStore
@@ -75,6 +76,8 @@ class WindowActionService:
             return {"ok": False, "error": "no household owner declared yet"}
         if not isinstance(resource_id, str) or not resource_id.strip():
             return {"ok": False, "error": "a non-empty 'resource_id' is required"}
+        if not isinstance(justification, str) or not justification.strip():
+            return {"ok": False, "error": "window focus requires a non-empty justification"}
         record = self._resource_store.get(resource_id.strip())
         if record is None or record.stale:
             return {"ok": False, "error": "the named window is unknown or no longer current"}
@@ -93,11 +96,7 @@ class WindowActionService:
             action="window.focus",
             resource_id=record.resource_id,
             parameters=(("hwnd", _hwnd_of(record.metadata)),),
-            justification=(
-                justification.strip()
-                if isinstance(justification, str) and justification.strip()
-                else "owner brought a window to the foreground from HAVEN"
-            ),
+            justification=justification.strip(),
             requested_at=now,
         )
         decision = self._engine.decide(request, principal=principal, now=now)
@@ -148,6 +147,7 @@ class WindowActionService:
                 recorded_at=self._clock(),
                 success=success,
                 detail=detail,
+                correlation_id=correlation.current(),
             )
         )
 

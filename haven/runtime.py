@@ -33,7 +33,14 @@ from haven.core.domain import (
     TransitionKind,
     WorldSnapshot,
 )
-from haven.core.store import HavenStore, RuleApproval, RuleClarification, RuleDecision, RuleRevocation
+from haven.core.store import (
+    HavenStore,
+    RuleApproval,
+    RuleClarification,
+    RuleDecision,
+    RuleRevocation,
+    RuleSchedulerChange,
+)
 from haven.core.time import require_aware_utc
 from haven.execution import ExecutionAdapter, ExecutionProviderRegistry, UnknownExecutionProvider
 from haven.integrations.home_assistant.adapter import HomeAssistantAdapter
@@ -140,6 +147,7 @@ class HavenRuntime:
         principal: Principal,
         justification: str,
         now: datetime,
+        correlation_id: str | None = None,
     ) -> RuleClarificationResult:
         now = require_aware_utc(now, name="clarification time")
         rule = self.store.get_rule(rule_id)
@@ -193,7 +201,7 @@ class HavenRuntime:
                         justification=justification,
                         blocked_event_type=EventType.RULE_CLARIFICATION_BLOCKED,
                     ),
-                    correlation_id=rule_id,
+                    correlation_id=correlation_id or rule_id,
                 ),
                 now=now,
             )
@@ -210,7 +218,7 @@ class HavenRuntime:
                     clarified_by=principal.actor_id,
                     justification=justification,
                 ),
-                correlation_id=rule_id,
+                correlation_id=correlation_id or rule_id,
             ),
             now=now,
         )
@@ -223,6 +231,7 @@ class HavenRuntime:
         principal: Principal,
         justification: str,
         now: datetime,
+        correlation_id: str | None = None,
     ) -> RuleApprovalResult:
         now = require_aware_utc(now, name="approval time")
         rule = self.store.get_rule(rule_id)
@@ -271,7 +280,7 @@ class HavenRuntime:
                     household_id=self.store.household_id,
                     actor_id=principal.actor_id,
                     payload=RuleDecision(rule_id=rule_id, decision=decision, justification=justification),
-                    correlation_id=rule_id,
+                    correlation_id=correlation_id or rule_id,
                 ),
                 now=now,
             )
@@ -288,7 +297,7 @@ class HavenRuntime:
                     approved_by_role=principal.role_tier,
                     justification=justification,
                 ),
-                correlation_id=rule_id,
+                correlation_id=correlation_id or rule_id,
             ),
             now=now,
         )
@@ -301,6 +310,7 @@ class HavenRuntime:
         principal: Principal,
         justification: str,
         now: datetime,
+        correlation_id: str | None = None,
     ) -> RuleRevocationResult:
         """Revoke an automation through authority and an append-only event."""
 
@@ -350,7 +360,7 @@ class HavenRuntime:
                         justification=justification,
                         blocked_event_type=EventType.RULE_REVOCATION_BLOCKED,
                     ),
-                    correlation_id=rule_id,
+                    correlation_id=correlation_id or rule_id,
                 ),
                 now=now,
             )
@@ -367,11 +377,41 @@ class HavenRuntime:
                     revoked_by_role=principal.role_tier,
                     justification=justification,
                 ),
-                correlation_id=rule_id,
+                correlation_id=correlation_id or rule_id,
             ),
             now=now,
         )
         return RuleRevocationResult(rule=self.store.get_rule(rule_id), decision=decision, event=event)
+
+    def set_rule_scheduler_enabled(
+        self,
+        rule_id: str,
+        enabled: bool,
+        *,
+        principal: Principal,
+        justification: str,
+        now: datetime,
+        correlation_id: str | None = None,
+    ) -> DomainEvent:
+        """Change a rule's scheduler state through the core transition gate."""
+
+        now = require_aware_utc(now, name="scheduler change time")
+        return self.store.execute_transition(
+            Transition(
+                kind=TransitionKind.SET_RULE_SCHEDULER,
+                household_id=principal.household_id,
+                actor_id=principal.actor_id,
+                payload=RuleSchedulerChange(
+                    rule_id=rule_id,
+                    enabled=enabled,
+                    changed_by=principal.actor_id,
+                    changed_by_role=principal.role_tier,
+                    justification=justification,
+                ),
+                correlation_id=correlation_id or rule_id,
+            ),
+            now=now,
+        )
 
     def run_rule(
         self,

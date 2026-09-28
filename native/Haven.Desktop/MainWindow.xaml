@@ -159,7 +159,7 @@
                         </Button>
                     </StackPanel>
                 </StackPanel>
-                <Button x:Name="ReopenSetupButton" Content="Setup" Click="OnReopenSetupClicked"
+                <Button x:Name="ReopenSetupButton" Content="Setup &amp; connections" Click="OnReopenSetupClicked"
                         Visibility="Collapsed" HorizontalAlignment="Stretch"
                         Style="{StaticResource HavenQuietButtonStyle}" />
             </StackPanel>
@@ -438,6 +438,7 @@
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <Button Content="New project" Click="OnNewProjectClicked" Style="{StaticResource HavenPrimaryButtonStyle}" />
+                        <Button Content="Refresh" Click="OnProjectsRefreshClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
                     </StackPanel>
                     <TextBlock x:Name="ProjectsErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
                     <TextBlock x:Name="ProjectsStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
@@ -466,11 +467,12 @@
 
                 <!-- Tasks (spec 29): view chips, fast add, dense rows. -->
                 <StackPanel x:Name="TasksPanel" Spacing="12" Visibility="Collapsed">
-                    <StackPanel Orientation="Horizontal" Spacing="4">
+                    <StackPanel x:Name="TaskViews" Orientation="Horizontal" Spacing="4">
                         <Button Content="Today" Tag="today" Click="OnTaskViewClicked" Style="{StaticResource HavenTabButtonStyle}" />
                         <Button Content="Upcoming" Tag="upcoming" Click="OnTaskViewClicked" Style="{StaticResource HavenTabButtonStyle}" />
                         <Button Content="Someday" Tag="someday" Click="OnTaskViewClicked" Style="{StaticResource HavenTabButtonStyle}" />
                         <Button Content="Completed" Tag="completed" Click="OnTaskViewClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                        <Button Content="Refresh" Click="OnTasksRefreshClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
                     </StackPanel>
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
@@ -512,6 +514,7 @@
                         <Button Content="Applications" Tag="apps" Click="OnComputerTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
                         <Button Content="Windows" Tag="windows" Click="OnComputerTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
                         <Button Content="Activity" Tag="activity" Click="OnComputerTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                        <Button Content="Refresh" Click="OnComputerRefreshClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
                     </StackPanel>
                     <TextBlock x:Name="ComputerErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
                     <TextBlock x:Name="ComputerStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
@@ -553,6 +556,7 @@
                         <Button Content="Messages" Tag="messages" Click="OnCommsTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
                         <Button Content="Calendar" Tag="calendar" Click="OnCommsTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
                         <Button Content="Browser tabs" Tag="browser" Click="OnCommsTabClicked" Style="{StaticResource HavenTabButtonStyle}" />
+                        <Button Content="Refresh" Click="OnCommsRefreshClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
                     </StackPanel>
                     <TextBlock x:Name="CommsErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
                     <TextBlock x:Name="CommsStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
@@ -608,6 +612,11 @@
                         <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="What HAVEN knows" />
                         <TextBlock Text="Inspect what was remembered, where it came from, and how certain it is." TextWrapping="Wrap" Style="{StaticResource HavenMetadataTextStyle}" />
                     </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="Tell HAVEN" Click="OnMemoryTellClicked" Style="{StaticResource HavenPrimaryButtonStyle}" />
+                        <Button Content="Connect a folder" Click="OnMemoryConnectFolderClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
+                        <Button Content="Refresh" Click="OnMemoryRefreshClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
+                    </StackPanel>
                     <Grid x:Name="MemorySplit" ColumnSpacing="18">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -638,6 +647,8 @@
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <Button Content="Add person" Click="OnAddPersonClicked"
                                 Style="{StaticResource HavenPrimaryButtonStyle}" />
+                        <Button Content="Refresh" Click="OnPeopleRefreshClicked"
+                                Style="{StaticResource HavenSecondaryButtonStyle}" />
                     </StackPanel>
                     <TextBlock x:Name="PeopleErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
                     <TextBlock x:Name="PeopleStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
@@ -864,8 +875,8 @@
 
                     <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Connections" />
                     <TextBlock Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap"
-                               Text="Calendar, email, browser and provider accounts arrive with their milestones. Connect a home provider any time from Setup." />
-                    <Button Content="Open setup" Click="OnReopenSetupClicked" HorizontalAlignment="Left" />
+                               Text="Connect supported home providers from Setup. Email folders and calendar files connect directly from Communications, and computer folders connect directly from Computer." />
+                    <Button Content="Open setup &amp; connections" Click="OnReopenSetupClicked" HorizontalAlignment="Left" />
 
                     <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="External Agents" />
                     <TextBlock Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap"

@@ -21,6 +21,7 @@ from haven.actions import (
     ResourceActionRequest,
     ResourceAuthorityEngine,
 )
+from haven.core import correlation
 from haven.core.domain import ConfirmationToken, DecisionStatus, RiskTier
 from haven.integrations.comms import (
     EMAIL_PROVIDER_ID,
@@ -267,12 +268,21 @@ class CommsService:
     # -- governed calendar mutations -----------------------------------------------------
 
     def create_event(
-        self, *, title: str | None, start_at, end_at=None, location: str = "", attendees=()
+        self,
+        *,
+        title: str | None,
+        start_at,
+        end_at=None,
+        location: str = "",
+        attendees=(),
+        justification: str | None = None,
     ) -> dict:
         if not isinstance(title, str) or not title.strip():
             return {"ok": False, "error": "a non-empty 'title' is required"}
         if not self._config["calendar_sources"]:
             return {"ok": False, "error": "no calendar source is configured"}
+        if not isinstance(justification, str) or not justification.strip():
+            return {"ok": False, "error": "calendar create requires a non-empty justification"}
         event = CalendarEvent(
             event_id=f"event-{uuid4().hex}",
             title=title.strip(),
@@ -291,9 +301,12 @@ class CommsService:
                 "location": event.location,
                 "attendees": list(event.attendees),
             },
+            justification=justification.strip(),
         )
 
-    def update_event(self, *, event_id: str | None, **changes) -> dict:
+    def update_event(self, *, event_id: str | None, justification: str | None = None, **changes) -> dict:
+        if not isinstance(justification, str) or not justification.strip():
+            return {"ok": False, "error": "calendar update requires a non-empty justification"}
         provider = self.calendar_provider()
         event = provider.get(event_id.strip()) if isinstance(event_id, str) else None
         if event is None:
@@ -316,14 +329,21 @@ class CommsService:
                 "location": updated.location,
                 "attendees": list(updated.attendees),
             },
+            justification=justification.strip(),
         )
 
-    def delete_event(self, *, event_id: str | None) -> dict:
+    def delete_event(self, *, event_id: str | None, justification: str | None = None) -> dict:
+        if not isinstance(justification, str) or not justification.strip():
+            return {"ok": False, "error": "calendar delete requires a non-empty justification"}
         provider = self.calendar_provider()
         event = provider.get(event_id.strip()) if isinstance(event_id, str) else None
         if event is None:
             return {"ok": False, "error": f"unknown calendar event: {event_id}"}
-        return self._request("calendar.event.delete", event_payload={"event_id": event.event_id})
+        return self._request(
+            "calendar.event.delete",
+            event_payload={"event_id": event.event_id},
+            justification=justification.strip(),
+        )
 
     def confirm(self, *, request_id: str | None) -> dict:
         return self._confirm(request_id)
@@ -342,7 +362,7 @@ class CommsService:
         )
         return {"ok": True}
 
-    def _request(self, action: str, *, event_payload: dict) -> dict:
+    def _request(self, action: str, *, event_payload: dict, justification: str) -> dict:
         principal = self._identity.current_principal()
         now = self._clock()
         request = ResourceActionRequest(
@@ -353,7 +373,7 @@ class CommsService:
             action=action,
             resource_id=event_resource_id(event_payload["event_id"]),
             parameters=tuple(sorted((key, json.dumps(value)) for key, value in event_payload.items())),
-            justification="owner changed a calendar event from HAVEN",
+            justification=justification,
             requested_at=now,
         )
         decision = self._engine.decide(request, principal=principal, now=now)
@@ -446,6 +466,7 @@ class CommsService:
                 recorded_at=self._clock(),
                 success=success,
                 detail=detail,
+                correlation_id=correlation.current(),
             )
         )
 

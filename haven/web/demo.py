@@ -404,8 +404,16 @@ class DemoDirector(HavenApplication):
         if self._scenario_enabled:
             self.garage_rule_id = self._prepare_garage_rule(now)
             self.camera_rule_id = self._prepare_camera_rule(now)
-            self.set_scheduler_enabled(self.garage_rule_id, False)
-            self.set_scheduler_enabled(self.camera_rule_id, False)
+            self.set_scheduler_enabled(
+                self.garage_rule_id,
+                False,
+                justification="demo scenario starts the garage automation paused",
+            )
+            self.set_scheduler_enabled(
+                self.camera_rule_id,
+                False,
+                justification="demo scenario starts the camera automation paused",
+            )
             self.office_light_rule_id = self._prepare_office_light_rule(now)
             self.start_scenario()
         else:

@@ -12,7 +12,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from haven.domains.projects import ACTIVE, ARCHIVED, OPEN_STATUSES, ProjectRecord
+from haven.domains.projects import ACTIVE, ARCHIVED, OPEN_STATUSES, PROJECT_TRANSITIONS, ProjectRecord
 from haven.domains.projects.store import ProjectStore, project_to_dict
 from haven.domains.tasks import (
     BLOCKED,
@@ -20,6 +20,7 @@ from haven.domains.tasks import (
     OPEN,
     PROPOSED,
     TERMINAL_STATES,
+    TASK_TRANSITIONS,
     TaskRecord,
 )
 from haven.domains.tasks.store import TaskStore, task_to_dict
@@ -164,6 +165,10 @@ class ProjectService:
             return record
         if record.revision != expected_revision:
             return _stale(record.revision, expected_revision)
+        if status is not None and status != record.status:
+            allowed = PROJECT_TRANSITIONS.get(record.status, frozenset())
+            if status not in allowed:
+                return _fail(f"invalid project status transition: {record.status} -> {status}")
         try:
             updated = replace(
                 record,
@@ -436,6 +441,12 @@ class TaskService:
             return _stale(record.revision, expected_revision)
         if record.is_terminal:
             return _fail("terminal tasks are immutable; create a new task instead")
+        if state is not None and state != record.state:
+            allowed = TASK_TRANSITIONS.get(record.state, frozenset())
+            if state not in allowed:
+                if state == DONE:
+                    return _fail("use the task completion command to move a task to done")
+                return _fail(f"invalid task state transition: {record.state} -> {state}")
         if project_id is not None:
             project_error = self._check_project(visible, record.scope_id, project_id)
             if project_error is not None:

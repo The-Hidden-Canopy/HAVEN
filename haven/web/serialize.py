@@ -134,6 +134,9 @@ def event_to_dict(
         summary = f"Rule revoked: {label} by {event.actor_id}"
     elif event_type == EventType.RULE_CLARIFIED:
         summary = f"Rule clarified: {label} by {event.actor_id}"
+    elif event_type == EventType.RULE_SCHEDULER_CHANGED:
+        state = "scheduled" if payload.get("enabled") else "paused"
+        summary = f"Rule {state}: {label} by {event.actor_id}"
     elif event_type in (
         EventType.RULE_APPROVAL_BLOCKED,
         EventType.RULE_CLARIFICATION_BLOCKED,

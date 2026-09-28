@@ -16,12 +16,18 @@ public sealed partial class MainWindow
 
     private readonly Dictionary<string, JsonElement> _emailMessagesById = new();
 
+    private async void OnCommsRefreshClicked(object sender, RoutedEventArgs args)
+    {
+        CommsStatusText.Text = "Refreshing…";
+        await LoadCommsTabAsync();
+    }
+
     private void OnCommsTabClicked(object sender, RoutedEventArgs args)
     {
         if (sender is Button button && button.Tag is string tab)
         {
             _commsTab = tab;
-            foreach (var item in ((StackPanel)button.Parent).Children.OfType<Button>())
+            foreach (var item in ((StackPanel)button.Parent).Children.OfType<Button>().Where(item => item.Tag is string))
             {
                 item.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
                     item == button ? "HavenAccentBrush" : "HavenMutedTextBrush"];
@@ -60,16 +66,14 @@ public sealed partial class MainWindow
             CommsTabContent.Children.Clear();
             if (_commsTab == "messages")
             {
-                CommsTabContent.Children.Add(new Border
+                var messageState = new StackPanel { Spacing = 8 };
+                messageState.Children.Add(new TextBlock
                 {
-                    Style = (Style)Application.Current.Resources["HavenCardStyle"],
-                    Child = new TextBlock
-                    {
-                        Text = "Message threads (Slack/Teams-style) arrive with a credentialed conversation provider. Nothing is connected, and HAVEN reads nothing until you add one.",
-                        TextWrapping = TextWrapping.Wrap,
-                        Style = (Style)Application.Current.Resources["HavenBodyTextStyle"],
-                    },
+                    Text = "No conversation provider is available in this build. HAVEN is not reading Slack, Teams, or other message threads. Email and calendar sources can be connected directly from their tabs.",
+                    TextWrapping = TextWrapping.Wrap,
+                    Style = (Style)Application.Current.Resources["HavenBodyTextStyle"],
                 });
+                CommsTabContent.Children.Add(WrapCard(messageState));
             }
             else
             {
@@ -84,14 +88,26 @@ public sealed partial class MainWindow
                 var connected = status.ValueKind == JsonValueKind.Object
                     ? Enumerate(status, "connected_browsers").Count()
                     : 0;
-                CommsTabContent.Children.Add(new TextBlock
+                if (connected > 0)
                 {
-                    Text = connected > 0
-                        ? $"{connected} browser(s) connected. Tab identity, title, and URL only — no page content, no incognito."
-                        : "No browser connected. Install the experimental connector (browser/ in the HAVEN repo) to see tabs here.",
-                    Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
-                    TextWrapping = TextWrapping.Wrap,
-                });
+                    CommsTabContent.Children.Add(new TextBlock
+                    {
+                        Text = $"{connected} browser(s) connected. Tab identity, title, and URL only — no page content, no incognito.",
+                        Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                        TextWrapping = TextWrapping.Wrap,
+                    });
+                }
+                else
+                {
+                    var browserState = new StackPanel { Spacing = 8 };
+                    browserState.Children.Add(new TextBlock
+                    {
+                        Text = "No browser connector is available in this build. HAVEN will show tab identity, title, and URL here when a supported connector is added; it never reads page content or incognito tabs.",
+                        Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                        TextWrapping = TextWrapping.Wrap,
+                    });
+                    CommsTabContent.Children.Add(WrapCard(browserState));
+                }
                 var byBrowser = Enumerate(tabs, "tabs")
                     .GroupBy(tab => GetString(tab, "browser") ?? "Unknown browser")
                     .OrderBy(g => g.Key);
@@ -137,7 +153,18 @@ public sealed partial class MainWindow
                         }
                         card.Children.Add(body);
                         var focus = new Button { Content = "Focus", VerticalAlignment = VerticalAlignment.Center };
-                        focus.Click += async (_, _) => await RunCommsMutationAsync(() => _client!.FocusBrowserTabAsync(resourceId));
+                        focus.Click += async (_, _) =>
+                        {
+                            var justification = await PromptForJustificationAsync(
+                                "Focus this browser tab?",
+                                "HAVEN will ask the connected browser to bring this tab forward.",
+                                "Why should this tab be focused?",
+                                "Focus");
+                            if (justification is not null)
+                            {
+                                await RunCommsMutationAsync(() => _client!.FocusBrowserTabAsync(resourceId, justification));
+                            }
+                        };
                         Grid.SetColumn(focus, 1);
                         card.Children.Add(focus);
                         var wrap = new StackPanel();

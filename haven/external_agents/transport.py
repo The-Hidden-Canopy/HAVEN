@@ -18,6 +18,7 @@ raw value is used for the lookup and discarded.
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any, Mapping
 
 from .domain import ExternalRequest, ExternalScope
@@ -96,6 +97,18 @@ class TransportBridge:
         if not isinstance(external_request_id, str) or not external_request_id.strip():
             raise ExternalDenied(INVALID_ARGUMENTS, "a non-empty 'external_request_id' is required")
 
+        args = arguments if isinstance(arguments, Mapping) else {}
+        validated_action: tuple[str, str, Mapping[str, Any] | None] | None = None
+        validated_pending: str | None = None
+        if tool == "haven.action.request":
+            validated_action = (
+                _require_argument(args, "device_id"),
+                _require_argument(args, "service"),
+                args.get("parameters") if isinstance(args.get("parameters"), Mapping) else None,
+            )
+        elif tool in {"haven.action.confirm", "haven.action.deny"}:
+            validated_pending = _require_argument(args, "request_id")
+
         request = ExternalRequest(
             connection_id=connection.connection_id,
             tool=tool,
@@ -108,23 +121,70 @@ class TransportBridge:
         )
         admitted = self._gateway.admit(request)
 
+        request_hash = _request_hash(tool=tool, arguments=args, subject=subject)
+        try:
+            claim, prior_result = self._store.claim_request(
+                household_id=connection.household_id,
+                connection_id=connection.connection_id,
+                external_request_id=external_request_id.strip(),
+                request_hash=request_hash,
+                created_at=admitted.provenance.received_at,
+            )
+        except ValueError as exc:
+            raise ExternalDenied(INVALID_ARGUMENTS, str(exc)) from exc
+        if claim == "complete":
+            assert prior_result is not None
+            return prior_result
+        if claim == "in_flight":
+            raise ExternalDenied(INVALID_ARGUMENTS, "external request is already in progress")
+
         if tool in READ_TOOL_SCOPES:
             if tool == "haven.world.get":
-                return self._reads.world_get(admitted)
-            return self._reads.rooms_list(admitted)
+                result = self._reads.world_get(admitted)
+            else:
+                result = self._reads.rooms_list(admitted)
+            self._store.complete_request(
+                household_id=connection.household_id,
+                connection_id=connection.connection_id,
+                external_request_id=external_request_id.strip(),
+                request_hash=request_hash,
+                result=result,
+            )
+            return result
 
-        args = arguments if isinstance(arguments, Mapping) else {}
         if tool == "haven.action.request":
-            return self._gateway.request_action(
+            assert validated_action is not None
+            result = self._gateway.request_action(
                 admitted,
                 self._executor,
-                device_id=_require_argument(args, "device_id"),
-                service=_require_argument(args, "service"),
-                parameters=args.get("parameters") if isinstance(args.get("parameters"), Mapping) else None,
+                device_id=validated_action[0],
+                service=validated_action[1],
+                parameters=validated_action[2],
             )
-        if tool == "haven.action.confirm":
-            return self._gateway.confirm_pending(admitted, self._executor, _require_argument(args, "request_id"))
-        return self._gateway.deny_pending(admitted, self._executor, _require_argument(args, "request_id"))
+        elif tool == "haven.action.confirm":
+            assert validated_pending is not None
+            result = self._gateway.confirm_pending(admitted, self._executor, validated_pending)
+        else:
+            assert validated_pending is not None
+            result = self._gateway.deny_pending(admitted, self._executor, validated_pending)
+        self._store.complete_request(
+            household_id=connection.household_id,
+            connection_id=connection.connection_id,
+            external_request_id=external_request_id.strip(),
+            request_hash=request_hash,
+            result=result,
+        )
+        return result
+
+
+def _request_hash(*, tool: str, arguments: Mapping[str, Any], subject: str | None) -> str:
+    payload = {
+        "tool": tool,
+        "arguments": arguments,
+        "subject": subject,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _require_argument(arguments: Mapping[str, Any], name: str) -> str:

@@ -249,6 +249,11 @@ public sealed partial class MainWindow
 
     private async void OnReopenSetupClicked(object sender, RoutedEventArgs args)
     {
+        await ReopenSetupAsync();
+    }
+
+    private async Task ReopenSetupAsync()
+    {
         if (_client is null)
         {
             return;

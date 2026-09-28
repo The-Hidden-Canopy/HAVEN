@@ -44,6 +44,7 @@ class HavenState:
     actions: tuple[ActionRecord, ...] = ()
     memory: tuple[MemoryEntry, ...] = ()
     consumed_confirmation_tokens: tuple[str, ...] = ()
+    scheduler_disabled_rules: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,15 @@ class RuleRevocation:
     rule_id: str
     revoked_by: str
     revoked_by_role: RoleTier
+    justification: str
+
+
+@dataclass(frozen=True)
+class RuleSchedulerChange:
+    rule_id: str
+    enabled: bool
+    changed_by: str
+    changed_by_role: RoleTier
     justification: str
 
 
@@ -152,6 +162,22 @@ class HavenStore:
         if len(entry_ids) != len(set(entry_ids)):
             raise InvalidTransition("restored memory entries contain duplicate entry_ids")
         self._state = replace(self._state, memory=memory)
+
+    def restore_scheduler_enabled(self, scheduler_enabled: dict[str, bool]) -> None:
+        """Rehydrate scheduler operational state from its sidecar.
+
+        The sidecar is a process-lifetime restore boundary, like the other
+        ``restore_*`` methods above. Live changes must use
+        ``SET_RULE_SCHEDULER`` so the state change and its domain event are
+        accepted together; boot does not replay those historical transitions.
+        """
+
+        disabled = {
+            rule_id
+            for rule_id, enabled in scheduler_enabled.items()
+            if isinstance(rule_id, str) and rule_id in {rule.rule_id for rule in self._state.rules} and not enabled
+        }
+        self._state = replace(self._state, scheduler_disabled_rules=tuple(sorted(disabled)))
 
     def restore_events(self, events: tuple[DomainEvent, ...]) -> None:
         """Rehydrate the domain event log saved by a previous process lifetime.
@@ -360,6 +386,37 @@ class HavenStore:
                     rule_id=rule.rule_id,
                     revoked_by=revocation.revoked_by,
                     justification=revocation.justification,
+                ),
+            )
+
+        if transition.kind == TransitionKind.SET_RULE_SCHEDULER:
+            change = transition.payload
+            if not isinstance(change, RuleSchedulerChange):
+                raise TypeError("SET_RULE_SCHEDULER requires a RuleSchedulerChange")
+            rule = self.get_rule(change.rule_id)
+            if rule.draft.household_id != self._household_id:
+                raise ScopeViolation("scheduler rule household does not match this store")
+            if change.changed_by != transition.actor_id:
+                raise InvalidTransition("scheduler actor does not match the transition actor")
+            if change.changed_by_role != RoleTier.OWNER:
+                raise InvalidTransition("only an owner can enable or disable a household rule")
+            if not isinstance(change.justification, str) or not change.justification.strip():
+                raise InvalidTransition("scheduler changes require a non-empty justification")
+            if rule.status != RuleStatus.APPROVED:
+                raise InvalidTransition("only approved rules can be enabled or disabled")
+            disabled = set(state.scheduler_disabled_rules)
+            if change.enabled:
+                disabled.discard(change.rule_id)
+            else:
+                disabled.add(change.rule_id)
+            return (
+                replace(state, scheduler_disabled_rules=tuple(sorted(disabled))),
+                EventType.RULE_SCHEDULER_CHANGED,
+                _payload(
+                    rule_id=change.rule_id,
+                    enabled=change.enabled,
+                    changed_by=change.changed_by,
+                    justification=change.justification,
                 ),
             )
 

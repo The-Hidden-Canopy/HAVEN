@@ -122,7 +122,10 @@ def test_no_connector_means_explicit_unavailable(stack) -> None:
         ledger=ActionLedgerStore(Path(tempfile.mkdtemp()) / "l.db"),
         clock=lambda: NOW,
     )
-    denied = service.focus_tab(resource_id=tab_resource_id("tab-2"))
+    denied = service.focus_tab(
+        resource_id=tab_resource_id("tab-2"),
+        justification="Check the observed Firefox tab connection.",
+    )
     # The request itself is allowed; execution reports the missing connector
     # in the consequence slot -- explicit, receipted, never a silent no-op.
     assert denied["ok"] is True
@@ -132,11 +135,18 @@ def test_no_connector_means_explicit_unavailable(stack) -> None:
 
 def test_focus_and_open_are_direct_receipted(stack) -> None:
     _provider, service, _resources, ledger, commands, _hub = stack
-    focused = service.focus_tab(resource_id=tab_resource_id("tab-1"))
+    focused = service.focus_tab(
+        resource_id=tab_resource_id("tab-1"),
+        justification="The resident selected this tab to bring forward.",
+    )
     assert focused == {"ok": True, "success": True, "detail": "ok"}
     assert commands[-1] == ("focus_tab", {"tab_id": "tab-1"})
 
-    opened = service.open_url(browser="chrome", url="https://haven.example.org")
+    opened = service.open_url(
+        browser="chrome",
+        url="https://haven.example.org",
+        justification="The resident requested this reference page.",
+    )
     assert opened["success"] is True
     assert commands[-1] == ("open_url", {"url": "https://haven.example.org"})
 
@@ -147,7 +157,10 @@ def test_focus_and_open_are_direct_receipted(stack) -> None:
 
 def test_close_is_confirmation_gated_and_deny_releases(stack) -> None:
     _provider, service, resources, ledger, commands, _hub = stack
-    requested = service.close_tab(resource_id=tab_resource_id("tab-1"))
+    requested = service.close_tab(
+        resource_id=tab_resource_id("tab-1"),
+        justification="The resident asked to close the selected tab.",
+    )
     assert requested["status"] == "confirmation_required"
     assert resources.get(tab_resource_id("tab-1")).stale is False  # nothing happened yet
 
@@ -161,7 +174,10 @@ def test_close_is_confirmation_gated_and_deny_releases(stack) -> None:
     ]
     assert entry.status.value == "deny"
 
-    requested = service.close_tab(resource_id=tab_resource_id("tab-1"))
+    requested = service.close_tab(
+        resource_id=tab_resource_id("tab-1"),
+        justification="The resident confirmed this tab should be closed.",
+    )
     confirmed = service.confirm_close(request_id=requested["request_id"])
     assert confirmed["success"] is True
     assert commands[-1] == ("close_tab", {"tab_id": "tab-1"})
@@ -174,7 +190,9 @@ def test_fail_closed_without_owner_and_on_unknown_tabs(stack) -> None:
     assert service.open_url(browser="chrome", url="https://x.org")["ok"] is False
 
     service.set_director(_FakeDirector())
-    assert service.focus_tab(resource_id="browsertab:ghost")["ok"] is False
+    assert service.focus_tab(
+        resource_id="browsertab:ghost", justification="Check the named tab."
+    )["ok"] is False
     resources.save(
         type(resources.get(tab_resource_id("tab-1")))(
             resource_id="file:notatab",
@@ -187,4 +205,6 @@ def test_fail_closed_without_owner_and_on_unknown_tabs(stack) -> None:
             observed_at=NOW,
         )
     )
-    assert service.focus_tab(resource_id="file:notatab")["ok"] is False
+    assert service.focus_tab(
+        resource_id="file:notatab", justification="Check the named resource."
+    )["ok"] is False

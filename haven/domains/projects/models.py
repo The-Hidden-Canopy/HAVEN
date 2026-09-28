@@ -21,6 +21,13 @@ ARCHIVED = "archived"
 
 PROJECT_STATUSES = frozenset({ACTIVE, PLANNING, ON_HOLD, COMPLETED, ARCHIVED})
 OPEN_STATUSES = frozenset({ACTIVE, PLANNING, ON_HOLD})
+PROJECT_TRANSITIONS = {
+    PLANNING: frozenset({ACTIVE, ON_HOLD, COMPLETED, ARCHIVED}),
+    ACTIVE: frozenset({PLANNING, ON_HOLD, COMPLETED, ARCHIVED}),
+    ON_HOLD: frozenset({ACTIVE, PLANNING, COMPLETED, ARCHIVED}),
+    COMPLETED: frozenset({ARCHIVED}),
+    ARCHIVED: frozenset(),
+}
 
 
 def _require_text(value: str, *, name: str) -> str:
@@ -79,5 +86,6 @@ __all__ = [
     "OPEN_STATUSES",
     "PLANNING",
     "PROJECT_STATUSES",
+    "PROJECT_TRANSITIONS",
     "ProjectRecord",
 ]
