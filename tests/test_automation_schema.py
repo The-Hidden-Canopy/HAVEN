@@ -60,7 +60,7 @@ def test_action_target_rejects_a_non_consequence_class():
 
 def test_automation_spec_composes_trigger_selector_and_action():
     spec = AutomationSpec(
-        spec_id="spec-1",
+        spec_id="spec-1", household_id="hh-1",
         trigger=Trigger(kind=TriggerKind.TIME, parameters={"time": "21:00"}),
         selector=Selector(parameters={"room": "office"}),
         action=ActionTarget(
@@ -81,17 +81,17 @@ def test_automation_spec_rejects_wrong_component_types():
 
     with pytest.raises(ValueError):
         AutomationSpec(
-            spec_id="s", trigger="not a trigger", selector=valid_selector, action=valid_action,
+            spec_id="s", household_id="hh-1", trigger="not a trigger", selector=valid_selector, action=valid_action,
             source_text="t", created_by="u",
         )
     with pytest.raises(ValueError):
         AutomationSpec(
-            spec_id="s", trigger=valid_trigger, selector="not a selector", action=valid_action,
+            spec_id="s", household_id="hh-1", trigger=valid_trigger, selector="not a selector", action=valid_action,
             source_text="t", created_by="u",
         )
     with pytest.raises(ValueError):
         AutomationSpec(
-            spec_id="s", trigger=valid_trigger, selector=valid_selector, action="not an action target",
+            spec_id="s", household_id="hh-1", trigger=valid_trigger, selector=valid_selector, action="not an action target",
             source_text="t", created_by="u",
         )
 
@@ -101,9 +101,9 @@ def test_automation_spec_requires_non_blank_identity_fields():
     valid_selector = Selector()
     valid_action = ActionTarget(domain="tasks", action="task.create", consequence_class=ConsequenceClass.REVERSIBLE_LOCAL)
 
-    for field_name in ("spec_id", "source_text", "created_by"):
+    for field_name in ("spec_id", "household_id", "source_text", "created_by"):
         kwargs = dict(
-            spec_id="s", trigger=valid_trigger, selector=valid_selector, action=valid_action,
+            spec_id="s", household_id="hh-1", trigger=valid_trigger, selector=valid_selector, action=valid_action,
             source_text="t", created_by="u",
         )
         kwargs[field_name] = ""
@@ -117,7 +117,7 @@ def test_the_schema_grants_no_execution_capability_of_its_own():
     matching this module's own "contract only, this pass" scope."""
 
     spec = AutomationSpec(
-        spec_id="spec-1",
+        spec_id="spec-1", household_id="hh-1",
         trigger=Trigger(kind=TriggerKind.DEADLINE),
         selector=Selector(),
         action=ActionTarget(domain="tasks", action="task.escalate", consequence_class=ConsequenceClass.REVERSIBLE_LOCAL),

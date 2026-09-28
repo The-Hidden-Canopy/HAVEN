@@ -119,11 +119,27 @@ public sealed partial class MainWindow
         }
         if (!any)
         {
-            HomeDevicesList.Children.Add(new TextBlock
+            // "Setup -> Connections" is the one-time first-run wizard, which
+            // nothing in the main app points back to once it is behind you.
+            // Discover (a Home tab, not Setup) is the real, always-reachable
+            // place enrollment already lives -- this just gets you there in
+            // one click instead of leaving you to find it.
+            var prompt = new StackPanel { Spacing = 8 };
+            prompt.Children.Add(new TextBlock
             {
-                Text = "No devices yet. Enroll a device from Setup → Connections and it appears here.",
+                Text = "No devices yet. Discover finds what's on your network so you can enroll one.",
                 Opacity = 0.72,
+                TextWrapping = TextWrapping.Wrap,
             });
+            var goToDiscover = new Button
+            {
+                Content = "Go to Discover",
+                Style = (Style)Application.Current.Resources["HavenSecondaryButtonStyle"],
+                HorizontalAlignment = HorizontalAlignment.Left,
+            };
+            goToDiscover.Click += (_, _) => SelectHomeTab("discover");
+            prompt.Children.Add(goToDiscover);
+            HomeDevicesList.Children.Add(prompt);
         }
     }
 
@@ -411,8 +427,9 @@ public sealed partial class MainWindow
             card.Opacity = 0.55;
         }
 
-        var head = new Grid();
+        var head = new Grid { ColumnSpacing = 8 };
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = Microsoft.UI.Xaml.GridLength.Auto });
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = Microsoft.UI.Xaml.GridLength.Auto });
         var label = new TextBlock
         {
@@ -421,16 +438,29 @@ public sealed partial class MainWindow
             TextWrapping = TextWrapping.Wrap,
         };
         head.Children.Add(label);
+        // Evidence status as a named chip, not just a dimmed/tinted value line
+        // (spec: distinct statuses stay distinct, e.g. Needs You's Discover
+        // pills) -- "observed"/"declared" are healthy evidence kinds and get
+        // no chip at all; "stale"/"fallback"/"unavailable" each get their own
+        // label instead of one undifferentiated "something is off" signal.
+        if (degraded && status is not null)
+        {
+            var (chipTint, chipForeground) = status switch
+            {
+                "unavailable" => ("HavenDangerTintBrush", "HavenDangerBrush"),
+                "stale" or "fallback" => ("HavenWarningTintBrush", "HavenWarningBrush"),
+                _ => ("HavenAccentTintBrush", "HavenAccentBrush"),
+            };
+            var statusChip = MakeChip(Sentence(status), chipTint, chipForeground);
+            Grid.SetColumn(statusChip, 1);
+            head.Children.Add(statusChip);
+        }
         var stateText = new TextBlock
         {
             Text = DeviceStateLine(device),
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
         };
-        if (degraded)
-        {
-            stateText.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenWarningBrush"];
-        }
-        Grid.SetColumn(stateText, 1);
+        Grid.SetColumn(stateText, 2);
         head.Children.Add(stateText);
         card.Children.Add(head);
 
