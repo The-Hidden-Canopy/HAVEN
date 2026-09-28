@@ -12,7 +12,9 @@ directions.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import hashlib
+import hmac
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -47,6 +49,7 @@ class SyncEvent:
     causal_parents: tuple[str, ...]
     payload: tuple[tuple[str, Any], ...]
     occurred_at: datetime
+    signature: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("event_id", "origin_device_id", "object_id", "kind", "scope_id"):
@@ -59,8 +62,12 @@ class SyncEvent:
             object.__setattr__(self, "payload", tuple(self.payload))
         if self.occurred_at.tzinfo is None or self.occurred_at.utcoffset() is None:
             raise ValueError("occurred_at must be timezone-aware")
+        if self.signature is not None and (
+            not isinstance(self.signature, str) or not self.signature.strip()
+        ):
+            raise ValueError("signature must be a non-empty string when present")
 
-    def wire(self) -> dict[str, Any]:
+    def _unsigned_wire(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
             "seq": self.seq,
@@ -73,6 +80,26 @@ class SyncEvent:
             "payload": dict(self.payload),
             "occurred_at": self.occurred_at.isoformat(),
         }
+
+    def signing_bytes(self) -> bytes:
+        return json.dumps(
+            self._unsigned_wire(), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+
+    def signed(self, key: bytes) -> "SyncEvent":
+        if not isinstance(key, bytes) or not key:
+            raise ValueError("sync signing key must be non-empty bytes")
+        signature = hmac.new(key, self.signing_bytes(), hashlib.sha256).hexdigest()
+        return replace(self, signature=signature)
+
+    def verify(self, key: bytes) -> bool:
+        if not isinstance(key, bytes) or not key or not isinstance(self.signature, str):
+            return False
+        expected = hmac.new(key, self.signing_bytes(), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(self.signature, expected)
+
+    def wire(self) -> dict[str, Any]:
+        return {**self._unsigned_wire(), "signature": self.signature}
 
     @staticmethod
     def from_wire(payload: dict[str, Any]) -> "SyncEvent":
@@ -89,6 +116,7 @@ class SyncEvent:
             causal_parents=tuple(str(item) for item in payload.get("causal_parents", ())),
             payload=tuple((str(k), v) for k, v in dict(payload.get("payload", {})).items()),
             occurred_at=datetime.fromisoformat(str(payload["occurred_at"])),
+            signature=payload.get("signature"),
         )
 
 

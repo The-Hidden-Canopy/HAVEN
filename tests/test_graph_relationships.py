@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from haven.core.domain import EventType, Principal, RoleTier
+from haven.core.store import HavenStore
 from haven.domains.projects import ProjectRecord, ProjectStore
 from haven.domains.tasks import TaskRecord, TaskStore
 from haven.graph import (
@@ -24,6 +26,8 @@ from haven.ontology.predicates import BELONGS_TO, CONTAINS, OWNED_BY, RELATED_TO
 from haven.ontology.store import OntologyStore
 from haven.resources import ResourceRecord
 from haven.resources.store import ResourceStore
+from haven.ipc import request_message
+from haven.web.server import make_server
 
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
 VISIBLE = ("scope:personal",)
@@ -180,12 +184,17 @@ def test_correlator_candidates_and_policy_tiers(stack) -> None:
     }
     assert ontology.list_by_scope("scope:personal") == ()
 
-    admitted = policy.admit(high)
-    assert ontology.get(admitted["assertion_id"]) is not None
+    assertion = policy.build_assertion(high)
+    assert assertion.assertion_id.startswith("assert-learned:")
+    # The policy only constructs review material. It cannot write an edge
+    # without the governed service transition below.
+    assert ontology.list_by_scope("scope:personal") == ()
 
 
 def test_service_reject_persists_and_requires_explicit_admission(stack) -> None:
     tmp, resources, ontology, *_ = stack
+    store = HavenStore(household_id="household:test")
+    owner = Principal(actor_id="owner:test", household_id="household:test", role_tier=RoleTier.OWNER)
     _file(resources, "alpha", title="alpha bravo charlie")
     _file(resources, "bravo", title="bravo charlie delta echo")
     service = RelationshipService(
@@ -194,6 +203,8 @@ def test_service_reject_persists_and_requires_explicit_admission(stack) -> None:
         policy=RelationshipAdmissionPolicy(ontology=ontology, clock=lambda: NOW),
         ontology=ontology,
         state_path=Path(tmp) / "graph.json",
+        transition_store=store,
+        principal=owner,
     )
     first = service.candidates(visible_scopes=VISIBLE)["candidates"]
     assert first, "expected a needs_review candidate"
@@ -208,14 +219,113 @@ def test_service_reject_persists_and_requires_explicit_admission(stack) -> None:
         policy=RelationshipAdmissionPolicy(ontology=ontology, clock=lambda: NOW),
         ontology=ontology,
         state_path=Path(tmp) / "graph.json",
+        transition_store=store,
+        principal=owner,
     )
     remaining = service2.candidates(visible_scopes=VISIBLE)["candidates"]
     assert all(item["candidate_id"] != target["candidate_id"] for item in remaining)
 
-    admitted = service2.admit(candidate_id_value=remaining[0]["candidate_id"], visible_scopes=VISIBLE)
+    admitted = service2.admit(
+        candidate_id_value=remaining[0]["candidate_id"],
+        visible_scopes=VISIBLE,
+        justification="owner confirmed the relationship",
+    )
     assert admitted["ok"] is True
+    assert store.events[-1].event_type is EventType.RELATIONSHIP_ADMITTED
     edges = service2.edges_for(remaining[0]["subject"], visible_scopes=VISIBLE)["edges"]
     assert any("learned:" in (edge.get("provenance") or "") for edge in edges)
+
+
+def test_relationship_admission_fail_closed_for_justification_role_and_household(stack) -> None:
+    tmp, resources, ontology, *_ = stack
+    _file(resources, "alpha", title="alpha bravo charlie")
+    _file(resources, "bravo", title="bravo charlie delta echo")
+    store = HavenStore(household_id="household:test")
+
+    def make_service(principal):
+        return RelationshipService(
+            projector=RelationshipProjector(resources=resources, ontology=ontology),
+            correlator=Correlator(resources=resources, clock=lambda: NOW),
+            policy=RelationshipAdmissionPolicy(ontology=ontology, clock=lambda: NOW),
+            ontology=ontology,
+            state_path=Path(tmp) / "graph.json",
+            transition_store=store,
+            principal=principal,
+        )
+
+    target = make_service(
+        Principal(actor_id="owner:test", household_id="household:test", role_tier=RoleTier.OWNER)
+    ).candidates(visible_scopes=VISIBLE)["candidates"][0]
+    member = make_service(
+        Principal(actor_id="member:test", household_id="household:test", role_tier=RoleTier.MEMBER)
+    )
+    assert member.admit(
+        candidate_id_value=target["candidate_id"], visible_scopes=VISIBLE, justification=""
+    ) == {"ok": False, "error": "relationship admission requires a non-empty justification"}
+    assert member.admit(
+        candidate_id_value=target["candidate_id"],
+        visible_scopes=VISIBLE,
+        justification="member tried to admit",
+    ) == {"ok": False, "error": "only an owner can admit a household relationship"}
+
+    foreign = make_service(
+        Principal(actor_id="owner:other", household_id="household:other", role_tier=RoleTier.OWNER)
+    )
+    assert foreign.admit(
+        candidate_id_value=target["candidate_id"],
+        visible_scopes=VISIBLE,
+        justification="foreign household attempt",
+    ) == {"ok": False, "error": "relationship admission household scope does not match"}
+    assert ontology.list_by_scope("scope:personal") == ()
+    assert store.events == ()
+
+
+def test_server_does_not_grant_graph_owner_power_before_onboarding(stack) -> None:
+    tmp, *_ = stack
+    server, _ = make_server(0, data_dir=Path(tmp) / "server", clock=lambda: NOW)
+    try:
+        scope_id = server.identity.personal_scope_id
+        for resource_id, title in (
+            ("file:one", "alpha bravo charlie"),
+            ("file:two", "bravo charlie delta echo"),
+        ):
+            server.resources.save(
+                ResourceRecord(
+                    resource_id=resource_id,
+                    resource_type="file",
+                    scope_id=scope_id,
+                    provider_id="local_filesystem",
+                    title=title,
+                    locator=resource_id,
+                    capabilities=(),
+                    observed_at=NOW,
+                )
+            )
+        dispatcher = server.build_ipc_dispatcher()
+        candidates = dispatcher(request_message("c", "relationships.candidates", {}))["result"]["candidates"]
+        assert candidates
+        denied = dispatcher(
+            request_message(
+                "a",
+                "relationships.admit",
+                {"candidate_id": candidates[0]["candidate_id"], "justification": "try before setup"},
+            )
+        )["result"]
+        assert denied == {"ok": False, "error": "only an owner can admit a household relationship"}
+        assert server.director.store.events == ()
+
+        server.setup.declare_person(name="Owner", role="owner")
+        admitted = dispatcher(
+            request_message(
+                "b",
+                "relationships.admit",
+                {"candidate_id": candidates[0]["candidate_id"], "justification": "owner reviewed the edge"},
+            )
+        )["result"]
+        assert admitted["ok"] is True
+        assert server.director.store.events[-1].event_type is EventType.RELATIONSHIP_ADMITTED
+    finally:
+        server.server_close()
 
 
 def test_scope_fail_closed_edges_and_candidates(stack) -> None:

@@ -27,6 +27,7 @@ from ..ipc.events_pipe import EventPublisher
 from ..models.jobs import DownloadJobManager, job_to_dict
 from ..models.storage import default_models_root
 from ..core.correlation import bind as bind_correlation, new_id as new_correlation_id
+from ..core.domain import Principal, RoleTier
 from .application import build_application
 from ..intelligence.intents import MutationProposal
 from .haven_application import Clock, HavenApplication
@@ -460,6 +461,21 @@ class HavenWebServer(ThreadingHTTPServer):
                 )
             return tuple(rows)
 
+        def _graph_principal() -> Principal:
+            current = self.identity.current_principal()
+            # LocalIdentityProvider describes the installed principal, while
+            # the director is the authority on whether onboarding has
+            # actually declared an owner. A fresh install must not receive
+            # owner-only graph admission merely because the local identity
+            # object exists.
+            if self.director.has_declared_owner:
+                return current
+            return Principal(
+                actor_id=current.actor_id,
+                household_id=current.household_id,
+                role_tier=RoleTier.MEMBER,
+            )
+
         self.relationships = RelationshipService(
             projector=RelationshipProjector(
                 resources=self.resources,
@@ -474,6 +490,9 @@ class HavenWebServer(ThreadingHTTPServer):
             policy=RelationshipAdmissionPolicy(ontology=self.ontology, clock=scope_clock),
             ontology=self.ontology,
             state_path=Path(resolved_data_dir) / "graph.json",
+            transition_store_provider=lambda: self.director.store,
+            principal_provider=_graph_principal,
+            on_admitted=lambda: self.director._publish_state(),
         )
         self.today = TodayService(
             director=self.director,
@@ -1852,6 +1871,7 @@ class HavenWebServer(ThreadingHTTPServer):
             return self.relationships.admit(
                 candidate_id_value=params.get("candidate_id"),
                 visible_scopes=self.identity.visible_scope_ids(),
+                justification=params.get("justification"),
             )
 
         def _relationships_reject(params: dict) -> dict:
@@ -1961,10 +1981,14 @@ class HavenWebServer(ThreadingHTTPServer):
                 raise ValueError("a non-empty 'export_dir' is required")
             if not isinstance(import_dir, str) or not import_dir.strip():
                 raise ValueError("a non-empty 'import_dir' is required")
+            auth_key = params.get("auth_key")
+            if auth_key is not None and (not isinstance(auth_key, str) or not auth_key.strip()):
+                raise ValueError("auth_key must be a non-empty string when provided")
             return self.sync_engine.set_transport(
                 FolderSyncTransport(
                     export_dir=export_dir.strip(), import_dir=import_dir.strip()
-                )
+                ),
+                auth_key=auth_key,
             )
 
         def _sync_scope_aliases(params: dict) -> dict:
@@ -1992,6 +2016,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 merge_fields=params.get("merge_fields")
                 if isinstance(params.get("merge_fields"), dict)
                 else None,
+                justification=params.get("justification"),
             )
 
 

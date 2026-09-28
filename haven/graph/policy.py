@@ -59,10 +59,10 @@ class RelationshipAdmissionPolicy:
             return "needs_review"
         return "rejected"
 
-    def admit(self, candidate: CandidateRelationship) -> dict:
-        """Explicit admission: an asserted, provenance-carrying edge."""
+    def build_assertion(self, candidate: CandidateRelationship) -> OntologyAssertion:
+        """Build the durable edge after a caller has passed governance."""
 
-        assertion = OntologyAssertion(
+        return OntologyAssertion(
             assertion_id=f"assert-learned:{candidate.candidate_id.removeprefix('cand:')}",
             subject=candidate.subject,
             predicate=candidate.predicate,
@@ -73,16 +73,14 @@ class RelationshipAdmissionPolicy:
             source_ref=f"learned:{candidate.proposed_by}",
             confidence=candidate.confidence,
         )
-        self._ontology.save(assertion)
-        return {"ok": True, "assertion_id": assertion.assertion_id}
 
     def auto_admit(self, candidate: CandidateRelationship) -> dict | None:
         """Fail closed for the legacy automatic-admission entry point.
 
         The method remains as a compatibility seam for callers that have not
-        migrated to ``admit`` yet, but it must not turn model output into a
-        durable ontology assertion. Every candidate now requires an explicit
-        human admission through ``admit``.
+        migrated to the governed service, but it must not turn model output
+        into a durable ontology assertion. Every candidate now requires an
+        explicit human admission through ``RelationshipService.admit``.
         """
 
         return {"ok": False, "error": "automatic relationship admission is disabled; review and admit explicitly"}
