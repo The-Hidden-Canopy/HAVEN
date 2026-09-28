@@ -521,13 +521,23 @@ public sealed partial class MainWindow
         var running = service.TryGetProperty("running", out var runningValue) && runningValue.GetBoolean();
         var detail = GetString(service, "detail") ?? "";
         var card = new StackPanel { Spacing = 4 };
-        card.Children.Add(new TextBlock
+        var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        head.Children.Add(new TextBlock { Text = "Start at logon", VerticalAlignment = VerticalAlignment.Center });
+        head.Children.Add(MakeStatusPill(installed ? "Installed" : "Not installed", installed));
+        if (installed)
         {
-            Text = installed
-                ? (running ? "HAVEN starts at logon (running)" : $"HAVEN starts at logon ({detail})")
-                : $"Not installed to start at logon ({detail})",
-            TextWrapping = TextWrapping.Wrap,
-        });
+            head.Children.Add(MakeStatusPill(running ? "Running" : "Stopped", running));
+        }
+        card.Children.Add(head);
+        if (!string.IsNullOrWhiteSpace(detail))
+        {
+            card.Children.Add(new TextBlock
+            {
+                Text = detail,
+                Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         var toggle = new Button { Content = installed ? "Uninstall" : "Install" };
         toggle.Click += async (_, _) => await ToggleServiceAsync(installed);

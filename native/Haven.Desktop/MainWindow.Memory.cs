@@ -40,11 +40,21 @@ public sealed partial class MainWindow
                     TextWrapping = TextWrapping.Wrap,
                     FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 });
-                summary.Children.Add(new TextBlock
+                var stateRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+                var (stateTint, stateForeground) = state switch
                 {
-                    Text = $"{Sentence(state)} · {confidence} · {provenance}",
+                    "disputed" => ("HavenDangerTintBrush", "HavenDangerBrush"),
+                    "stale" or "unavailable" => ("HavenWarningTintBrush", "HavenWarningBrush"),
+                    _ => ("HavenAccentTintBrush", "HavenAccentBrush"),
+                };
+                stateRow.Children.Add(MakeChip(Sentence(state), stateTint, stateForeground));
+                stateRow.Children.Add(new TextBlock
+                {
+                    Text = $"{confidence} · {provenance}",
                     Opacity = 0.72,
+                    VerticalAlignment = VerticalAlignment.Center,
                 });
+                summary.Children.Add(stateRow);
                 MemoryClaims.Items.Add(new ListViewItem { Tag = claimId, Content = summary });
             }
             if (MemoryClaims.Items.Count == 0)

@@ -14,6 +14,7 @@ from haven.desktop import shell as shell_module
 from haven.desktop.shell import (
     DesktopShell,
     DesktopShellAlreadyRunning,
+    _configure_logging,
     _normalize_process_exit_code,
     _read_activation_record,
     find_edge_executable,
@@ -473,7 +474,19 @@ class _RecordingShell:
         return 0
 
 
-def test_main_launches_native_by_default(monkeypatch):
+def _isolate_data_dir(monkeypatch, tmp_path) -> None:
+    """`main()` now configures logging (haven.log/haven-console.log) into
+    the resolved data directory before constructing `DesktopShell` -- see
+    `haven.desktop.shell._configure_logging`. Every test below calls
+    `main()` with no `--data-dir`, so without this it would resolve to the
+    real default (`~/.haven`, a real household's actual HAVEN installation
+    directory on a dev machine) and write log files into it."""
+
+    monkeypatch.setenv("HAVEN_DATA_DIR", str(tmp_path / "isolated-data"))
+
+
+def test_main_launches_native_by_default(monkeypatch, tmp_path):
+    _isolate_data_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(shell_module, "DesktopShell", _RecordingShell)
 
     assert main([]) == 0
@@ -481,7 +494,8 @@ def test_main_launches_native_by_default(monkeypatch):
     assert _RecordingShell.last_kwargs["native"] is True
 
 
-def test_main_web_flag_falls_back_to_the_compatibility_host(monkeypatch):
+def test_main_web_flag_falls_back_to_the_compatibility_host(monkeypatch, tmp_path):
+    _isolate_data_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(shell_module, "DesktopShell", _RecordingShell)
 
     assert main(["--web"]) == 0
@@ -491,7 +505,8 @@ def test_main_web_flag_falls_back_to_the_compatibility_host(monkeypatch):
     assert _RecordingShell.last_kwargs["native"] is False
 
 
-def test_main_web_flag_prints_a_debug_surface_banner(monkeypatch, capsys):
+def test_main_web_flag_prints_a_debug_surface_banner(monkeypatch, tmp_path, capsys):
+    _isolate_data_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(shell_module, "DesktopShell", _RecordingShell)
 
     main(["--web"])
@@ -499,9 +514,89 @@ def test_main_web_flag_prints_a_debug_surface_banner(monkeypatch, capsys):
     assert "debug" in capsys.readouterr().err.lower()
 
 
-def test_main_native_default_prints_no_web_banner(monkeypatch, capsys):
+def test_main_native_default_prints_no_web_banner(monkeypatch, tmp_path, capsys):
+    _isolate_data_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(shell_module, "DesktopShell", _RecordingShell)
 
     main([])
 
     assert capsys.readouterr().err == ""
+
+
+# -- logging (run-haven.bat's detached pythonw/pyw launch) --------------------
+
+
+@pytest.fixture()
+def _release_log_handler_after():
+    """`_configure_logging` deliberately keeps its own handler/stream open
+    across calls (see its docstring) so it can replace them idempotently --
+    a test must still release the one it opened, or Windows will refuse to
+    delete `tmp_path` afterward because the file is still in use."""
+
+    yield
+    if shell_module._log_handler is not None:
+        import logging
+
+        logging.getLogger().removeHandler(shell_module._log_handler)
+        shell_module._log_handler.close()
+        shell_module._log_handler = None
+    if shell_module._console_log_file is not None:
+        shell_module._console_log_file.close()
+        shell_module._console_log_file = None
+
+
+def test_configure_logging_leaves_a_real_console_untouched(tmp_path, _release_log_handler_after):
+    import sys
+
+    original_stdout, original_stderr = sys.stdout, sys.stderr
+    _configure_logging(tmp_path)
+
+    assert sys.stdout is original_stdout
+    assert sys.stderr is original_stderr
+    assert (tmp_path / "haven.log").exists()
+
+
+def test_configure_logging_redirects_a_missing_console_and_captures_a_crash(tmp_path, _release_log_handler_after):
+    import sys
+
+    original_stdout, original_stderr = sys.stdout, sys.stderr
+    try:
+        sys.stdout = None
+        sys.stderr = None
+        _configure_logging(tmp_path)
+
+        assert sys.stdout is not None and sys.stderr is not None  # no longer None: pythonw's real failure mode
+        print("hello from a console-less process", file=sys.stderr)
+
+        try:
+            raise RuntimeError("simulated crash")
+        except RuntimeError:
+            sys.excepthook(*sys.exc_info())
+    finally:
+        sys.stdout, sys.stderr = original_stdout, original_stderr
+
+    assert "hello from a console-less process" in (tmp_path / "haven-console.log").read_text(encoding="utf-8")
+    log_text = (tmp_path / "haven.log").read_text(encoding="utf-8")
+    assert "unhandled exception" in log_text
+    assert "RuntimeError: simulated crash" in log_text
+
+
+def test_configure_logging_is_idempotent_across_repeated_calls(tmp_path, _release_log_handler_after):
+    """`main()` runs `_configure_logging` once per process in production,
+    but the test suite calls `main()` many times in one interpreter --
+    this must not accumulate a growing stack of open file handlers pointed
+    at the same (or a since-deleted) data directory."""
+
+    import logging
+    from logging.handlers import RotatingFileHandler
+
+    _configure_logging(tmp_path)
+    _configure_logging(tmp_path)
+    _configure_logging(tmp_path)
+
+    handlers_on_this_file = [
+        handler
+        for handler in logging.getLogger().handlers
+        if isinstance(handler, RotatingFileHandler) and Path(handler.baseFilename) == (tmp_path / "haven.log")
+    ]
+    assert len(handlers_on_this_file) == 1

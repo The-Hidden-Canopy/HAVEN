@@ -68,6 +68,10 @@ public sealed partial class MainWindow
     {
         var ruleId = GetString(rule, "rule_id") ?? "";
         var status = GetString(rule, "status") ?? "unknown";
+        var schedulerRow = Enumerate(_scheduler).FirstOrDefault(row => GetString(row, "rule_id") == ruleId);
+        var schedulingEnabled = schedulerRow.ValueKind != JsonValueKind.Object
+            || !schedulerRow.TryGetProperty("enabled", out var schedulingEnabledValue)
+            || schedulingEnabledValue.GetBoolean();
 
         var card = new StackPanel { Spacing = 4 };
         var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
@@ -84,6 +88,16 @@ public sealed partial class MainWindow
             _ => ("HavenAccentTintBrush", "HavenMutedTextBrush"),
         };
         head.Children.Add(MakeChip(Sentence(status), chipTint, chipForeground));
+        // Approval and scheduling are two independent questions ("is this
+        // allowed to run" vs. "is it currently running on its schedule") --
+        // a second pill instead of folding "Scheduling enabled/disabled"
+        // into the plain-text details line below, the same "don't flatten
+        // independent statuses into one label" pattern Discover's
+        // Seen/Identified/Provider/Enrolled pills use.
+        if (status == "approved" && schedulerRow.ValueKind == JsonValueKind.Object)
+        {
+            head.Children.Add(MakeStatusPill(schedulingEnabled ? "Scheduled" : "Paused", schedulingEnabled));
+        }
         var approvedAt = GetString(rule, "approved_at");
         if (approvedAt is not null)
         {
@@ -125,13 +139,8 @@ public sealed partial class MainWindow
             }
             details.Add(when);
         }
-        var schedulerRow = Enumerate(_scheduler).FirstOrDefault(
-            row => GetString(row, "rule_id") == ruleId);
-        if (status == "approved" && schedulerRow.ValueKind == JsonValueKind.Object)
-        {
-            var enabled = !schedulerRow.TryGetProperty("enabled", out var enabledValue) || enabledValue.GetBoolean();
-            details.Add(enabled ? "Scheduling enabled" : "Scheduling disabled");
-        }
+        // Scheduling enabled/disabled is now the "Scheduled"/"Paused" pill
+        // above, not repeated here as plain text.
         if (details.Count > 0)
         {
             card.Children.Add(new TextBlock
@@ -157,11 +166,8 @@ public sealed partial class MainWindow
         }
         else if (status == "approved")
         {
-            var enabled = schedulerRow.ValueKind != JsonValueKind.Object
-                || !schedulerRow.TryGetProperty("enabled", out var value)
-                || value.GetBoolean();
-            var toggle = new Button { Content = enabled ? "Disable" : "Enable" };
-            toggle.Click += async (_, _) => await SetAutomationEnabledAsync(ruleId, !enabled);
+            var toggle = new Button { Content = schedulingEnabled ? "Disable" : "Enable" };
+            toggle.Click += async (_, _) => await SetAutomationEnabledAsync(ruleId, !schedulingEnabled);
             var revoke = new Button { Content = "Revoke" };
             revoke.Click += async (_, _) => await RevokeAutomationAsync(ruleId, "Revoke");
             buttons.Children.Add(toggle);

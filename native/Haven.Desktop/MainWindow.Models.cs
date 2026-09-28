@@ -153,6 +153,23 @@ public sealed partial class MainWindow
                 ? ("HavenSuccessTintBrush", "HavenSuccessBrush")
                 : ("HavenWarningTintBrush", "HavenWarningBrush");
         head.Children.Add(MakeChip(Sentence(state), modelTint, modelForeground));
+        // Role assignment is otherwise only visible in the separate roles
+        // section below, several scrolls away -- an "Assigned" pill here
+        // means the answer to "is this model doing anything" doesn't
+        // require cross-referencing two parts of the page (the same
+        // independent-status-visible-inline principle Discover's
+        // Seen/Identified/Provider/Enrolled pills and the Automations
+        // Scheduled/Paused pill apply).
+        var assignedRoles = _modelAssignments.ValueKind == JsonValueKind.Object
+            ? _modelAssignments.EnumerateObject()
+                .Where(role => role.Value.ValueKind == JsonValueKind.String && role.Value.GetString() == modelId)
+                .Select(role => role.Name)
+                .ToList()
+            : new List<string>();
+        if (assignedRoles.Count > 0)
+        {
+            head.Children.Add(MakeStatusPill($"Assigned · {string.Join(", ", assignedRoles)}", true));
+        }
         card.Children.Add(head);
 
         var details = new List<string>();

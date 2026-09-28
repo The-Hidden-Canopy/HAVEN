@@ -189,16 +189,10 @@ public sealed partial class MainWindow
             });
             var active = context.TryGetProperty("active", out var activeValue)
                 && activeValue.ValueKind == JsonValueKind.True;
-            var state = new TextBlock
-            {
-                Text = active ? "Active" : "Inactive",
-                Opacity = 0.72,
-            };
-            if (active)
-            {
-                state.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenSuccessBrush"];
-            }
-            head.Children.Add(state);
+            head.Children.Add(MakeChip(
+                active ? "Active" : "Inactive",
+                active ? "HavenSuccessTintBrush" : "HavenStrokeBrush",
+                active ? "HavenSuccessBrush" : "HavenMutedTextBrush"));
             card.Children.Add(head);
             card.Children.Add(new TextBlock
             {

@@ -18,6 +18,7 @@ import argparse
 import base64
 import http.client
 import json
+import logging
 import os
 import secrets
 import shutil
@@ -25,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from threading import Lock, Thread
 from typing import Callable
@@ -383,6 +385,79 @@ def _resolved_data_dir(data_dir: str | Path | None) -> Path:
     if data_dir is not None:
         return Path(data_dir).expanduser().resolve()
     return default_data_dir().resolve()
+
+
+_log_handler: RotatingFileHandler | None = None
+_console_log_file = None  # type: ignore[var-annotated]
+
+
+def _configure_logging(data_dir: Path) -> None:
+    """Crash-safe file logging, and a real destination for stray
+    print()/stderr writes even when this process has no console at all.
+
+    `run-haven.bat` launches the default (native) path via `pythonw`/`pyw`
+    so HAVEN does not need a terminal window to keep running -- but a
+    GUI-subsystem process has no console, and on Windows that makes
+    `sys.stdout`/`sys.stderr` literally `None` rather than a real stream.
+    Without this, an uncaught exception (or any of this module's own
+    `print(..., file=sys.stderr)` calls) would either vanish silently or
+    raise `AttributeError: 'NoneType' object has no attribute 'write'`
+    instead of leaving anything a household could use to ask for help --
+    exactly the "avoid UI-only exception strings as the sole diagnostic
+    artifact" failure mode the native product-consolidation plan's P0
+    instrumentation section warns about. Only touches `sys.stdout`/
+    `sys.stderr` when they are actually `None`; a normal console-attached
+    launch (`python`/`py`, or the explicit `--web`/`--debug-web` debug
+    path) is unaffected.
+
+    Idempotent per process: closes and replaces its own previous handler/
+    stream (module-level `_log_handler`/`_console_log_file`) rather than
+    accumulating a new one on every call -- `main()` normally runs once per
+    process, but the test suite calls it repeatedly in one interpreter, and
+    an ever-growing stack of open `RotatingFileHandler`s would leak file
+    handles and (on Windows) block the temp directories those tests clean
+    up afterward.
+    """
+
+    global _log_handler, _console_log_file
+
+    data_dir.mkdir(parents=True, exist_ok=True)
+    root = logging.getLogger()
+    if _log_handler is not None:
+        root.removeHandler(_log_handler)
+        _log_handler.close()
+    handler = RotatingFileHandler(
+        data_dir / "haven.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root.setLevel(logging.INFO)
+    root.addHandler(handler)
+    _log_handler = handler
+
+    if _console_log_file is not None:
+        if sys.stdout is _console_log_file:
+            sys.stdout = None
+        if sys.stderr is _console_log_file:
+            sys.stderr = None
+        _console_log_file.close()
+        _console_log_file = None
+
+    if sys.stdout is None or sys.stderr is None:
+        # A GUI-subsystem process (pythonw/pyw) has no console to redirect
+        # from -- open one plain-text stream and point whichever of
+        # stdout/stderr is missing at it, so old-style print() calls
+        # elsewhere in this codebase still land somewhere durable instead
+        # of raising.
+        _console_log_file = open(data_dir / "haven-console.log", "a", encoding="utf-8", buffering=1)
+        if sys.stdout is None:
+            sys.stdout = _console_log_file
+        if sys.stderr is None:
+            sys.stderr = _console_log_file
+
+    def _log_uncaught(exc_type, exc_value, exc_tb) -> None:
+        logging.getLogger("haven.desktop").critical("unhandled exception", exc_info=(exc_type, exc_value, exc_tb))
+
+    sys.excepthook = _log_uncaught
 
 
 def _edge_candidates() -> tuple[Path, ...]:
@@ -988,6 +1063,7 @@ def main(argv: list[str] | None = None) -> int:
         help="loopback port (default: ephemeral in windowed mode, 8080 in background mode)",
     )
     args = parser.parse_args(argv)
+    _configure_logging(_resolved_data_dir(args.data_dir))
     port = args.port if args.port is not None else (8080 if args.background else 0)
     if args.web:
         print(
@@ -1012,6 +1088,7 @@ def main(argv: list[str] | None = None) -> int:
     except DesktopShellAlreadyRunning:
         return 0
     except DesktopShellError as exc:
+        logging.getLogger("haven.desktop").error("HAVEN Desktop: %s", exc)
         print(f"HAVEN Desktop: {exc}", file=sys.stderr)
         return 2
 
