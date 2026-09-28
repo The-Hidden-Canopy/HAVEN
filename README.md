@@ -755,6 +755,9 @@ HAVEN is open source under the Apache License, Version 2.0 -- see
 `LICENSE`. Copyright 2026 The Hidden Canopy LLC.
 
 Running Haven means running software that can act on a real household, and
+The project also follows the
+[Open Canopy Contract](OPEN_CANOPY_CONTRACT.md).
+
 that responsibility belongs to whoever deploys it: securing credentials and
 confirmation issuance, declaring presence/context sources, setting override
 windows and confidence thresholds, and deciding which integrations to trust.
