@@ -17,6 +17,12 @@ public sealed partial class MainWindow
     private JsonElement _projects = default;
     private string? _openProjectId;
 
+    private async void OnProjectsRefreshClicked(object sender, RoutedEventArgs args)
+    {
+        ProjectsStatusText.Text = "Refreshing…";
+        await LoadProjectsAsync();
+    }
+
     private async Task LoadProjectsAsync()
     {
         if (_client is null)
@@ -110,11 +116,11 @@ public sealed partial class MainWindow
         }
         if (ProjectGallery.Items.Count == 0)
         {
-            ProjectGallery.Items.Add(new TextBlock
-            {
-                Text = "No projects here yet. New project starts one.",
-                Opacity = 0.72,
-            });
+            ProjectGallery.Items.Add(MakeEmptyState(
+                "No projects here yet. Start one when you have a body of work to gather across tasks, files, and people.",
+                "New project",
+                () => EditProjectDialogAsync(default),
+                primary: true));
         }
     }
 

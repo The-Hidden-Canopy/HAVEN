@@ -8,8 +8,17 @@ external-condition triggers, and any real event emitter, are still not
 built.
 """
 
-from .events import AutomationEvent
-from .lifecycle import AutomationRule, RuleTransitionResult, approve, propose, revoke, set_enabled
+from .events import AutomationEvent, AutomationEventPublisher
+from .lifecycle import (
+    AutomationEventSink,
+    AutomationLifecycleEvent,
+    AutomationRule,
+    RuleTransitionResult,
+    approve,
+    propose,
+    revoke,
+    set_enabled,
+)
 from .resource_scheduler import (
     DEFAULT_COOLDOWN,
     ResourceActionScheduler,
@@ -21,6 +30,9 @@ from .schema import ActionTarget, AutomationSpec, Selector, Trigger, TriggerKind
 __all__ = [
     "ActionTarget",
     "AutomationEvent",
+    "AutomationEventPublisher",
+    "AutomationEventSink",
+    "AutomationLifecycleEvent",
     "AutomationRule",
     "AutomationSpec",
     "DEFAULT_COOLDOWN",

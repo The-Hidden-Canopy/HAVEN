@@ -14,12 +14,18 @@ public sealed partial class MainWindow
 
     private string _computerTab = "files";
 
+    private async void OnComputerRefreshClicked(object sender, RoutedEventArgs args)
+    {
+        ComputerStatusText.Text = "Refreshing…";
+        await LoadComputerTabAsync();
+    }
+
     private void OnComputerTabClicked(object sender, RoutedEventArgs args)
     {
         if (sender is Button button && button.Tag is string tab)
         {
             _computerTab = tab;
-            foreach (var item in ((StackPanel)button.Parent).Children.OfType<Button>())
+            foreach (var item in ((StackPanel)button.Parent).Children.OfType<Button>().Where(item => item.Tag is string))
             {
                 item.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
                     item == button ? "HavenAccentBrush" : "HavenMutedTextBrush"];
@@ -437,7 +443,16 @@ public sealed partial class MainWindow
         }
         try
         {
-            var result = await _client.RequestComputerActionAsync(action, resourceId);
+            var justification = await PromptForJustificationAsync(
+                action == "filesystem.open" ? "Open this file?" : "Reveal this file?",
+                "HAVEN will use only the connected, approved computer folder for this action.",
+                "Why should this file action run?",
+                action == "filesystem.open" ? "Open" : "Reveal");
+            if (justification is null)
+            {
+                return;
+            }
+            var result = await _client.RequestComputerActionAsync(action, resourceId, justification);
             ComputerErrorText.Text = result.ValueKind == JsonValueKind.Object
                 && result.TryGetProperty("ok", out var ok) && !ok.GetBoolean()
                 ? (result.TryGetProperty("error", out var error) ? error.GetString() : "Action refused.") ?? "Action refused."
@@ -457,7 +472,16 @@ public sealed partial class MainWindow
         }
         try
         {
-            var result = await _client.FocusWindowAsync(resourceId);
+            var justification = await PromptForJustificationAsync(
+                "Bring this window forward?",
+                "HAVEN will ask Windows to focus the selected visible window.",
+                "Why should this window be focused?",
+                "Focus");
+            if (justification is null)
+            {
+                return;
+            }
+            var result = await _client.FocusWindowAsync(resourceId, justification);
             if (result.ValueKind == JsonValueKind.Object
                 && result.TryGetProperty("ok", out var ok)
                 && !ok.GetBoolean())

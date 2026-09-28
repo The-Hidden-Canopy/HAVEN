@@ -508,7 +508,9 @@ def test_scheduler_enabled_toggle_endpoint_flips_and_refreshes(server):
     _, director, port = server
 
     status, body = _post(
-        port, f"/api/scheduler/rules/{director.office_light_rule_id}/enabled", {"enabled": False}
+        port,
+        f"/api/scheduler/rules/{director.office_light_rule_id}/enabled",
+        {"enabled": False, "justification": "pause the office rule for this test"},
     )
 
     assert status == 200
@@ -522,7 +524,9 @@ def test_scheduler_enabled_toggle_endpoint_flips_and_refreshes(server):
     assert state_rows[director.office_light_rule_id]["enabled"] is False
 
     _, body = _post(
-        port, f"/api/scheduler/rules/{director.office_light_rule_id}/enabled", {"enabled": True}
+        port,
+        f"/api/scheduler/rules/{director.office_light_rule_id}/enabled",
+        {"enabled": True, "justification": "resume the office rule for this test"},
     )
     rows = {row["rule_id"]: row for row in body["scheduler"]}
     assert rows[director.office_light_rule_id]["enabled"] is True

@@ -67,4 +67,65 @@ public sealed partial class MainWindow
         && value.ValueKind == JsonValueKind.Number
             ? value.GetDouble()
             : null;
+
+    private async Task<string?> PromptForJustificationAsync(
+        string title,
+        string explanation,
+        string placeholder,
+        string actionLabel)
+    {
+        var justification = new TextBox
+        {
+            PlaceholderText = placeholder,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            MinWidth = 360,
+        };
+        var content = new StackPanel { Spacing = 8 };
+        content.Children.Add(new TextBlock { Text = explanation, TextWrapping = TextWrapping.Wrap });
+        content.Children.Add(new TextBlock { Text = "Justification" });
+        content.Children.Add(justification);
+        var dialog = new ContentDialog
+        {
+            Title = title,
+            Content = content,
+            PrimaryButtonText = actionLabel,
+            CloseButtonText = "Cancel",
+            XamlRoot = RootGrid().XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary || string.IsNullOrWhiteSpace(justification.Text))
+        {
+            return null;
+        }
+        return justification.Text.Trim();
+    }
+
+    private static StackPanel MakeEmptyState(
+        string message,
+        string actionLabel,
+        Func<Task> action,
+        bool primary = false)
+    {
+        var panel = new StackPanel
+        {
+            Spacing = 8,
+            MaxWidth = 560,
+        };
+        panel.Children.Add(new TextBlock
+        {
+            Text = message,
+            Opacity = 0.72,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        var actionButton = new Button
+        {
+            Content = actionLabel,
+            Style = (Style)Application.Current.Resources[
+                primary ? "HavenPrimaryButtonStyle" : "HavenSecondaryButtonStyle"],
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        actionButton.Click += async (_, _) => await action();
+        panel.Children.Add(actionButton);
+        return panel;
+    }
 }

@@ -145,7 +145,11 @@ def test_window_focus_is_governed_and_receipted(server) -> None:
     assert denied["result"]["ok"] is False
 
     instance.setup.declare_person(name="Gerron Smith", role="owner")
-    focused = _dispatch(instance, "computer.window.focus", {"resource_id": "window:101"})
+    focused = _dispatch(
+        instance,
+        "computer.window.focus",
+        {"resource_id": "window:101", "justification": "Bring the selected window forward."},
+    )
     assert focused["result"]["ok"] is True
     assert focused["result"]["success"] is True
     assert fake.focused == [101]

@@ -875,7 +875,11 @@ def test_state_includes_scheduler_status_rows() -> None:
 def test_scheduler_enabled_toggle_shows_up_in_state() -> None:
     director = _director()
 
-    director.set_scheduler_enabled(director.office_light_rule_id, False)
+    director.set_scheduler_enabled(
+        director.office_light_rule_id,
+        False,
+        justification="test pauses the office schedule",
+    )
 
     rows = {row["rule_id"]: row for row in director.state()["scheduler"]}
     assert rows[director.office_light_rule_id]["enabled"] is False

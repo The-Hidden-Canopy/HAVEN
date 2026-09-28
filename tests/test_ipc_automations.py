@@ -119,7 +119,11 @@ def test_proposed_rule_is_editable_then_freezes_on_approval(server) -> None:
         "weekdays": [0, 1, 2, 3, 4],
     }
 
-    approved = _dispatch(server, "automations.approve", {"rule_id": rule_id})
+    approved = _dispatch(
+        server,
+        "automations.approve",
+        {"rule_id": rule_id, "justification": "Owner reviewed the corrected schedule."},
+    )
     assert approved["ok"] is True
     assert approved["result"]["ok"] is True
     assert approved["result"]["automation"]["status"] == "approved"
@@ -133,6 +137,7 @@ def test_proposed_rule_is_editable_then_freezes_on_approval(server) -> None:
             "source_text": "Change everything",
             "time_of_day": "23:00",
             "weekdays": [],
+            "justification": "Owner attempted an edit after approval.",
         },
     )
     assert frozen["result"]["ok"] is False
@@ -142,29 +147,53 @@ def test_proposed_rule_is_editable_then_freezes_on_approval(server) -> None:
 def test_enable_is_gated_on_approval_and_toggles_scheduling(server) -> None:
     rule_id = _dispatch(server, "automations.create", CREATE_OFFICE)["result"]["automation"]["rule_id"]
 
-    early = _dispatch(server, "automations.enable", {"rule_id": rule_id, "enabled": True})
+    early = _dispatch(
+        server,
+        "automations.enable",
+        {"rule_id": rule_id, "enabled": True, "justification": "Try to resume this rule."},
+    )
     assert early["ok"] is False
     assert "only approved automations" in early["error"]
 
-    _dispatch(server, "automations.approve", {"rule_id": rule_id})
-    enabled = _dispatch(server, "automations.enable", {"rule_id": rule_id, "enabled": True})
+    _dispatch(
+        server,
+        "automations.approve",
+        {"rule_id": rule_id, "justification": "Owner approved the office schedule."},
+    )
+    enabled = _dispatch(
+        server,
+        "automations.enable",
+        {"rule_id": rule_id, "enabled": True, "justification": "The office schedule is ready to run."},
+    )
     assert enabled["ok"] is True
     rows = {row["rule_id"]: row for row in enabled["result"]["scheduler"]}
     assert rows[rule_id]["enabled"] is True
 
-    disabled = _dispatch(server, "automations.enable", {"rule_id": rule_id, "enabled": False})
+    disabled = _dispatch(
+        server,
+        "automations.enable",
+        {"rule_id": rule_id, "enabled": False, "justification": "Pause the office schedule for testing."},
+    )
     assert disabled["ok"] is True
     rows = {row["rule_id"]: row for row in disabled["result"]["scheduler"]}
     assert rows[rule_id]["enabled"] is False
 
-    missing = _dispatch(server, "automations.enable", {"rule_id": "rule:nope", "enabled": True})
+    missing = _dispatch(
+        server,
+        "automations.enable",
+        {"rule_id": "rule:nope", "enabled": True, "justification": "Check an unknown rule."},
+    )
     assert missing["ok"] is False
     assert missing["error"] == "unknown automation"
 
 
 def test_revoke_requires_a_justification_and_is_fail_closed(server) -> None:
     rule_id = _dispatch(server, "automations.create", CREATE_OFFICE)["result"]["automation"]["rule_id"]
-    _dispatch(server, "automations.approve", {"rule_id": rule_id})
+    _dispatch(
+        server,
+        "automations.approve",
+        {"rule_id": rule_id, "justification": "Owner approved before testing revocation."},
+    )
 
     blank = _dispatch(server, "automations.revoke", {"rule_id": rule_id, "justification": "  "})
     assert blank["ok"] is False

@@ -162,6 +162,70 @@ def test_wrong_role_tier_and_missing_justification_are_blocked() -> None:
     ]
 
 
+def test_scheduler_toggle_is_scoped_justified_and_transition_only() -> None:
+    runtime, store, _, resident, owner = _runtime()
+    rule = runtime.propose_draft(_explicit_draft(resident), principal=resident, now=BASE_TIME)
+
+    with pytest.raises(InvalidTransition, match="only an owner"):
+        runtime.set_rule_scheduler_enabled(
+            rule.rule_id,
+            False,
+            principal=resident,
+            justification="member tries to pause",
+            now=BASE_TIME + timedelta(minutes=1),
+        )
+    with pytest.raises(InvalidTransition, match="non-empty justification"):
+        runtime.set_rule_scheduler_enabled(
+            rule.rule_id,
+            False,
+            principal=owner,
+            justification="   ",
+            now=BASE_TIME + timedelta(minutes=2),
+        )
+
+    runtime.approve_rule(
+        rule.rule_id,
+        principal=owner,
+        justification="Owner approves before testing scheduler state.",
+        now=BASE_TIME + timedelta(minutes=3),
+    )
+    foreign_owner = _principal(actor_id="foreign-owner", household_id="household-b", role=RoleTier.OWNER)
+    with pytest.raises(ScopeViolation):
+        runtime.set_rule_scheduler_enabled(
+            rule.rule_id,
+            False,
+            principal=foreign_owner,
+            justification="cross-household scheduler attempt",
+            now=BASE_TIME + timedelta(minutes=4),
+        )
+
+    event = runtime.set_rule_scheduler_enabled(
+        rule.rule_id,
+        False,
+        principal=owner,
+        justification="Owner pauses this schedule while away.",
+        now=BASE_TIME + timedelta(minutes=5),
+    )
+    assert event.event_type is EventType.RULE_SCHEDULER_CHANGED
+    assert store.state.scheduler_disabled_rules == (rule.rule_id,)
+    assert dict(store.events[-1].payload)["justification"] == "Owner pauses this schedule while away."
+
+    runtime.revoke_rule(
+        rule.rule_id,
+        principal=owner,
+        justification="Owner retires this rule.",
+        now=BASE_TIME + timedelta(minutes=6),
+    )
+    with pytest.raises(InvalidTransition, match="only approved rules"):
+        runtime.set_rule_scheduler_enabled(
+            rule.rule_id,
+            True,
+            principal=owner,
+            justification="cannot resume a revoked rule",
+            now=BASE_TIME + timedelta(minutes=7),
+        )
+
+
 def test_clarification_cannot_change_proposer_or_cross_household_scope() -> None:
     runtime, store, _, resident, _ = _runtime()
     rule = runtime.propose_draft(_explicit_draft(resident), principal=resident, now=BASE_TIME)

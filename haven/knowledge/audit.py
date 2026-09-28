@@ -19,6 +19,8 @@ class KnowledgeAuditAction(str, Enum):
     CORRECT = "correct"
     MARK_STALE = "mark_stale"
     FORGET = "forget"
+    PROVIDER_ADMIT = "provider_admit"
+    PROVIDER_STALE = "provider_stale"
 
 
 def _require_text(value: str, *, name: str) -> str:

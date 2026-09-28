@@ -70,19 +70,39 @@ def test_browser_full_lifecycle_over_ipc(server) -> None:
         ("tab-1", "docs.google.com")
     ]
 
-    focused = _dispatch(instance, "browser.tab.focus", {"resource_id": "browsertab:tab-1"})["result"]
+    focused = _dispatch(
+        instance,
+        "browser.tab.focus",
+        {"resource_id": "browsertab:tab-1", "justification": "Bring the selected tab forward."},
+    )["result"]
     assert focused["success"] is True
-    opened = _dispatch(instance, "browser.tab.open", {"browser": "chrome", "url": "https://haven.example.org"})["result"]
+    opened = _dispatch(
+        instance,
+        "browser.tab.open",
+        {
+            "browser": "chrome",
+            "url": "https://haven.example.org",
+            "justification": "Open the requested reference page.",
+        },
+    )["result"]
     assert opened["success"] is True
     assert ("open_url", {"url": "https://haven.example.org"}) in commands
 
-    closed = _dispatch(instance, "browser.tab.close", {"resource_id": "browsertab:tab-1"})["result"]
+    closed = _dispatch(
+        instance,
+        "browser.tab.close",
+        {"resource_id": "browsertab:tab-1", "justification": "Close the selected tab."},
+    )["result"]
     assert closed["status"] == "confirmation_required"
     denied = _dispatch(instance, "browser.tab.close.deny", {"request_id": closed["request_id"]})["result"]
     assert denied["ok"] is True
     assert instance.resources.get("browsertab:tab-1").stale is False
 
-    ghost = _dispatch(instance, "browser.tab.focus", {"resource_id": "browsertab:ghost"})["result"]
+    ghost = _dispatch(
+        instance,
+        "browser.tab.focus",
+        {"resource_id": "browsertab:ghost", "justification": "Check the named tab."},
+    )["result"]
     assert ghost["ok"] is False
 
 
@@ -120,7 +140,11 @@ def test_calendar_lifecycle_proposal_attachment_and_verified_write(server, tmp_p
     created = _dispatch(
         instance,
         "calendar.event.create",
-        {"title": "Follow-up call", "start_at": (NOW + timedelta(days=1)).isoformat()},
+        {
+            "title": "Follow-up call",
+            "start_at": (NOW + timedelta(days=1)).isoformat(),
+            "justification": "Schedule the follow-up requested by the resident.",
+        },
     )["result"]
     assert created["status"] == "confirmation_required"
     confirmed = _dispatch(
@@ -132,7 +156,14 @@ def test_calendar_lifecycle_proposal_attachment_and_verified_write(server, tmp_p
     assert any(item["title"] == "Follow-up call" for item in re_read["events"])
 
     new_event = next(item for item in re_read["events"] if item["title"] == "Follow-up call")
-    deleted = _dispatch(instance, "calendar.event.delete", {"event_id": new_event["event_id"]})["result"]
+    deleted = _dispatch(
+        instance,
+        "calendar.event.delete",
+        {
+            "event_id": new_event["event_id"],
+            "justification": "Remove the follow-up event requested by the resident.",
+        },
+    )["result"]
     assert deleted["status"] == "confirmation_required"
     confirmed_delete = _dispatch(
         instance, "calendar.event.confirm", {"request_id": deleted["request_id"]}

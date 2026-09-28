@@ -30,6 +30,7 @@ from typing import Any, Callable, Mapping
 from uuid import uuid4
 
 from haven.authority.policy import AuthorityEngine
+from haven.core.correlation import current as current_correlation
 from haven.core.domain import (
     ActionKind,
     ConfirmationToken,
@@ -399,6 +400,7 @@ class HavenApplication:
         # user explicitly declared or force its display name back to an id.
         self._room_names = dict(room_names or {})
         self._scheduler_tick_seconds = scheduler_tick_seconds
+        self._scheduler_lock = threading.Lock()
         self._scheduler_thread: threading.Thread | None = None
         self._scheduler_stop: threading.Event | None = None
         self.voice = VoiceSession(
@@ -445,6 +447,7 @@ class HavenApplication:
                     # trust the scope of; they are dropped, not replayed.
                     pass
             restored_ids = {rule.rule_id for rule in self.store.state.rules}
+            self.store.restore_scheduler_enabled(restored.scheduler_enabled)
             for rule_id, enabled in restored.scheduler_enabled.items():
                 if rule_id in restored_ids:
                     self.scheduler.set_enabled(rule_id, enabled)
@@ -697,28 +700,36 @@ class HavenApplication:
         self._set_glow(GLOW_CRITICAL, target=self._device_room(receipt.requested_action.target_device_id))
 
     def start_scheduler(self) -> None:
-        if self._scheduler_thread is not None:
-            return
-        stop = threading.Event()
-        thread = threading.Thread(
-            target=self._scheduler_loop,
-            args=(stop,),
-            daemon=True,
-            name="haven-scheduler",
-        )
-        self._scheduler_stop = stop
-        self._scheduler_thread = thread
-        thread.start()
+        with self._scheduler_lock:
+            if self._scheduler_thread is not None:
+                return
+            stop = threading.Event()
+            thread = threading.Thread(
+                target=self._scheduler_loop,
+                args=(stop,),
+                daemon=True,
+                name="haven-scheduler",
+            )
+            self._scheduler_stop = stop
+            self._scheduler_thread = thread
+            thread.start()
 
     def stop_scheduler(self) -> None:
-        thread = self._scheduler_thread
-        if thread is None:
-            return
-        assert self._scheduler_stop is not None
-        self._scheduler_stop.set()
+        with self._scheduler_lock:
+            thread = self._scheduler_thread
+            stop = self._scheduler_stop
+            if thread is None or stop is None:
+                return
+            stop.set()
+        # `start_scheduler` starts the thread while holding the same lock, so
+        # a shutdown can never observe a Thread object in the tiny
+        # pre-start window. Keep the join outside the lock so the scheduler
+        # can finish without blocking any state inspection.
         thread.join(timeout=5)
-        self._scheduler_thread = None
-        self._scheduler_stop = None
+        with self._scheduler_lock:
+            if self._scheduler_thread is thread:
+                self._scheduler_thread = None
+                self._scheduler_stop = None
 
     def start_voice(self) -> bool:
         """Build and start real voice I/O, as much of it as is possible.
@@ -846,7 +857,23 @@ class HavenApplication:
             for status in self.scheduler.status(self.store.state.rules, world=world, now=now)
         ]
 
-    def set_scheduler_enabled(self, rule_id: str, enabled: bool) -> list[dict[str, Any]]:
+    def set_scheduler_enabled(
+        self,
+        rule_id: str,
+        enabled: bool,
+        *,
+        justification: str,
+    ) -> list[dict[str, Any]]:
+        if not self.has_declared_owner:
+            raise ValueError("no household owner declared yet")
+        self.runtime.set_rule_scheduler_enabled(
+            rule_id,
+            enabled,
+            principal=self.owner,
+            justification=justification,
+            now=self._clock(),
+            correlation_id=current_correlation() or rule_id,
+        )
         self.scheduler.set_enabled(rule_id, enabled)
         self._persist_rules()
         self._publish_state()
@@ -1013,6 +1040,7 @@ class HavenApplication:
                 principal=self.resident,
                 justification=justification,
                 now=self._clock(),
+                correlation_id=current_correlation() or rule_id,
             )
         except (TypeError, ValueError, KeyError) as exc:
             return {"ok": False, "error": str(exc)}
@@ -1043,6 +1071,7 @@ class HavenApplication:
                 principal=self.owner,
                 justification=justification,
                 now=self._clock(),
+                correlation_id=current_correlation() or rule_id,
             )
         except KeyError:
             return {"ok": False, "error": "unknown automation"}
@@ -1073,6 +1102,7 @@ class HavenApplication:
                 principal=self.owner,
                 justification=justification,
                 now=self._clock(),
+                correlation_id=current_correlation() or rule_id,
             )
         except KeyError:
             return {"ok": False, "error": "unknown automation"}
@@ -1385,20 +1415,19 @@ class HavenApplication:
         return None
 
     def _chat_rule_draft(self, draft: RuleDraft, now: datetime) -> None:
-        """A proposed rule draft from chat: the propose -> approve lifecycle."""
+        """Create a proposal from chat without silently approving it.
+
+        Chat is an intelligence/proposal boundary.  Owner approval is a
+        separate human transition so the audit record cannot claim that a
+        model or conversational parser supplied the owner's justification.
+        """
+
         rule = self.runtime.propose_draft(draft, principal=self.resident, now=now)
-        result = self.runtime.approve_rule(
-            rule.rule_id,
-            principal=self.owner,
-            justification="Owner approved the automation the resident asked for in chat.",
-            now=now,
+        self._say(
+            "haven",
+            f"I drafted that automation for review: {rule.draft.interpretation}. "
+            "An owner can approve it from Automations.",
         )
-        if result.decision.status == DecisionStatus.ALLOW:
-            self._say("haven", f"Done — I've set that up: {rule.draft.interpretation}")
-        elif result.decision.status == DecisionStatus.NEEDS_CLARIFICATION:
-            self._say("haven", "I drafted a rule from that, but it needs clarification before I can set it up.")
-        else:
-            self._say("haven", f"I couldn't set that up: {result.decision.explanation}")
         self._persist_rules()
 
     # -- query handling -----------------------------------------------------

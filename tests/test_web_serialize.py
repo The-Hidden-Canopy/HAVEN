@@ -194,6 +194,12 @@ def test_event_to_dict_renders_a_one_line_summary() -> None:
         "summary": "Rule approved: close the garage by gerron",
     }
 
+    paused = serialize.event_to_dict(
+        _event(EventType.RULE_SCHEDULER_CHANGED, (("enabled", False), ("rule_id", "rule-1"))),
+        rule_label="close the garage",
+    )
+    assert paused["summary"] == "Rule paused: close the garage by gerron"
+
     executed = serialize.event_to_dict(
         _event(
             EventType.ACTION_EXECUTED,

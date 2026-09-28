@@ -38,6 +38,14 @@ public sealed partial class MainWindow
         root.Children.Add(BuildConnectionChannelSection());
         root.Children.Add(BuildDomainStatusSection());
 
+        var setupLink = new Button
+        {
+            Content = "Set up or connect a provider",
+            Style = (Style)Application.Current.Resources["HavenPrimaryButtonStyle"],
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        root.Children.Add(setupLink);
+
         var diagnosticsLink = new Button
         {
             Content = "Open diagnostics",
@@ -52,6 +60,11 @@ public sealed partial class MainWindow
             Content = new ScrollViewer { Content = root, MaxHeight = 480 },
             CloseButtonText = "Close",
             XamlRoot = RootGrid().XamlRoot,
+        };
+        setupLink.Click += async (_, _) =>
+        {
+            dialog.Hide();
+            await ReopenSetupAsync();
         };
         diagnosticsLink.Click += (_, _) =>
         {

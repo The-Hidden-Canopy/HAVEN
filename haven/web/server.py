@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from functools import wraps
 import hmac
 import json
 import mimetypes
@@ -25,6 +26,7 @@ from ..ipc import IpcDispatcher
 from ..ipc.events_pipe import EventPublisher
 from ..models.jobs import DownloadJobManager, job_to_dict
 from ..models.storage import default_models_root
+from ..core.correlation import bind as bind_correlation, new_id as new_correlation_id
 from .application import build_application
 from ..intelligence.intents import MutationProposal
 from .haven_application import Clock, HavenApplication
@@ -117,6 +119,32 @@ _KNOWLEDGE_CLAIM_ACTION_PATH = re.compile(r"^/api/knowledge/claims/([^/]+)/(corr
 _AUTHORING_AUTOMATION_ACTION_PATH = re.compile(r"^/api/automations/([^/]+)/(approve|revoke)$")
 _EXTERNAL_AGENTS_CONNECTION_PATH = re.compile(r"^/api/external-agents/connections/([^/]+)/(enable|revoke|bindings|observed-subjects)$")
 _EXTERNAL_AGENTS_BINDING_REVOKE_PATH = re.compile(r"^/api/external-agents/bindings/([^/]+)/revoke$")
+
+_CORRELATION_HEADER = "X-HAVEN-Correlation-ID"
+_CORRELATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
+def _bind_request_correlation(handler):
+    """Bind one validated request correlation id for the whole HTTP call."""
+
+    @wraps(handler)
+    def wrapped(self, *args, **kwargs):
+        supplied = self.headers.get(_CORRELATION_HEADER)
+        correlation_id = (
+            supplied.strip()
+            if isinstance(supplied, str) and _CORRELATION_ID_PATTERN.fullmatch(supplied.strip())
+            else new_correlation_id()
+        )
+        with bind_correlation(correlation_id):
+            return handler(self, *args, **kwargs)
+
+    return wrapped
+
+
+def _require_justification(value, *, operation: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{operation} requires a non-empty justification")
+    return value.strip()
 
 # Native events pipe (product pass phase 2): mutating IPC methods publish
 # a domain invalidation on success.  Task/project/claim mutations emit
@@ -311,7 +339,11 @@ class HavenWebServer(ThreadingHTTPServer):
         # substrate so search and relationships see them.
         # Sync (milestone H): off by default; producers emit through the
         # listener seam, appliers land pulled records of the allowed kinds.
-        self.sync_engine = LocalSyncEngine(data_dir=Path(resolved_data_dir), clock=scope_clock)
+        self.sync_engine = LocalSyncEngine(
+            data_dir=Path(resolved_data_dir),
+            clock=scope_clock,
+            allowed_local_scopes=self.identity.visible_scope_ids(),
+        )
 
         def _sync_listener(kind: str, record) -> None:
             from ..domains.projects.store import project_to_dict
@@ -1185,6 +1217,9 @@ class HavenWebServer(ThreadingHTTPServer):
             enabled = params.get("enabled")
             if not isinstance(enabled, bool):
                 raise ValueError("enabled must be a boolean")
+            justification = _require_justification(
+                params.get("justification"), operation="automation enablement"
+            )
             rule = next(
                 (item for item in self.director.store.state.rules if item.rule_id == rule_id.strip()),
                 None,
@@ -1194,19 +1229,17 @@ class HavenWebServer(ThreadingHTTPServer):
             if getattr(rule.status, "value", None) != "approved":
                 raise ValueError("only approved automations can be enabled or disabled")
             return {
-                "scheduler": self.director.set_scheduler_enabled(rule.rule_id, enabled),
+                "scheduler": self.director.set_scheduler_enabled(
+                    rule.rule_id, enabled, justification=justification
+                ),
                 "state": self.director.state(),
             }
 
         def _automations_approve(params: dict) -> dict:
-            # Same default justification as the web approve handler.
-            justification = params.get("justification")
             return self.director.approve_automation(
                 params.get("rule_id"),
-                justification=(
-                    justification.strip()
-                    if isinstance(justification, str) and justification.strip()
-                    else "owner approved automation from HAVEN"
+                justification=_require_justification(
+                    params.get("justification"), operation="automation approval"
                 ),
             )
 
@@ -1234,10 +1267,7 @@ class HavenWebServer(ThreadingHTTPServer):
             )
 
         def _automations_update(params: dict) -> dict:
-            # Identical to the /api/automations/{id} PATCH handler's edit branch,
-            # including its default justification.
             weekdays = params.get("weekdays", [])
-            justification = params.get("justification")
             return self.director.update_automation(
                 params.get("rule_id"),
                 source_text=params.get("source_text"),
@@ -1245,10 +1275,8 @@ class HavenWebServer(ThreadingHTTPServer):
                 weekdays=weekdays if isinstance(weekdays, list) else [],
                 interpretation=params.get("interpretation"),
                 parameters=params.get("parameters") if isinstance(params.get("parameters"), dict) else None,
-                justification=(
-                    justification
-                    if isinstance(justification, str) and justification.strip()
-                    else "edited automation in HAVEN"
+                justification=_require_justification(
+                    params.get("justification"), operation="automation editing"
                 ),
             )
 
@@ -1691,15 +1719,21 @@ class HavenWebServer(ThreadingHTTPServer):
             }
 
         def _browser_focus(params: dict) -> dict:
-            return self.browser_actions.focus_tab(resource_id=params.get("resource_id"))
+            return self.browser_actions.focus_tab(
+                resource_id=params.get("resource_id"), justification=params.get("justification")
+            )
 
         def _browser_open(params: dict) -> dict:
             return self.browser_actions.open_url(
-                browser=params.get("browser"), url=params.get("url")
+                browser=params.get("browser"),
+                url=params.get("url"),
+                justification=params.get("justification"),
             )
 
         def _browser_close(params: dict) -> dict:
-            return self.browser_actions.close_tab(resource_id=params.get("resource_id"))
+            return self.browser_actions.close_tab(
+                resource_id=params.get("resource_id"), justification=params.get("justification")
+            )
 
         def _browser_close_confirm(params: dict) -> dict:
             return self.browser_actions.confirm_close(request_id=params.get("request_id"))
@@ -1766,6 +1800,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 end_at=end_at,
                 location=params.get("location") if isinstance(params.get("location"), str) else "",
                 attendees=attendees,
+                justification=params.get("justification"),
             )
 
         def _calendar_event_update(params: dict) -> dict:
@@ -1781,10 +1816,16 @@ class HavenWebServer(ThreadingHTTPServer):
                     changes[key] = parsed
             if isinstance(params.get("attendees"), list):
                 changes["attendees"] = params["attendees"]
-            return self.comms.update_event(event_id=params.get("event_id"), **changes)
+            return self.comms.update_event(
+                event_id=params.get("event_id"),
+                justification=params.get("justification"),
+                **changes,
+            )
 
         def _calendar_event_delete(params: dict) -> dict:
-            return self.comms.delete_event(event_id=params.get("event_id"))
+            return self.comms.delete_event(
+                event_id=params.get("event_id"), justification=params.get("justification")
+            )
 
         def _calendar_event_confirm(params: dict) -> dict:
             return self.comms.confirm(request_id=params.get("request_id"))
@@ -1930,7 +1971,10 @@ class HavenWebServer(ThreadingHTTPServer):
             aliases = params.get("aliases")
             if not isinstance(aliases, dict):
                 raise ValueError("aliases must be an object mapping foreign scope ids to local ones")
-            return self.sync_engine.set_scope_aliases(aliases)
+            return self.sync_engine.set_scope_aliases(
+                aliases,
+                allowed_local_scopes=self.identity.visible_scope_ids(),
+            )
 
         def _sync_push(_params: dict) -> dict:
             return self.sync_engine.push()
@@ -2705,6 +2749,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._send_json(200, {"ok": True, "path": selected.strip()})
 
+    @_bind_request_correlation
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/__desktop_bootstrap":
@@ -2787,6 +2832,7 @@ class _Handler(BaseHTTPRequestHandler):
                     else:
                         self._serve_static(path)
 
+    @_bind_request_correlation
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/__desktop_activate":
@@ -2822,15 +2868,20 @@ class _Handler(BaseHTTPRequestHandler):
             if body is None:
                 return
             rule_id, action = automation_action.groups()
+            try:
+                justification = _require_justification(body.get("justification"), operation=f"automation {action}")
+            except ValueError as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
+                return
             if action == "approve":
                 result = self.director.approve_automation(
                     rule_id,
-                    justification=body.get("justification", "owner approved automation from HAVEN"),
+                    justification=justification,
                 )
             else:
                 result = self.director.revoke_automation(
                     rule_id,
-                    justification=body.get("justification", "owner revoked automation from HAVEN"),
+                    justification=justification,
                 )
             self._send_setup_result(result)
             return
@@ -2887,9 +2938,23 @@ class _Handler(BaseHTTPRequestHandler):
             if not self.director.has_rule(rule_id):
                 self._send_json(404, {"error": "unknown rule"})
                 return
+            try:
+                justification = _require_justification(
+                    body.get("justification"), operation="automation enablement"
+                )
+            except ValueError as exc:
+                self._send_json(400, {"error": str(exc)})
+                return
+            try:
+                scheduler = self.director.set_scheduler_enabled(
+                    rule_id, bool(body.get("enabled")), justification=justification
+                )
+            except (KeyError, ValueError) as exc:
+                self._send_json(400, {"error": str(exc)})
+                return
             self._send_json(
                 200,
-                {"ok": True, "scheduler": self.director.set_scheduler_enabled(rule_id, bool(body.get("enabled")))},
+                {"ok": True, "scheduler": scheduler},
             )
             return
         if path == "/api/demo/camera-down":
@@ -2973,6 +3038,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._send_json(404, {"error": "not found"})
 
+    @_bind_request_correlation
     def do_PATCH(self) -> None:
         path = self.path.split("?", 1)[0]
         if not self._authorize_session():
@@ -2982,6 +3048,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._handle_authoring_patch(path, body)
 
+    @_bind_request_correlation
     def do_DELETE(self) -> None:
         path = self.path.split("?", 1)[0]
         if not self._authorize_session():
@@ -3237,12 +3304,28 @@ class _Handler(BaseHTTPRequestHandler):
                 if getattr(rule.status, "value", None) != "approved":
                     self._send_json(400, {"ok": False, "error": "only approved automations can be enabled or disabled"})
                     return
+                try:
+                    justification = _require_justification(
+                        body.get("justification"), operation="automation enablement"
+                    )
+                except ValueError as exc:
+                    self._send_json(400, {"ok": False, "error": str(exc)})
+                    return
                 result = {
                     "ok": True,
-                    "scheduler": self.director.set_scheduler_enabled(item_id, body["enabled"]),
+                    "scheduler": self.director.set_scheduler_enabled(
+                        item_id, body["enabled"], justification=justification
+                    ),
                     "state": self.director.state(),
                 }
             else:
+                try:
+                    justification = _require_justification(
+                        body.get("justification"), operation="automation editing"
+                    )
+                except ValueError as exc:
+                    self._send_json(400, {"ok": False, "error": str(exc)})
+                    return
                 result = self.director.update_automation(
                     item_id,
                     source_text=body.get("source_text"),
@@ -3250,7 +3333,7 @@ class _Handler(BaseHTTPRequestHandler):
                     weekdays=body.get("weekdays", []),
                     interpretation=body.get("interpretation"),
                     parameters=body.get("parameters") if isinstance(body.get("parameters"), dict) else None,
-                    justification=body.get("justification", "edited automation in HAVEN"),
+                    justification=justification,
                 )
         else:
             self._send_json(404, {"error": "not found"})

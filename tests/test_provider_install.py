@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import tempfile
+import json
 from pathlib import Path
 
+from haven.credentials import CredentialStore
 from haven.web.provider_install import (
     find_installed_provider,
     load_installed_provider_config,
@@ -120,8 +122,12 @@ def test_secret_fields_are_written_to_a_separate_file_from_plain_config():
         assert "10.0.0.5" in config_text
 
         secrets_text = (data_dir / "provider_philips_hue_secrets.json").read_text(encoding="utf-8")
-        assert "super-secret" in secrets_text
+        assert "super-secret" not in secrets_text
         assert "10.0.0.5" not in secrets_text
+        secret_refs = json.loads(secrets_text)
+        credential_id = secret_refs["api_key"]["credential_id"]
+        assert credential_id.startswith("provider:philips_hue:api_key:")
+        assert CredentialStore(data_dir / "credentials.db").get_secret(credential_id) == "super-secret"
 
 
 def test_a_provider_with_no_secret_fields_gets_no_secrets_file():

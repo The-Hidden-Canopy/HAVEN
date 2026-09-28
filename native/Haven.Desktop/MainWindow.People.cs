@@ -15,6 +15,12 @@ public sealed partial class MainWindow
     private JsonElement _people = default;
     private JsonElement _contexts = default;
 
+    private async void OnPeopleRefreshClicked(object sender, RoutedEventArgs args)
+    {
+        PeopleStatusText.Text = "Refreshing…";
+        await LoadPeopleAsync();
+    }
+
     private async Task LoadContextsAsync()
     {
         if (_client is null)
@@ -91,11 +97,11 @@ public sealed partial class MainWindow
         }
         if (PeopleDirectory.Items.Count == 0)
         {
-            PeopleDirectory.Items.Add(new TextBlock
-            {
-                Text = "No one is declared yet. Add the people HAVEN should know about.",
-                Opacity = 0.72,
-            });
+            PeopleDirectory.Items.Add(MakeEmptyState(
+                "No one is declared yet. Add the people HAVEN should know about.",
+                "Add person",
+                () => EditPersonAsync(default),
+                primary: true));
         }
         if (PeopleDirectory.SelectedItem is null)
         {
