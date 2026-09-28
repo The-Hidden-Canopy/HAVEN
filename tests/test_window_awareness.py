@@ -146,7 +146,10 @@ def test_focus_action_is_governed_and_receipted(provider) -> None:
             ledger=ledger,
             clock=lambda: NOW,
         )
-        result = service.request_focus(resource_id=window_resource_id(101))
+        result = service.request_focus(
+            resource_id=window_resource_id(101),
+            justification="The resident selected this window to bring forward.",
+        )
         assert result == {"ok": True, "success": True, "detail": "verified in foreground"}
         assert state["focused"] == [101]
 
@@ -182,8 +185,12 @@ def test_focus_fail_closed_on_unknown_stale_or_foreign(provider) -> None:
             ledger=ActionLedgerStore(Path(tmp) / "ledger.db"),
             clock=lambda: NOW,
         )
-        assert service.request_focus(resource_id="window:nope")["ok"] is False
-        stale = service.request_focus(resource_id="window:999")
+        assert service.request_focus(
+            resource_id="window:nope", justification="Check the named window."
+        )["ok"] is False
+        stale = service.request_focus(
+            resource_id="window:999", justification="Check the stale window."
+        )
         assert stale["ok"] is False
         foreign = resources.get(window_resource_id(101))
         resources.save(
@@ -198,7 +205,9 @@ def test_focus_fail_closed_on_unknown_stale_or_foreign(provider) -> None:
                 observed_at=NOW,
             )
         )
-        assert service.request_focus(resource_id="file:notawindow")["ok"] is False
+        assert service.request_focus(
+            resource_id="file:notawindow", justification="Check the named resource."
+        )["ok"] is False
 
 
 def test_real_machine_enumeration_finds_actual_windows() -> None:

@@ -237,6 +237,9 @@ def _event_summary(event) -> str:
         return f"rule approved: {payload.get('rule_id')}"
     if event_type == EventType.RULE_CLARIFIED:
         return f"rule clarified: {payload.get('rule_id')}"
+    if event_type == EventType.RULE_SCHEDULER_CHANGED:
+        state = "scheduled" if payload.get("enabled") else "paused"
+        return f"rule {state}: {payload.get('rule_id')}"
     if event_type in (EventType.RULE_APPROVAL_BLOCKED, EventType.RULE_CLARIFICATION_BLOCKED):
         return f"rule blocked: {payload.get('rule_id')} ({payload.get('code')})"
     return event_type.value

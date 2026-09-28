@@ -8,6 +8,7 @@ from .models import (
     OPEN_STATUSES,
     PLANNING,
     PROJECT_STATUSES,
+    PROJECT_TRANSITIONS,
     ProjectRecord,
 )
 from .store import ProjectStore
@@ -20,6 +21,7 @@ __all__ = [
     "OPEN_STATUSES",
     "PLANNING",
     "PROJECT_STATUSES",
+    "PROJECT_TRANSITIONS",
     "ProjectRecord",
     "ProjectStore",
 ]

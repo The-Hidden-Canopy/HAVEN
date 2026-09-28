@@ -190,6 +190,40 @@ def test_action_request_reaches_the_executor_as_the_admitted_principal(store):
     assert ("provider", "mcp_client") in external_source
 
 
+def test_external_request_id_retries_are_idempotent_and_conflicts_fail(store):
+    executor = _StubExecutor()
+    bridge = _bound_bridge(store, executor)
+    arguments = {"device_id": "light.office", "service": "light.turn_off"}
+
+    first = _call(
+        bridge,
+        tool="haven.action.request",
+        external_request_id="action-retry-1",
+        subject="subj-1",
+        arguments=arguments,
+    )
+    retry = _call(
+        bridge,
+        tool="haven.action.request",
+        external_request_id="action-retry-1",
+        subject="subj-1",
+        arguments=arguments,
+    )
+    assert retry == first
+    assert [call[0] for call in executor.calls] == ["request"]
+
+    with pytest.raises(ExternalDenied) as exc:
+        _call(
+            bridge,
+            tool="haven.action.request",
+            external_request_id="action-retry-1",
+            subject="subj-1",
+            arguments={"device_id": "light.bedroom", "service": "light.turn_off"},
+        )
+    assert exc.value.code == INVALID_ARGUMENTS
+    assert "different request" in exc.value.message
+
+
 def _bound_bridge(store, executor: _StubExecutor) -> TransportBridge:
     """A bridge whose caller binds to the household owner with actions.request.
 
@@ -230,7 +264,13 @@ def test_action_confirm_and_deny_dispatch(store):
     bridge = _bound_bridge(store, executor)
 
     confirmed = _call(bridge, tool="haven.action.confirm", subject="subj-1", arguments={"request_id": "req-9"})
-    denied = _call(bridge, tool="haven.action.deny", subject="subj-1", arguments={"request_id": "req-9"})
+    denied = _call(
+        bridge,
+        tool="haven.action.deny",
+        external_request_id="mcp_rpc_2",
+        subject="subj-1",
+        arguments={"request_id": "req-9"},
+    )
 
     assert confirmed["status"] == "confirmed"
     assert denied["status"] == "denied"

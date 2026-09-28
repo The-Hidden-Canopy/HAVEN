@@ -10,6 +10,7 @@ from .models import (
     PROPOSED,
     RECURRENCES,
     TASK_STATES,
+    TASK_TRANSITIONS,
     TERMINAL_STATES,
     TaskRecord,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "PROPOSED",
     "RECURRENCES",
     "TASK_STATES",
+    "TASK_TRANSITIONS",
     "TERMINAL_STATES",
     "TaskRecord",
     "TaskStore",

@@ -15,8 +15,9 @@ A field a manifest declared `secret=True` (`ProviderConfigField.secret`, an
 API key or bridge password, not a bridge IP or a display name) never lands
 in the same file as the rest: `save_installed_provider`'s `secret_fields`
 splits the config into `provider_<id>_config.json` (everything else) and
-`provider_<id>_secrets.json` (secret values only, chmod 0o600 the same
-best-effort tightening the home_assistant token file already gets). Neither
+`provider_<id>_secrets.json` (credential references only, chmod 0o600 as a
+defense-in-depth measure). Secret values are held by the DPAPI-backed
+credential store. Neither
 of those two files' existence is meaningful on its own -- a provider with no
 secret fields simply never gets one -- and `load_installed_provider_config`
 merges both back into the one mapping `build()` actually needs, so no
@@ -34,6 +35,9 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
+
+from ..credentials import CredentialKind, CredentialStore, UnknownCredentialError
 
 from .setup_config import SetupConfigStore, _write_json_atomic
 
@@ -63,6 +67,21 @@ def _config_path(store: SetupConfigStore, provider_id: str) -> Path:
 
 def _secrets_path(store: SetupConfigStore, provider_id: str) -> Path:
     return store.path.parent / f"provider_{_safe_filename_part(provider_id)}_secrets.json"
+
+
+def _credential_id(provider_id: str, field_name: str) -> str:
+    return (
+        f"provider:{_safe_filename_part(provider_id)}:"
+        f"{_safe_filename_part(field_name)}:{uuid4().hex}"
+    )
+
+
+def _read_mapping(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def load_installed_providers(store: SetupConfigStore) -> tuple[InstalledProvider, ...]:
@@ -196,19 +215,63 @@ def save_installed_provider(
     Replaces any prior entry for the same `provider_id` (re-activating with
     new config, e.g. after a credential rotation, is the same call).
     `secret_fields` names which keys in `config` came from a
-    `ProviderConfigField` with `secret=True` (`haven/providers/plugin.py`):
-    those, and only those, are written to the separate, tightened secrets
-    sidecar rather than the ordinary config file.
+    `ProviderConfigField` with `secret=True` (`haven/providers/plugin.py`).
+    Those values are encrypted through `CredentialStore`; the sidecar stores
+    only credential references, never the secret itself.
     """
+
+    credentials = CredentialStore(store.path.parent / "credentials.db")
+    prior_refs = _read_mapping(_secrets_path(store, provider_id))
+    secret_refs: dict[str, dict[str, str]] = {}
+    for field_name in sorted(secret_fields):
+        value = config.get(field_name)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"secret provider field {field_name!r} must be a non-empty string")
+        prior = prior_refs.get(field_name)
+        prior_id = prior.get("credential_id") if isinstance(prior, dict) else None
+        credential_id = (
+            prior_id.strip()
+            if isinstance(prior_id, str) and prior_id.strip()
+            else _credential_id(provider_id, field_name)
+        )
+        metadata = next(
+            (
+                item
+                for item in credentials.list_metadata(provider=f"provider:{provider_id}")
+                if item.credential_id == credential_id
+            ),
+            None,
+        )
+        if metadata is not None and not metadata.revoked:
+            credentials.rotate(credential_id, new_secret=value.strip())
+        else:
+            credential_id = _credential_id(provider_id, field_name)
+            credentials.create(
+                credential_id=credential_id,
+                provider=f"provider:{provider_id}",
+                account_label=field_name,
+                kind=CredentialKind.USER,
+                secret=value.strip(),
+            )
+        secret_refs[field_name] = {"credential_id": credential_id}
+
+    retained_ids = {value["credential_id"] for value in secret_refs.values()}
+    for prior in prior_refs.values():
+        prior_id = prior.get("credential_id") if isinstance(prior, dict) else None
+        if not isinstance(prior_id, str) or prior_id in retained_ids:
+            continue
+        try:
+            credentials.revoke(prior_id)
+        except UnknownCredentialError:
+            pass
 
     existing = {p.provider_id: p for p in load_installed_providers(store)}
     existing[provider_id] = InstalledProvider(provider_id=provider_id, entry_point_name=entry_point_name, enabled=True)
-    _save_index(store, tuple(existing.values()))
 
     plain = {k: v for k, v in config.items() if k not in secret_fields}
-    secret = {k: v for k, v in config.items() if k in secret_fields}
     _write_sidecar(_config_path(store, provider_id), plain, secret=False)
-    _write_sidecar(_secrets_path(store, provider_id), secret, secret=True)
+    _write_sidecar(_secrets_path(store, provider_id), secret_refs, secret=True)
+    _save_index(store, tuple(existing.values()))
 
 
 def load_installed_provider_config(store: SetupConfigStore, provider_id: str) -> dict:
@@ -217,14 +280,20 @@ def load_installed_provider_config(store: SetupConfigStore, provider_id: str) ->
     `{}` if neither sidecar is on disk or readable.
     """
 
-    merged: dict = {}
-    for path in (_config_path(store, provider_id), _secrets_path(store, provider_id)):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+    merged: dict = _read_mapping(_config_path(store, provider_id))
+    credentials = CredentialStore(store.path.parent / "credentials.db")
+    for field_name, reference in _read_mapping(_secrets_path(store, provider_id)).items():
+        credential_id = reference.get("credential_id") if isinstance(reference, dict) else None
+        if not isinstance(credential_id, str) or not credential_id.strip():
+            # Legacy plaintext sidecars are deliberately not read. An
+            # explicit provider activation can replace them with credentials.
             continue
-        if isinstance(data, dict):
-            merged.update(data)
+        try:
+            merged[field_name] = credentials.get_secret(credential_id)
+        except UnknownCredentialError:
+            # A revoked or missing credential makes only this provider field
+            # unavailable; it must never cause a plaintext fallback.
+            continue
     return merged
 
 
@@ -239,6 +308,14 @@ def set_installed_provider_enabled(store: SetupConfigStore, provider_id: str, en
 
 
 def remove_installed_provider(store: SetupConfigStore, provider_id: str) -> None:
+    credentials = CredentialStore(store.path.parent / "credentials.db")
+    for reference in _read_mapping(_secrets_path(store, provider_id)).values():
+        credential_id = reference.get("credential_id") if isinstance(reference, dict) else None
+        if isinstance(credential_id, str) and credential_id.strip():
+            try:
+                credentials.revoke(credential_id)
+            except UnknownCredentialError:
+                pass
     remaining = tuple(p for p in load_installed_providers(store) if p.provider_id != provider_id)
     _save_index(store, remaining)
     for path in (_config_path(store, provider_id), _secrets_path(store, provider_id)):

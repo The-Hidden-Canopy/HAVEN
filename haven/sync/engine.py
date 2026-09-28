@@ -51,6 +51,7 @@ class LocalSyncEngine:
         data_dir: str | Path,
         outbox: SyncEventStore | None = None,
         clock=_DEFAULT_CLOCK,
+        allowed_local_scopes: tuple[str, ...] | None = None,
     ) -> None:
         self._data_dir = Path(data_dir)
         self._data_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +73,21 @@ class LocalSyncEngine:
         # Explicit foreign->local scope aliases (a same-user device pair maps
         # the origin's personal scope onto this installation's). Without an
         # alias an invisible scope stays rejected: fail closed by default.
-        self._scope_aliases: dict[str, str] = {}
+        self._allowed_local_scopes = frozenset(allowed_local_scopes or ())
+        raw_aliases = self._state.get("scope_aliases", {})
+        self._scope_aliases = (
+            {
+                foreign: local
+                for foreign, local in raw_aliases.items()
+                if isinstance(foreign, str)
+                and foreign.strip()
+                and isinstance(local, str)
+                and local.strip()
+                and (not self._allowed_local_scopes or local in self._allowed_local_scopes)
+            }
+            if isinstance(raw_aliases, dict)
+            else {}
+        )
         self._lock = threading.Lock()
         self._conflicts_path = self._data_dir / "sync_conflicts.db"
         conn = sqlite3.connect(str(self._conflicts_path))
@@ -113,17 +128,32 @@ class LocalSyncEngine:
         self._save_state()
         return {"ok": True, "transport": type(transport).__name__ if transport else None}
 
-    def set_scope_aliases(self, aliases: dict[str, str]) -> dict:
+    def set_scope_aliases(
+        self,
+        aliases: dict[str, str],
+        *,
+        allowed_local_scopes: tuple[str, ...] | None = None,
+    ) -> dict:
         """Map foreign scope ids onto local ones for applied records."""
 
         if not isinstance(aliases, dict):
             return {"ok": False, "error": "aliases must be a mapping"}
         cleaned = {}
+        allowed = self._allowed_local_scopes or frozenset(allowed_local_scopes or ())
         for foreign, local in aliases.items():
-            if not isinstance(foreign, str) or not isinstance(local, str):
+            if (
+                not isinstance(foreign, str)
+                or not foreign.strip()
+                or not isinstance(local, str)
+                or not local.strip()
+            ):
                 return {"ok": False, "error": "alias keys and values must be strings"}
-            cleaned[foreign] = local
+            if allowed and local.strip() not in allowed:
+                return {"ok": False, "error": f"local scope is not visible: {local}"}
+            cleaned[foreign.strip()] = local.strip()
         self._scope_aliases = cleaned
+        self._state["scope_aliases"] = dict(cleaned)
+        self._save_state()
         return {"ok": True, "aliases": dict(cleaned)}
 
     def _aliased_scope(self, scope_id: str) -> str:
@@ -235,7 +265,10 @@ class LocalSyncEngine:
         if applier is None:
             return {"rejected": 1}
         payload = dict(event.payload)
-        payload["scope_id"] = self._aliased_scope(str(payload.get("scope_id", event.scope_id)))
+        raw_scope = payload.get("scope_id", event.scope_id)
+        if not isinstance(raw_scope, str) or raw_scope.strip() != event.scope_id:
+            return {"rejected": 1}
+        payload["scope_id"] = self._aliased_scope(raw_scope.strip())
         local = self._outbox.latest_for(event.object_id)
         local_payload = dict(local.payload) if local is not None else None
         if (

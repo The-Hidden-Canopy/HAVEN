@@ -39,7 +39,6 @@ class RelationshipService:
         self._model_proposers = model_proposers
         self._lock = threading.Lock()
         self._rejected = self._load_rejected()
-        self._auto_admitted: set[str] = set()
 
     def _fresh_candidates(
         self, *, visible_scopes: tuple[str, ...], exclude_pairs: frozenset[str] | None = None
@@ -79,10 +78,6 @@ class RelationshipService:
             if candidate.candidate_id in self._rejected:
                 continue
             verdict = self._policy.classify(candidate)
-            if verdict == "auto" and candidate.candidate_id not in self._auto_admitted:
-                self._policy.auto_admit(candidate)
-                self._auto_admitted.add(candidate.candidate_id)
-                continue  # admitted edges surface through relationships.for instead
             row = candidate.wire()
             row["verdict"] = verdict
             rows.append(row)

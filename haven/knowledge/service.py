@@ -12,7 +12,7 @@ from haven.resources.store import ResourceStore
 
 from .admission import AdmissionResult, AdmissionStatus, ClaimAdmissionService
 from .audit import KnowledgeAuditAction, KnowledgeAuditEvent
-from .claims import is_stale
+from .claims import ClaimState, is_stale
 from .extraction import (
     ClaimExtractor,
     ContentReader,
@@ -74,6 +74,35 @@ class KnowledgeService:
         if listener is not None and claim is not None:
             listener("claim", claim)
 
+    def _mark_stale_by_source(
+        self,
+        source_refs: Iterable[str],
+        *,
+        actor: str,
+        details: tuple[tuple[str, object], ...] = (),
+    ) -> int:
+        """Mark provider-invalidated claims with durable audit evidence."""
+
+        stale_sources = {ref for ref in source_refs if ref}
+        marked = 0
+        for claim in self._claims.list_all():
+            if claim.state is ClaimState.STALE or not claim.source_refs:
+                continue
+            if not set(claim.source_refs).issubset(stale_sources):
+                continue
+            event = self._audit_event(
+                scope_id=claim.scope_id,
+                claim_id=claim.claim_id,
+                action=KnowledgeAuditAction.PROVIDER_STALE,
+                actor_id=actor,
+                occurred_at=self._clock(),
+                details=details,
+            )
+            if self._claims.mark_stale_with_audit(claim.claim_id, event):
+                marked += 1
+                self._emit_claim(self._claims.get(claim.claim_id))
+        return marked
+
     @property
     def claims(self) -> ClaimStore:
         return self._claims
@@ -94,7 +123,11 @@ class KnowledgeService:
         if previous is not None:
             # A changed source invalidates claims that relied only on its old
             # contents. The new extraction below can admit fresh claims.
-            self._claims.mark_stale_by_source((resource.resource_id,))
+            self._mark_stale_by_source(
+                (resource.resource_id,),
+                actor=f"provider:{resource.provider_id}",
+                details=(("resource_id", resource.resource_id),),
+            )
 
         document = extract_document_content(
             resource, reader=reader, bytes_reader=bytes_reader or _no_bytes, now=self._clock()
@@ -115,7 +148,19 @@ class KnowledgeService:
             results.extend(extractor.extract(resource, content))
         counts = {status: 0 for status in AdmissionStatus}
         for candidate in results:
-            counts[self._admission.admit(candidate).status] += 1
+            counts[
+                self._admission.admit(
+                    candidate,
+                    audit_factory=lambda claim, candidate_id=candidate.candidate_id: self._audit_event(
+                        scope_id=claim.scope_id,
+                        claim_id=claim.claim_id,
+                        action=KnowledgeAuditAction.PROVIDER_ADMIT,
+                        actor_id=f"provider:{resource.provider_id}",
+                        occurred_at=claim.created_at,
+                        details=(("candidate_id", candidate_id), ("resource_id", resource.resource_id)),
+                    ),
+                ).status
+            ] += 1
         return KnowledgeIngestResult(
             resource_id=resource.resource_id,
             admitted=counts[AdmissionStatus.ADMITTED],
@@ -132,7 +177,11 @@ class KnowledgeService:
             for record in self._resources.list_by_scope(scope_id)
             if record.provider_id == provider_id and record.stale
         }
-        return self._claims.mark_stale_by_source(stale_ids)
+        return self._mark_stale_by_source(
+            stale_ids,
+            actor=f"provider:{provider_id}",
+            details=(("provider_id", provider_id), ("scope_id", scope_id)),
+        )
 
     def revoke_locator_prefix(self, prefix: str) -> tuple[int, int]:
         """Revoke resource visibility and stale claims derived from it."""
@@ -152,7 +201,11 @@ class KnowledgeService:
             and not record.stale
         }
         resources_marked = self._resources.mark_stale_by_locator_prefix(normalized)
-        claims_marked = self._claims.mark_stale_by_source(source_ids)
+        claims_marked = self._mark_stale_by_source(
+            source_ids,
+            actor="system:knowledge",
+            details=(("locator_prefix", normalized),),
+        )
         return resources_marked, claims_marked
 
     def list_claims(

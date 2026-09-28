@@ -20,6 +20,7 @@ from haven.actions import ActionLedgerStore
 from haven.automation import (
     ActionTarget,
     AutomationEvent,
+    AutomationEventPublisher,
     AutomationSpec,
     ResourceActionScheduler,
     Selector,
@@ -29,7 +30,7 @@ from haven.automation import (
     propose,
 )
 from haven.core.consequence import ConsequenceClass
-from haven.core.domain import Principal, RoleTier
+from haven.core.domain import EvidenceStatus, Principal, RoleTier
 from haven.resources import ResourceStore
 from haven.web.computer_actions import ComputerActionService
 from haven.web.setup_config import SetupConfigStore
@@ -45,6 +46,7 @@ def _owner(household_id: str = "household-a") -> Principal:
 
 def _spec(
     *,
+    household_id: str = "household-a",
     time_of_day: str = "21:00",
     weekdays: tuple[int, ...] | None = None,
     action: str = "computer.noop",
@@ -60,7 +62,7 @@ def _spec(
         params["resource_id"] = resource_id
     return AutomationSpec(
         spec_id="spec-1",
-        household_id="household-a",
+        household_id=household_id,
         trigger=Trigger(kind=TriggerKind.TIME, parameters=trigger_params),
         selector=Selector(),
         action=ActionTarget(domain=domain, action=action, consequence_class=ConsequenceClass.REVERSIBLE_LOCAL, parameters=params),
@@ -71,7 +73,13 @@ def _spec(
 
 def _approved_rule(spec: AutomationSpec, *, rule_id: str = "rule-1"):
     rule = propose(spec, rule_id=rule_id)
-    return approve(rule, principal=_owner(), justification="trust it", now=NOW).rule
+    return approve(
+        rule,
+        principal=_owner(spec.household_id),
+        justification="trust it",
+        now=NOW,
+        event_sink=lambda _: None,
+    ).rule
 
 
 def _recording_dispatch(results: list[dict], *, respond: dict):
@@ -87,28 +95,53 @@ def _recording_dispatch(results: list[dict], *, respond: dict):
 # -- due computation ----------------------------------------------------------
 
 
+def test_scheduler_requires_an_explicit_household_scope():
+    with pytest.raises(ValueError, match="household_id"):
+        ResourceActionScheduler(household_id="", dispatch={})
+
+
+def test_scheduler_never_dispatches_a_foreign_household_rule():
+    dispatched: list[dict] = []
+    scheduler = ResourceActionScheduler(
+        household_id="household-a",
+        dispatch={"computer": _recording_dispatch(dispatched, respond={"ok": True, "success": True})},
+    )
+    foreign = _approved_rule(_spec(household_id="household-b"))
+
+    assert scheduler.tick(rules=[foreign], now=NOW) == []
+    assert scheduler.status([foreign], now=NOW) == []
+    assert dispatched == []
+
+
 def test_an_approved_time_triggered_rule_is_due_inside_its_window():
-    scheduler = ResourceActionScheduler(dispatch={})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
     rule = _approved_rule(_spec(time_of_day="21:00"))
     assert scheduler.due_rules([rule], now=NOW) == [rule]
 
 
 def test_a_rule_outside_its_window_is_not_due():
-    scheduler = ResourceActionScheduler(dispatch={})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
     rule = _approved_rule(_spec(time_of_day="09:00"))
     assert scheduler.due_rules([rule], now=NOW) == []
 
 
 def test_a_disabled_rule_is_never_due():
-    scheduler = ResourceActionScheduler(dispatch={})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
     from haven.automation import set_enabled
 
-    rule = set_enabled(_approved_rule(_spec()), False)
+    rule = set_enabled(
+        _approved_rule(_spec()),
+        False,
+        principal=_owner(),
+        justification="pause for test",
+        now=NOW,
+        event_sink=lambda _: None,
+    ).rule
     assert scheduler.due_rules([rule], now=NOW) == []
 
 
 def test_a_proposed_rule_never_run_never_asked():
-    scheduler = ResourceActionScheduler(dispatch={})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
     rule = propose(_spec(), rule_id="rule-1")
     assert scheduler.due_rules([rule], now=NOW) == []
 
@@ -116,14 +149,20 @@ def test_a_proposed_rule_never_run_never_asked():
 def test_a_revoked_rule_is_never_due():
     from haven.automation import revoke
 
-    scheduler = ResourceActionScheduler(dispatch={})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
     approved = _approved_rule(_spec())
-    revoked = revoke(approved, principal=_owner(), justification="stop", now=NOW).rule
+    revoked = revoke(
+        approved,
+        principal=_owner(),
+        justification="stop",
+        now=NOW,
+        event_sink=lambda _: None,
+    ).rule
     assert scheduler.due_rules([revoked], now=NOW) == []
 
 
 def test_a_non_time_trigger_is_never_due_this_pass():
-    scheduler = ResourceActionScheduler(dispatch={})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
     spec = AutomationSpec(
         spec_id="spec-1",
         household_id="household-a",
@@ -138,14 +177,14 @@ def test_a_non_time_trigger_is_never_due_this_pass():
 
 
 def test_a_weekday_restricted_trigger_only_fires_on_its_weekdays():
-    scheduler = ResourceActionScheduler(dispatch={})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
     # NOW is a Wednesday (weekday 2); restrict to Monday/Tuesday only.
     rule = _approved_rule(_spec(weekdays=(0, 1)))
     assert scheduler.due_rules([rule], now=NOW) == []
 
 
 def test_a_malformed_trigger_is_skipped_not_fatal_to_the_tick():
-    scheduler = ResourceActionScheduler(dispatch={})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
     good = _approved_rule(_spec(), rule_id="good")
     bad_spec = _spec()
     bad_rule = _approved_rule(bad_spec, rule_id="bad")
@@ -164,7 +203,7 @@ def test_a_malformed_trigger_is_skipped_not_fatal_to_the_tick():
 
 
 def test_cooldown_suppresses_a_refire_within_the_configured_window():
-    scheduler = ResourceActionScheduler(dispatch={"computer": lambda **_: {"ok": True, "success": True}}, cooldown=timedelta(minutes=30))
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": lambda **_: {"ok": True, "success": True}}, cooldown=timedelta(minutes=30))
     rule = _approved_rule(_spec())
     first = scheduler.tick(rules=[rule], now=NOW)
     assert len(first) == 1
@@ -178,7 +217,7 @@ def test_cooldown_suppresses_a_refire_within_the_configured_window():
 def test_tick_dispatches_through_the_domains_own_callable():
     results: list[dict] = []
     dispatch = _recording_dispatch(results, respond={"ok": True, "success": True, "detail": "moved"})
-    scheduler = ResourceActionScheduler(dispatch={"computer": dispatch})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": dispatch})
     rule = _approved_rule(_spec(action="filesystem.move", resource_id="file-1", extra_params={"destination": "/archive"}))
 
     outcomes = scheduler.tick(rules=[rule], now=NOW)
@@ -196,14 +235,14 @@ def test_tick_dispatches_through_the_domains_own_callable():
 
 
 def test_a_denied_dispatch_records_denied():
-    scheduler = ResourceActionScheduler(dispatch={"computer": lambda **_: {"ok": False, "error": "no household owner declared yet"}})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": lambda **_: {"ok": False, "error": "no household owner declared yet"}})
     rule = _approved_rule(_spec())
     outcomes = scheduler.tick(rules=[rule], now=NOW)
     assert outcomes[0].outcome == "denied"
 
 
 def test_a_failed_execution_records_blocked():
-    scheduler = ResourceActionScheduler(dispatch={"computer": lambda **_: {"ok": True, "success": False, "detail": "refused"}})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": lambda **_: {"ok": True, "success": False, "detail": "refused"}})
     rule = _approved_rule(_spec())
     outcomes = scheduler.tick(rules=[rule], now=NOW)
     assert outcomes[0].outcome == "blocked"
@@ -213,7 +252,7 @@ def test_confirmation_required_is_reported_blocked_never_auto_confirmed():
     """The core safety property: the scheduler holds no confirmation token,
     so a confirmation_required action can never come back as executed."""
 
-    scheduler = ResourceActionScheduler(
+    scheduler = ResourceActionScheduler(household_id="household-a",
         dispatch={"computer": lambda **_: {"ok": True, "status": "confirmation_required", "request_id": "action-1"}}
     )
     rule = _approved_rule(_spec())
@@ -222,7 +261,7 @@ def test_confirmation_required_is_reported_blocked_never_auto_confirmed():
 
 
 def test_a_domain_with_no_configured_dispatcher_is_denied_not_raised():
-    scheduler = ResourceActionScheduler(dispatch={})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
     rule = _approved_rule(_spec(domain="comms"))
     outcomes = scheduler.tick(rules=[rule], now=NOW)
     assert outcomes[0].outcome == "denied"
@@ -257,7 +296,7 @@ def test_end_to_end_a_due_automation_denies_through_the_real_authority_engine(tm
     reaches the real authority pipeline rather than a stand-in."""
 
     service, _, ledger = _real_computer_service(tmp_path)
-    scheduler = ResourceActionScheduler(dispatch={"computer": service.request_action})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": service.request_action})
     rule = _approved_rule(_spec(action="filesystem.create_folder", extra_params={"path": "new-folder"}))
 
     outcomes = scheduler.tick(rules=[rule], now=NOW)
@@ -273,7 +312,7 @@ def test_end_to_end_a_due_automation_denies_through_the_real_authority_engine(tm
 
 
 def test_next_run_scans_forward_to_the_next_matching_weekday():
-    scheduler = ResourceActionScheduler(dispatch={})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
     # NOW is Wednesday; restrict to Friday (weekday 4).
     rule = _approved_rule(_spec(time_of_day="21:00", weekdays=(4,)))
     nxt = scheduler.next_run(rule, after=NOW)
@@ -283,7 +322,7 @@ def test_next_run_scans_forward_to_the_next_matching_weekday():
 
 
 def test_next_run_is_none_for_a_non_time_trigger():
-    scheduler = ResourceActionScheduler(dispatch={})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
     spec = AutomationSpec(
         spec_id="spec-1",
         household_id="household-a",
@@ -298,7 +337,7 @@ def test_next_run_is_none_for_a_non_time_trigger():
 
 
 def test_status_rows_carry_domain_action_and_due_now():
-    scheduler = ResourceActionScheduler(dispatch={})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
     rule = _approved_rule(_spec(domain="computer", action="filesystem.move"))
     rows = scheduler.status([rule], now=NOW)
     assert len(rows) == 1
@@ -311,7 +350,7 @@ def test_status_rows_carry_domain_action_and_due_now():
 
 
 def test_status_includes_event_triggered_rules_with_no_time_projection():
-    scheduler = ResourceActionScheduler(dispatch={})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
     spec = AutomationSpec(
         spec_id="spec-1",
         household_id="household-a",
@@ -329,7 +368,7 @@ def test_status_includes_event_triggered_rules_with_no_time_projection():
 
 
 def test_status_omits_evidence_deadline_and_external_condition_triggers():
-    scheduler = ResourceActionScheduler(dispatch={})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
     for kind in (TriggerKind.EVIDENCE, TriggerKind.DEADLINE, TriggerKind.EXTERNAL_CONDITION):
         spec = AutomationSpec(
             spec_id="spec-1",
@@ -374,16 +413,19 @@ def _event(**overrides) -> AutomationEvent:
         event_name="file.created",
         household_id="household-a",
         occurred_at=NOW,
+        source="tests.resource_scheduler",
         payload={"resource_id": "file-1"},
     )
     kwargs.update(overrides)
-    return AutomationEvent(**kwargs)
+    household_id = kwargs.pop("household_id")
+    publisher = AutomationEventPublisher(source=kwargs.pop("source"), household_id=household_id)
+    return publisher.publish(**kwargs)
 
 
 def test_a_matching_event_dispatches_the_rule():
     results: list[dict] = []
     dispatch = _recording_dispatch(results, respond={"ok": True, "success": True})
-    scheduler = ResourceActionScheduler(dispatch={"computer": dispatch})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": dispatch})
     rule = _approved_rule(_event_spec())
 
     outcomes = scheduler.handle_events(rules=[rule], events=[_event()], now=NOW)
@@ -394,35 +436,69 @@ def test_a_matching_event_dispatches_the_rule():
 
 
 def test_a_different_event_name_does_not_match():
-    scheduler = ResourceActionScheduler(dispatch={"computer": lambda **_: {"ok": True, "success": True}})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": lambda **_: {"ok": True, "success": True}})
     rule = _approved_rule(_event_spec(event_name="file.created"))
     outcomes = scheduler.handle_events(rules=[rule], events=[_event(event_name="message.received")], now=NOW)
     assert outcomes == []
 
 
 def test_a_cross_household_event_does_not_match():
-    scheduler = ResourceActionScheduler(dispatch={"computer": lambda **_: {"ok": True, "success": True}})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": lambda **_: {"ok": True, "success": True}})
     rule = _approved_rule(_event_spec(household_id="household-a"))
     outcomes = scheduler.handle_events(rules=[rule], events=[_event(household_id="household-b")], now=NOW)
     assert outcomes == []
 
 
+def test_an_unpublished_event_cannot_trigger_a_rule():
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": lambda **_: {"ok": True, "success": True}})
+    rule = _approved_rule(_event_spec())
+    raw_event = AutomationEvent(
+        event_id="raw-event",
+        event_name="file.created",
+        household_id="household-a",
+        occurred_at=NOW,
+        source="untrusted.test",
+        payload={"resource_id": "file-1"},
+    )
+
+    assert scheduler.handle_events(rules=[rule], events=[raw_event], now=NOW) == []
+
+
+def test_stale_or_fallback_events_cannot_trigger_a_rule():
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": lambda **_: {"ok": True, "success": True}})
+    rule = _approved_rule(_event_spec())
+
+    for status in (EvidenceStatus.STALE, EvidenceStatus.FALLBACK):
+        assert scheduler.handle_events(
+            rules=[rule],
+            events=[_event(event_id=f"{status.value}-event", evidence_status=status)],
+            now=NOW,
+        ) == []
+
+
 def test_a_disabled_rule_never_event_fires():
     from haven.automation import set_enabled
 
-    scheduler = ResourceActionScheduler(dispatch={"computer": lambda **_: {"ok": True, "success": True}})
-    rule = set_enabled(_approved_rule(_event_spec()), False)
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": lambda **_: {"ok": True, "success": True}})
+    rule = set_enabled(
+        _approved_rule(_event_spec()),
+        False,
+        principal=_owner(),
+        justification="pause for test",
+        now=NOW,
+        event_sink=lambda _: None,
+    ).rule
     assert scheduler.handle_events(rules=[rule], events=[_event()], now=NOW) == []
 
 
 def test_a_proposed_rule_never_event_fires():
-    scheduler = ResourceActionScheduler(dispatch={"computer": lambda **_: {"ok": True, "success": True}})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": lambda **_: {"ok": True, "success": True}})
     rule = propose(_event_spec(), rule_id="rule-1")
     assert scheduler.handle_events(rules=[rule], events=[_event()], now=NOW) == []
 
 
 def test_an_extra_trigger_filter_narrows_the_match():
-    scheduler = ResourceActionScheduler(dispatch={"computer": lambda **_: {"ok": True, "success": True}})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": lambda **_: {"ok": True, "success": True}})
     rule = _approved_rule(_event_spec(event_name="task.status_changed", trigger_filters={"to_state": "done"}))
 
     no_match = scheduler.handle_events(
@@ -441,7 +517,7 @@ def test_an_extra_trigger_filter_narrows_the_match():
 
 
 def test_a_selector_filter_further_narrows_the_match():
-    scheduler = ResourceActionScheduler(dispatch={"computer": lambda **_: {"ok": True, "success": True}})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": lambda **_: {"ok": True, "success": True}})
     rule = _approved_rule(_event_spec(event_name="task.status_changed", selector_filters={"project_id": "p1"}))
 
     wrong_project = scheduler.handle_events(
@@ -462,7 +538,7 @@ def test_a_selector_filter_further_narrows_the_match():
 def test_redelivering_the_same_event_never_refires_the_rule():
     results: list[dict] = []
     dispatch = _recording_dispatch(results, respond={"ok": True, "success": True})
-    scheduler = ResourceActionScheduler(dispatch={"computer": dispatch})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": dispatch})
     rule = _approved_rule(_event_spec())
     event = _event()
 
@@ -475,7 +551,7 @@ def test_redelivering_the_same_event_never_refires_the_rule():
 
 
 def test_one_event_can_fire_multiple_rules():
-    scheduler = ResourceActionScheduler(dispatch={"computer": lambda **_: {"ok": True, "success": True}})
+    scheduler = ResourceActionScheduler(household_id="household-a", dispatch={"computer": lambda **_: {"ok": True, "success": True}})
     rule_a = _approved_rule(_event_spec(), rule_id="rule-a")
     rule_b = _approved_rule(_event_spec(), rule_id="rule-b")
     outcomes = scheduler.handle_events(rules=[rule_a, rule_b], events=[_event()], now=NOW)
@@ -483,7 +559,7 @@ def test_one_event_can_fire_multiple_rules():
 
 
 def test_event_triggered_confirmation_required_is_also_reported_blocked():
-    scheduler = ResourceActionScheduler(
+    scheduler = ResourceActionScheduler(household_id="household-a",
         dispatch={"computer": lambda **_: {"ok": True, "status": "confirmation_required", "request_id": "action-1"}}
     )
     rule = _approved_rule(_event_spec())

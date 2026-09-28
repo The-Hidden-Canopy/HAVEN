@@ -635,7 +635,7 @@ public sealed partial class SetupWizardView : UserControl
                 }
             };
             StepContent.Children.Add(skip);
-            StepContent.Children.Add(Body("HAVEN works without Home Assistant. You can add Home Assistant or other home providers later from Settings."));
+            StepContent.Children.Add(Body("HAVEN works without Home Assistant. You can reopen Setup from the left rail at any time to add a supported home provider later."));
         }
 
         StepContent.Children.Add(MicroHeading("Devices"));
@@ -805,6 +805,6 @@ public sealed partial class SetupWizardView : UserControl
                 : $"{people.Count} people · {contextsCount} contexts declared"));
         StepContent.Children.Add(ContextRow("Voice control", GetBool(preferences, "voice") ? "on" : "off"));
         StepContent.Children.Add(ContextRow("Model intelligence", GetBool(preferences, "intelligence") ? "on" : "off"));
-        StepContent.Children.Add(Body("You can change any of these later from Settings."));
+        StepContent.Children.Add(Body("You can reopen Setup from the left rail at any time, or use the direct connect actions on Computer and Communications."));
     }
 }

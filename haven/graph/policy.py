@@ -1,11 +1,10 @@
 """Relationship admission policy (spec page 21).
 
-Low-impact predicates may be admitted automatically above a confidence
-threshold -- they explain, they do not commit. High-impact predicates
-(person owns account, task completed, document authoritative, and the rest
-of `HIGH_IMPACT_PREDICATES`) require explicit human admission no matter the
-confidence: a model may suggest such an edge; it may never silently create
-one.
+Relationship candidates are review material, not authority. High-impact
+predicates (person owns account, task completed, document authoritative, and
+the rest of `HIGH_IMPACT_PREDICATES`) require explicit human admission, and
+low-impact predicates use the same boundary so a model or correlator can
+never silently create a durable edge.
 """
 
 from __future__ import annotations
@@ -31,10 +30,10 @@ HIGH_IMPACT_PREDICATES = frozenset(
     }
 )
 
-# Explanatory predicates the correlator may propose: auto-admissible.
+# Explanatory predicates the correlator may propose: still review-only.
 _LOW_IMPACT_PREDICATES = frozenset({"haven:related_to", "haven:references", "haven:supports"})
 
-_AUTO_ADMIT_CONFIDENCE = 0.6
+_AUTO_ADMIT_CONFIDENCE = 0.6  # retained for constructor compatibility; auto-admission is disabled
 
 
 class RelationshipAdmissionPolicy:
@@ -52,13 +51,11 @@ class RelationshipAdmissionPolicy:
         self._auto_admit_confidence = auto_admit_confidence
 
     def classify(self, candidate: CandidateRelationship) -> str:
-        """"auto" | "needs_review" | "rejected" -- the admission verdict."""
+        """"needs_review" | "rejected" -- the admission verdict."""
 
         if candidate.predicate in HIGH_IMPACT_PREDICATES:
             return "needs_review"
         if candidate.predicate in _LOW_IMPACT_PREDICATES:
-            if candidate.confidence >= self._auto_admit_confidence:
-                return "auto"
             return "needs_review"
         return "rejected"
 
@@ -80,11 +77,15 @@ class RelationshipAdmissionPolicy:
         return {"ok": True, "assertion_id": assertion.assertion_id}
 
     def auto_admit(self, candidate: CandidateRelationship) -> dict | None:
-        """Admit only when the policy classifies the candidate as auto."""
+        """Fail closed for the legacy automatic-admission entry point.
 
-        if self.classify(candidate) != "auto":
-            return None
-        return self.admit(candidate)
+        The method remains as a compatibility seam for callers that have not
+        migrated to ``admit`` yet, but it must not turn model output into a
+        durable ontology assertion. Every candidate now requires an explicit
+        human admission through ``admit``.
+        """
+
+        return {"ok": False, "error": "automatic relationship admission is disabled; review and admit explicitly"}
 
 
 __all__ = ["HIGH_IMPACT_PREDICATES", "RelationshipAdmissionPolicy"]

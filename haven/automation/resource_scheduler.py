@@ -26,13 +26,21 @@ by matching a caller-supplied batch of `AutomationEvent`s against each
 EVENT-triggered rule's `Trigger`/`Selector` parameters. Both paths dispatch
 through the exact same per-domain callable and the exact same outcome
 mapping, so an EVENT-triggered filesystem move is exactly as governed as a
-TIME-triggered one. **Nothing in this repo emits an `AutomationEvent`
-yet** -- see `haven/automation/events.py`'s own docstring; this engine is
-ready to consume a real feed once one exists (a computer scan noticing a
+TIME-triggered one. **No production domain adapter emits an `AutomationEvent`
+yet** -- see `haven/automation/events.py`'s publisher boundary; this engine
+is ready to consume a real feed once one exists (a computer scan noticing a
 new resource, an email poll noticing a new message, a provider health check,
-a task update), not a running subscription to one. Evidence/deadline/
+a task update), not a running subscription to one. Raw events and
+stale/fallback/unavailable evidence are rejected before matching.
+Evidence/deadline/
 external-condition triggers remain unhandled by either method; a rule using
 one of those kinds is simply never due and never event-matched here.
+
+**Household scope.** A scheduler is constructed for exactly one
+`household_id`; foreign rules are ignored before due computation, status
+projection, or dispatch. This is deliberately a required constructor input,
+not an inferred value from the first rule or dispatcher, so a caller cannot
+accidentally turn a mixed-household collection into an execution context.
 
 **Dispatch contract.** Each `dispatch[domain]` callable takes the same
 keyword shape `ComputerActionService.request_action` already exposes --
@@ -74,6 +82,12 @@ DEFAULT_COOLDOWN = timedelta(minutes=1)
 NEXT_RUN_SCAN_DAYS = 8
 
 DispatchFn = Callable[..., dict]
+
+
+def _require_household_id(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("household_id must be a non-empty string")
+    return value.strip()
 
 
 def _schedule_trigger_from(trigger: Trigger) -> "_ScheduleWindow":
@@ -152,6 +166,8 @@ def _event_trigger_matches(rule: AutomationRule, event: AutomationEvent) -> bool
     `to_state` is `"done"`, and a `Selector(parameters={"project_id": "p1"})`
     further narrows it to that one project's tasks."""
 
+    if not event.is_eligible_for_automation:
+        return False
     if rule.spec.trigger.kind != TriggerKind.EVENT:
         return False
     if rule.spec.household_id != event.household_id:
@@ -219,7 +235,8 @@ class ResourceScheduleStatus:
 class ResourceActionScheduler:
     """Decides which approved, enabled `AutomationRule`s are due (TIME) or
     matched (EVENT), and dispatches each through its domain's own governed
-    entry point.
+    entry point. It is bound to one household; callers must create one
+    scheduler per household rather than relying on pre-filtered input.
 
     Single-threaded by design, matching `SchedulerEngine`: `_last_fired`/
     `_last_outcome`/`_processed_events` are plain in-memory state needing no
@@ -233,7 +250,14 @@ class ResourceActionScheduler:
     this engine is handed is responsible for persisting it.
     """
 
-    def __init__(self, *, dispatch: Mapping[str, DispatchFn], cooldown: timedelta = DEFAULT_COOLDOWN) -> None:
+    def __init__(
+        self,
+        *,
+        household_id: str,
+        dispatch: Mapping[str, DispatchFn],
+        cooldown: timedelta = DEFAULT_COOLDOWN,
+    ) -> None:
+        self._household_id = _require_household_id(household_id)
         if cooldown < timedelta(0):
             raise ValueError("cooldown must not be negative")
         self._dispatch = dict(dispatch)
@@ -250,12 +274,21 @@ class ResourceActionScheduler:
     def cooldown(self) -> timedelta:
         return self._cooldown
 
+    @property
+    def household_id(self) -> str:
+        return self._household_id
+
+    def _rule_is_in_scope(self, rule: AutomationRule) -> bool:
+        return rule.spec.household_id == self._household_id
+
     # -- due computation ------------------------------------------------------
 
     def due_rules(self, rules: Iterable[AutomationRule], *, now: datetime) -> list[AutomationRule]:
         now = require_aware_utc(now, name="scheduler check time")
         due: list[AutomationRule] = []
         for rule in rules:
+            if not self._rule_is_in_scope(rule):
+                continue
             if rule.status != RuleStatus.APPROVED or not rule.enabled:
                 continue
             if rule.spec.trigger.kind != TriggerKind.TIME:
@@ -331,6 +364,8 @@ class ResourceActionScheduler:
         outcomes: list[ResourceScheduleOutcome] = []
         for event in events:
             for rule in rules:
+                if not self._rule_is_in_scope(rule):
+                    continue
                 if rule.status != RuleStatus.APPROVED or not rule.enabled:
                     continue
                 dedup_key = (rule.rule_id, event.event_id)
@@ -355,7 +390,7 @@ class ResourceActionScheduler:
         `None` for a non-TIME or malformed trigger -- there is nothing to
         project."""
 
-        if rule.spec.trigger.kind != TriggerKind.TIME:
+        if not self._rule_is_in_scope(rule) or rule.spec.trigger.kind != TriggerKind.TIME:
             return None
         try:
             window = _schedule_trigger_from(rule.spec.trigger)
@@ -388,6 +423,8 @@ class ResourceActionScheduler:
         due_ids = {rule.rule_id for rule in self.due_rules(rules, now=now)}
         rows: list[ResourceScheduleStatus] = []
         for rule in rules:
+            if not self._rule_is_in_scope(rule):
+                continue
             kind = rule.spec.trigger.kind
             if kind not in (TriggerKind.TIME, TriggerKind.EVENT):
                 continue

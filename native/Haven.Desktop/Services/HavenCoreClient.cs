@@ -446,10 +446,11 @@ public sealed class HavenCoreClient : IAsyncDisposable
     public Task<JsonElement> SetAutomationEnabledAsync(
         string ruleId,
         bool enabled,
+        string? justification = null,
         CancellationToken cancellationToken = default) =>
         RequestResultAsync(
             "automations.enable",
-            new { rule_id = ruleId, enabled },
+            new { rule_id = ruleId, enabled, justification },
             cancellationToken);
 
     public Task<JsonElement> ApproveAutomationAsync(
@@ -743,10 +744,11 @@ public sealed class HavenCoreClient : IAsyncDisposable
 
     public Task<JsonElement> FocusWindowAsync(
         string resourceId,
+        string? justification = null,
         CancellationToken cancellationToken = default) =>
         RequestResultAsync(
             "computer.window.focus",
-            new { resource_id = resourceId },
+            new { resource_id = resourceId, justification },
             cancellationToken);
 
     public Task<JsonElement> GetComputerActivityAsync(CancellationToken cancellationToken = default) =>
@@ -757,10 +759,11 @@ public sealed class HavenCoreClient : IAsyncDisposable
     public Task<JsonElement> RequestComputerActionAsync(
         string action,
         string resourceId,
+        string? justification = null,
         CancellationToken cancellationToken = default) =>
         RequestResultAsync(
             "computer.action.request",
-            new { action, resource_id = resourceId },
+            new { action, resource_id = resourceId, justification },
             cancellationToken);
 
     public Task<JsonElement> SetComputerObservationAsync(
@@ -773,19 +776,22 @@ public sealed class HavenCoreClient : IAsyncDisposable
 
     public Task<JsonElement> FocusBrowserTabAsync(
         string resourceId,
+        string? justification = null,
         CancellationToken cancellationToken = default) =>
-        RequestResultAsync("browser.tab.focus", new { resource_id = resourceId }, cancellationToken);
+        RequestResultAsync("browser.tab.focus", new { resource_id = resourceId, justification }, cancellationToken);
 
     public Task<JsonElement> OpenBrowserTabAsync(
         string browser,
         string url,
+        string? justification = null,
         CancellationToken cancellationToken = default) =>
-        RequestResultAsync("browser.tab.open", new { browser, url }, cancellationToken);
+        RequestResultAsync("browser.tab.open", new { browser, url, justification }, cancellationToken);
 
     public Task<JsonElement> CloseBrowserTabAsync(
         string resourceId,
+        string? justification = null,
         CancellationToken cancellationToken = default) =>
-        RequestResultAsync("browser.tab.close", new { resource_id = resourceId }, cancellationToken);
+        RequestResultAsync("browser.tab.close", new { resource_id = resourceId, justification }, cancellationToken);
 
     public Task<JsonElement> ConfirmCloseBrowserTabAsync(
         string requestId,

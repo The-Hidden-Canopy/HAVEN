@@ -333,9 +333,8 @@ def _read_provider_token(store: SetupConfigStore, config: SetupConfig) -> str | 
     plaintext `provider_token_file` sidecar the first time one is seen
     (native product-consolidation plan, P1: "migrate existing secret
     sidecars into the credential abstraction with backward-compatible
-    import"). Migration is best-effort: any failure just falls back to
-    reading the legacy file directly, exactly like before this migration
-    existed, so a boot never fails over it.
+    import"). A migration failure fails closed: the plaintext sidecar is
+    never used as a runtime credential.
     """
 
     credentials = CredentialStore(store.path.parent / "credentials.db")
@@ -369,7 +368,9 @@ def _read_provider_token(store: SetupConfigStore, config: SetupConfig) -> str | 
         store.save(replace(config, provider_credential_id=credential_id, provider_token_file=None))
         token_path.unlink()
     except Exception:
-        pass  # the legacy file still has the token; migration can retry next boot
+        # Do not silently fall back to plaintext. The provider remains
+        # unavailable until the credential can be migrated explicitly.
+        return None
     return token
 
 

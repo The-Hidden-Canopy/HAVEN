@@ -20,6 +20,7 @@ from haven.actions import (
     ResourceActionRequest,
     ResourceAuthorityEngine,
 )
+from haven.core import correlation
 from haven.core.domain import ConfirmationToken, DecisionStatus, RiskTier
 from haven.integrations.browser import (
     PROVIDER_ID,
@@ -78,7 +79,9 @@ class BrowserActionService:
 
     # -- entry points ---------------------------------------------------------
 
-    def focus_tab(self, *, resource_id: str | None) -> dict:
+    def focus_tab(self, *, resource_id: str | None, justification: str | None = None) -> dict:
+        if not isinstance(justification, str) or not justification.strip():
+            return {"ok": False, "error": "browser focus requires a non-empty justification"}
         record = self._live_tab_record(resource_id)
         if isinstance(record, dict):
             return record
@@ -86,22 +89,30 @@ class BrowserActionService:
             action="browser.tab.focus",
             record=record,
             parameters={"tab_id": _tab_id_of(record.metadata)},
+            justification=justification.strip(),
         )
 
-    def open_url(self, *, browser: str | None, url: str | None) -> dict:
+    def open_url(
+        self, *, browser: str | None, url: str | None, justification: str | None = None
+    ) -> dict:
         if not self._director.has_declared_owner:
             return {"ok": False, "error": "no household owner declared yet"}
         if not isinstance(browser, str) or not browser.strip():
             return {"ok": False, "error": "a non-empty 'browser' is required"}
         if not isinstance(url, str) or not url.strip():
             return {"ok": False, "error": "a non-empty 'url' is required"}
+        if not isinstance(justification, str) or not justification.strip():
+            return {"ok": False, "error": "browser open requires a non-empty justification"}
         return self._execute(
             action="browser.tab.open",
             record=None,
             parameters={"browser": browser.strip(), "url": url.strip()},
+            justification=justification.strip(),
         )
 
-    def close_tab(self, *, resource_id: str | None) -> dict:
+    def close_tab(self, *, resource_id: str | None, justification: str | None = None) -> dict:
+        if not isinstance(justification, str) or not justification.strip():
+            return {"ok": False, "error": "browser close requires a non-empty justification"}
         record = self._live_tab_record(resource_id)
         if isinstance(record, dict):
             return record
@@ -109,6 +120,7 @@ class BrowserActionService:
             action="browser.tab.close",
             record=record,
             parameters={"tab_id": _tab_id_of(record.metadata)},
+            justification=justification.strip(),
         )
 
     def confirm_close(self, *, request_id: str | None) -> dict:
@@ -147,7 +159,7 @@ class BrowserActionService:
             return {"ok": False, "error": "the named resource is not a browser tab"}
         return record
 
-    def _execute(self, *, action: str, record, parameters: dict) -> dict:
+    def _execute(self, *, action: str, record, parameters: dict, justification: str) -> dict:
         now = self._clock()
         principal = self._director.resident
         request = ResourceActionRequest(
@@ -158,7 +170,7 @@ class BrowserActionService:
             action=action,
             resource_id=record.resource_id if record is not None else None,
             parameters=tuple(parameters.items()),
-            justification="owner acted on a browser tab from HAVEN",
+            justification=justification,
             requested_at=now,
         )
         decision = self._engine.decide(request, principal=principal, now=now)
@@ -255,6 +267,7 @@ class BrowserActionService:
                 recorded_at=self._clock(),
                 success=success,
                 detail=detail,
+                correlation_id=correlation.current(),
             )
         )
 

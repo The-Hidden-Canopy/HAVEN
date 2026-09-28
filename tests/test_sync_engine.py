@@ -110,6 +110,34 @@ def test_excluded_kinds_never_export_and_never_apply() -> None:
         assert result["rejected"] == 1
 
 
+def test_scope_aliases_reject_hidden_local_targets_and_persist() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp) / "data"
+        engine = LocalSyncEngine(
+            data_dir=data_dir,
+            clock=lambda: NOW,
+            allowed_local_scopes=("scope:personal",),
+        )
+        rejected = engine.set_scope_aliases(
+            {"scope:foreign": "scope:secret"},
+            allowed_local_scopes=("scope:personal",),
+        )
+        assert rejected["ok"] is False
+        assert "not visible" in rejected["error"]
+
+        accepted = engine.set_scope_aliases(
+            {"scope:foreign": "scope:personal"},
+            allowed_local_scopes=("scope:personal",),
+        )
+        assert accepted["ok"] is True
+        reopened = LocalSyncEngine(
+            data_dir=data_dir,
+            clock=lambda: NOW,
+            allowed_local_scopes=("scope:personal",),
+        )
+        assert reopened._scope_aliases == {"scope:foreign": "scope:personal"}
+
+
 def test_two_installation_round_trip_converges(pair) -> None:
     (a, da), (b, db) = pair
     project = _call(da, "projects.create", {"title": "Lunar proposal"})["project"]

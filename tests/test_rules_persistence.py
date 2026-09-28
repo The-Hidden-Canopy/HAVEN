@@ -289,10 +289,16 @@ def test_director_chat_rule_survives_a_restart() -> None:
         assert persistence.path.exists()
         assert len(first.store.state.rules) == 1
         rule_id = first.store.state.rules[0].rule_id
-        assert first.store.state.rules[0].status == RuleStatus.APPROVED
+        assert first.store.state.rules[0].status == RuleStatus.PROPOSED
+
+        approved = first.approve_automation(
+            rule_id,
+            justification="Owner reviewed the chat-generated schedule.",
+        )
+        assert approved["ok"] is True
 
         # The scheduler enabled map set through the director wrapper persists too.
-        first.set_scheduler_enabled(rule_id, False)
+        first.set_scheduler_enabled(rule_id, False, justification="test pauses the schedule")
 
         second = _director(persistence)
         restored = second.store.state.rules

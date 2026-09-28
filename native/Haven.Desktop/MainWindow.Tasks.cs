@@ -12,6 +12,12 @@ public sealed partial class MainWindow
 {
     // -- tasks -------------------------------------------------------------------
 
+    private async void OnTasksRefreshClicked(object sender, RoutedEventArgs args)
+    {
+        TasksStatusText.Text = "Refreshing…";
+        await LoadTasksAsync();
+    }
+
     private async Task LoadTasksAsync()
     {
         if (_client is null)
@@ -36,16 +42,21 @@ public sealed partial class MainWindow
     {
         if (sender is Button button && button.Tag is string view)
         {
-            _taskView = view;
-            foreach (var item in ((StackPanel)button.Parent).Children.OfType<Button>())
-            {
-                item.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
-                    item == button ? "HavenAccentBrush" : "HavenMutedTextBrush"];
-                item.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
-                    item == button ? "HavenAccentBrush" : "HavenStrokeBrush"];
-            }
-            _ = LoadTasksAsync();
+            SelectTaskView(view);
         }
+    }
+
+    private void SelectTaskView(string view)
+    {
+        _taskView = view;
+        foreach (var item in TaskViews.Children.OfType<Button>().Where(item => item.Tag is string))
+        {
+            item.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                item.Tag?.ToString() == view ? "HavenAccentBrush" : "HavenMutedTextBrush"];
+            item.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                item.Tag?.ToString() == view ? "HavenAccentBrush" : "HavenStrokeBrush"];
+        }
+        _ = LoadTasksAsync();
     }
 
     private void RenderTasks(JsonElement tasks)
@@ -57,13 +68,23 @@ public sealed partial class MainWindow
         }
         if (TasksListPanel.Children.Count == 0)
         {
-            TasksListPanel.Children.Add(new TextBlock
-            {
-                Text = _taskView == "completed"
+            TasksListPanel.Children.Add(MakeEmptyState(
+                _taskView == "completed"
                     ? "Nothing completed yet."
                     : "Nothing here. Add a task above, or ask HAVEN in the composer.",
-                Opacity = 0.72,
-            });
+                _taskView == "completed" ? "Go to Today" : "Add a task",
+                _taskView == "completed"
+                    ? () =>
+                    {
+                        SelectTaskView("today");
+                        return Task.CompletedTask;
+                    }
+                    : () =>
+                    {
+                        TaskFastAddBox.Focus(FocusState.Programmatic);
+                        return Task.CompletedTask;
+                    },
+                primary: true));
         }
     }
 

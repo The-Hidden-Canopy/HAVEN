@@ -166,18 +166,25 @@ def test_correlator_candidates_and_policy_tiers(stack) -> None:
         object="b", evidence_refs=("a", "b"), confidence=0.9, scope_id="scope:personal",
         proposed_by="haven.correlation", created_at=NOW,
     )
-    assert policy.classify(low_strong) == "auto"
+    assert policy.classify(low_strong) == "needs_review"
     low_weak = CandidateRelationship(
         candidate_id=candidate_id("a", "c", RELATED_TO), subject="a", predicate=RELATED_TO,
         object="c", evidence_refs=("a", "c"), confidence=0.4, scope_id="scope:personal",
         proposed_by="haven.correlation", created_at=NOW,
     )
     assert policy.classify(low_weak) == "needs_review"
+    blocked = policy.auto_admit(low_strong)
+    assert blocked == {
+        "ok": False,
+        "error": "automatic relationship admission is disabled; review and admit explicitly",
+    }
+    assert ontology.list_by_scope("scope:personal") == ()
+
     admitted = policy.admit(high)
     assert ontology.get(admitted["assertion_id"]) is not None
 
 
-def test_service_reject_persists_and_auto_admit_skips_review(stack) -> None:
+def test_service_reject_persists_and_requires_explicit_admission(stack) -> None:
     tmp, resources, ontology, *_ = stack
     _file(resources, "alpha", title="alpha bravo charlie")
     _file(resources, "bravo", title="bravo charlie delta echo")
@@ -189,7 +196,7 @@ def test_service_reject_persists_and_auto_admit_skips_review(stack) -> None:
         state_path=Path(tmp) / "graph.json",
     )
     first = service.candidates(visible_scopes=VISIBLE)["candidates"]
-    assert first, "expected a needs_review candidate below the auto threshold"
+    assert first, "expected a needs_review candidate"
     target = first[0]
     rejected = service.reject(candidate_id_value=target["candidate_id"], visible_scopes=VISIBLE)
     assert rejected["ok"] is True

@@ -56,11 +56,15 @@ public sealed partial class MainWindow
         }
         if (AutomationsList.Children.Count == 0)
         {
-            AutomationsList.Children.Add(new TextBlock
-            {
-                Text = "No automations yet. Propose one and approve it to put the scheduler to work.",
-                Opacity = 0.72,
-            });
+            AutomationsList.Children.Add(MakeEmptyState(
+                "No automations yet. Connect a device or propose a rule to get started.",
+                "Discover devices",
+                () =>
+                {
+                    SelectNavigation("home");
+                    SelectHomeTab("discover");
+                    return Task.CompletedTask;
+                }));
         }
     }
 
@@ -246,16 +250,29 @@ public sealed partial class MainWindow
             return;
         }
         var options = Enumerate(_automationOptions).ToList();
-        var fields = new StackPanel { Spacing = 8, MinWidth = 360 };
         if (options.Count == 0)
         {
-            fields.Children.Add(new TextBlock
+            var connectDialog = new ContentDialog
             {
-                Text = "No writable device capabilities are available yet. Enroll a device during setup or connections first.",
-                TextWrapping = TextWrapping.Wrap,
-                Opacity = 0.72,
-            });
+                Title = "Connect a device first",
+                Content = new TextBlock
+                {
+                    Text = "HAVEN needs a writable device capability before it can create an automation. Discover and enroll a device from Home, then come back here to propose the rule.",
+                    TextWrapping = TextWrapping.Wrap,
+                },
+                PrimaryButtonText = "Open device discovery",
+                CloseButtonText = "Cancel",
+                XamlRoot = RootGrid().XamlRoot,
+            };
+            if (await connectDialog.ShowAsync() == ContentDialogResult.Primary)
+            {
+                SelectNavigation("home");
+                SelectHomeTab("discover");
+            }
+            return;
         }
+
+        var fields = new StackPanel { Spacing = 8, MinWidth = 360 };
         var source = new TextBox { PlaceholderText = "e.g. Turn off the office light", AcceptsReturn = false };
         var time = new TextBox { PlaceholderText = "HH:MM", Text = "22:00" };
         var weekdays = MakeWeekdayPicker(Array.Empty<int>());
@@ -378,14 +395,19 @@ public sealed partial class MainWindow
         {
             return;
         }
+        var justification = new TextBox { PlaceholderText = "Why should this automation run?" };
+        var content = new StackPanel { Spacing = 8 };
+        content.Children.Add(new TextBlock
+        {
+            Text = "Approval attaches your authority to exactly this draft; editing afterwards requires revoking and proposing anew.",
+            TextWrapping = TextWrapping.Wrap,
+        });
+        content.Children.Add(new TextBlock { Text = "Justification" });
+        content.Children.Add(justification);
         var dialog = new ContentDialog
         {
             Title = "Approve this automation?",
-            Content = new TextBlock
-            {
-                Text = "Approval attaches your authority to exactly this draft; editing afterwards requires revoking and proposing anew.",
-                TextWrapping = TextWrapping.Wrap,
-            },
+            Content = content,
             PrimaryButtonText = "Approve",
             CloseButtonText = "Cancel",
             XamlRoot = RootGrid().XamlRoot,
@@ -394,7 +416,12 @@ public sealed partial class MainWindow
         {
             return;
         }
-        await RunAutomationMutationAsync(() => _client.ApproveAutomationAsync(ruleId));
+        if (string.IsNullOrWhiteSpace(justification.Text))
+        {
+            AutomationsErrorText.Text = "A justification is required.";
+            return;
+        }
+        await RunAutomationMutationAsync(() => _client.ApproveAutomationAsync(ruleId, justification.Text.Trim()));
     }
 
     private async Task RevokeAutomationAsync(string ruleId, string verb)
@@ -403,14 +430,19 @@ public sealed partial class MainWindow
         {
             return;
         }
+        var justification = new TextBox { PlaceholderText = $"Why should this automation be {verb.ToLowerInvariant()}d?" };
+        var content = new StackPanel { Spacing = 8 };
+        content.Children.Add(new TextBlock
+        {
+            Text = "The rule stays in the ledger as revoked, with the revocation audited.",
+            TextWrapping = TextWrapping.Wrap,
+        });
+        content.Children.Add(new TextBlock { Text = "Justification" });
+        content.Children.Add(justification);
         var dialog = new ContentDialog
         {
             Title = $"{verb} this automation?",
-            Content = new TextBlock
-            {
-                Text = "The rule stays in the ledger as revoked, with the revocation audited.",
-                TextWrapping = TextWrapping.Wrap,
-            },
+            Content = content,
             PrimaryButtonText = verb,
             CloseButtonText = "Cancel",
             XamlRoot = RootGrid().XamlRoot,
@@ -419,8 +451,12 @@ public sealed partial class MainWindow
         {
             return;
         }
-        await RunAutomationMutationAsync(() => _client.RevokeAutomationAsync(
-            ruleId, $"owner revoked automation from HAVEN ({verb.ToLowerInvariant()})"));
+        if (string.IsNullOrWhiteSpace(justification.Text))
+        {
+            AutomationsErrorText.Text = "A justification is required.";
+            return;
+        }
+        await RunAutomationMutationAsync(() => _client.RevokeAutomationAsync(ruleId, justification.Text.Trim()));
     }
 
     private async Task SetAutomationEnabledAsync(string ruleId, bool enabled)
@@ -429,9 +465,40 @@ public sealed partial class MainWindow
         {
             return;
         }
+        var justification = new TextBox
+        {
+            PlaceholderText = enabled ? "Why should this automation resume?" : "Why should this automation pause?",
+        };
+        var content = new StackPanel { Spacing = 8 };
+        content.Children.Add(new TextBlock
+        {
+            Text = enabled
+                ? "Resuming lets the approved automation run when its schedule is due."
+                : "Pausing keeps the approved automation intact but prevents scheduled runs.",
+            TextWrapping = TextWrapping.Wrap,
+        });
+        content.Children.Add(new TextBlock { Text = "Justification" });
+        content.Children.Add(justification);
+        var dialog = new ContentDialog
+        {
+            Title = enabled ? "Resume this automation?" : "Pause this automation?",
+            Content = content,
+            PrimaryButtonText = enabled ? "Resume" : "Pause",
+            CloseButtonText = "Cancel",
+            XamlRoot = RootGrid().XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(justification.Text))
+        {
+            AutomationsErrorText.Text = "A justification is required.";
+            return;
+        }
         try
         {
-            await _client.SetAutomationEnabledAsync(ruleId, enabled);
+            await _client.SetAutomationEnabledAsync(ruleId, enabled, justification.Text.Trim());
             AutomationsErrorText.Text = "";
             await LoadAutomationsAsync();
         }

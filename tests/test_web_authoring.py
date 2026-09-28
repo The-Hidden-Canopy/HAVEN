@@ -310,7 +310,12 @@ def test_automation_authoring_is_proposed_edited_approved_and_revoked() -> None:
             rule_id = body["automation"]["rule_id"]
             assert body["automation"]["schedule"] == {"time_of_day": "22:00:00", "weekdays": [0, 2, 4]}
 
-            status, body = _request(port, "PATCH", f"/api/automations/{rule_id}", {"enabled": True})
+            status, body = _request(
+                port,
+                "PATCH",
+                f"/api/automations/{rule_id}",
+                {"enabled": True, "justification": "Try to resume this proposed rule."},
+            )
             assert status == 400
             assert "only approved automations" in body["error"]
 

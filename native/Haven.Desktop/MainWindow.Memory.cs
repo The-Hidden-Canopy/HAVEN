@@ -10,6 +10,23 @@ namespace Haven.Desktop;
 
 public sealed partial class MainWindow
 {
+    private async void OnMemoryRefreshClicked(object sender, RoutedEventArgs args)
+    {
+        MemoryActionStatus.Text = "Refreshing…";
+        await LoadMemoryAsync();
+    }
+
+    private void OnMemoryTellClicked(object sender, RoutedEventArgs args)
+    {
+        ComposerInput.Focus(FocusState.Programmatic);
+    }
+
+    private void OnMemoryConnectFolderClicked(object sender, RoutedEventArgs args)
+    {
+        _computerTab = "files";
+        SelectNavigation("computer");
+    }
+
     private async Task LoadMemoryAsync()
     {
         if (_client is null)
@@ -22,6 +39,7 @@ public sealed partial class MainWindow
             MemoryClaims.Items.Clear();
             _selectedClaimId = null;
             SetMemoryActionButtons(false);
+            MemoryActionStatus.Text = "";
             foreach (var claim in result.GetProperty("claims").EnumerateArray())
             {
                 var claimId = claim.GetProperty("claim_id").GetString();
@@ -59,11 +77,15 @@ public sealed partial class MainWindow
             }
             if (MemoryClaims.Items.Count == 0)
             {
-                MemoryClaims.Items.Add(new TextBlock
-                {
-                    Text = "HAVEN has not admitted any memories yet.",
-                    Opacity = 0.72,
-                });
+                MemoryClaims.Items.Add(MakeEmptyState(
+                    "HAVEN has not admitted any memories yet.",
+                    "Tell HAVEN",
+                    () =>
+                    {
+                        ComposerInput.Focus(FocusState.Programmatic);
+                        return Task.CompletedTask;
+                    },
+                    primary: true));
                 MemoryDetailText.Text = "Give HAVEN access to a text document, or tell it something directly, to begin building explainable memory.";
             }
             else

@@ -20,6 +20,14 @@ CANCELLED = "cancelled"
 
 TASK_STATES = frozenset({PROPOSED, OPEN, IN_PROGRESS, BLOCKED, DONE, CANCELLED})
 TERMINAL_STATES = frozenset({DONE, CANCELLED})
+TASK_TRANSITIONS = {
+    PROPOSED: frozenset({OPEN, CANCELLED}),
+    OPEN: frozenset({IN_PROGRESS, BLOCKED, CANCELLED}),
+    IN_PROGRESS: frozenset({OPEN, BLOCKED, CANCELLED}),
+    BLOCKED: frozenset({OPEN, IN_PROGRESS, CANCELLED}),
+    DONE: frozenset(),
+    CANCELLED: frozenset(),
+}
 PRIORITIES = frozenset({"high", "medium", "low"})
 RECURRENCES = frozenset({"daily", "weekly", "monthly"})
 
@@ -104,6 +112,7 @@ __all__ = [
     "PROPOSED",
     "RECURRENCES",
     "TASK_STATES",
+    "TASK_TRANSITIONS",
     "TERMINAL_STATES",
     "TaskRecord",
 ]
