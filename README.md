@@ -761,6 +761,9 @@ windows and confidence thresholds, and deciding which integrations to trust.
 The license's no-warranty terms are not boilerplate here -- they are the
 deployment model.
 
+The project also follows the
+[Open Canopy Contract](OPEN_CANOPY_CONTRACT.md).
+
 The license covers this repository only. Hidden Canopy's premium model and
 provider implementations are separate products; the provider contracts in
 `haven/providers` exist so those can plug in without Haven depending on
