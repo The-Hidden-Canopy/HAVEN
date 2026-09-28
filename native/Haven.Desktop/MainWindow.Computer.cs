@@ -187,11 +187,30 @@ public sealed partial class MainWindow
     private readonly Dictionary<string, JsonElement> _computerFilesById = new();
     private string? _computerLocationFilter;
 
+    // Whether the computer provider is actually enabled with at least one
+    // allowed folder -- previously this page could only ever say "enable it
+    // in Setup," a dead end once the first-run wizard is behind you (there
+    // is no other way to reopen it from the main app). An empty result with
+    // a ready provider means "nothing found yet," which is not the same
+    // honest state as "nothing has ever been connected."
+    private bool _computerProviderReady;
+
     private async Task LoadComputerFilesExplorerAsync()
     {
         try
         {
-            var result = await _client!.GetComputerFilesAsync();
+            var status = await _client!.GetSetupStatusAsync();
+            var computer = status.TryGetProperty("setup", out var setup) && setup.ValueKind == JsonValueKind.Object
+                && setup.TryGetProperty("computer", out var computerValue) && computerValue.ValueKind == JsonValueKind.Object
+                ? computerValue
+                : default;
+            var computerEnabled = computer.ValueKind == JsonValueKind.Object
+                && computer.TryGetProperty("enabled", out var enabledValue)
+                && enabledValue.ValueKind == JsonValueKind.True;
+            var hasRoots = computer.ValueKind == JsonValueKind.Object && Enumerate(computer, "allowed_roots").Any();
+            _computerProviderReady = computerEnabled && hasRoots;
+
+            var result = await _client.GetComputerFilesAsync();
             var files = Enumerate(result, "files").ToList();
             _computerFilesById.Clear();
             foreach (var file in files)
@@ -257,32 +276,100 @@ public sealed partial class MainWindow
         {
             var resourceId = GetString(file, "resource_id") ?? "";
             var row = new StackPanel { Spacing = 2 };
-            row.Children.Add(new TextBlock
+            var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            titleRow.Children.Add(new TextBlock
             {
                 Text = GetString(file, "title") ?? resourceId,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 TextWrapping = TextWrapping.Wrap,
             });
+            var isStale = file.TryGetProperty("stale", out var stale) && stale.ValueKind == JsonValueKind.True;
+            if (isStale)
+            {
+                titleRow.Children.Add(MakeChip("Stale", "HavenWarningTintBrush", "HavenWarningBrush"));
+            }
+            row.Children.Add(titleRow);
             var meta = new List<string> { Sentence(GetString(file, "resource_type") ?? "file") };
             if (FormatObservedAgo(GetString(file, "observed_at") ?? "") is { Length: > 0 } observed)
             {
                 meta.Add(observed);
-            }
-            if (file.TryGetProperty("stale", out var stale) && stale.ValueKind == JsonValueKind.True)
-            {
-                meta.Add("stale");
             }
             row.Children.Add(new TextBlock { Text = string.Join(" · ", meta), Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"] });
             ComputerFilesTable.Items.Add(new ListViewItem { Tag = resourceId, Content = row });
         }
         if (visible.Count == 0)
         {
-            ComputerFilesTable.Items.Add(new TextBlock
+            ComputerFilesTable.Items.Add(_computerProviderReady
+                ? new TextBlock { Text = "No files observed here yet.", Opacity = 0.72, TextWrapping = TextWrapping.Wrap }
+                : BuildComputerConnectPrompt());
+        }
+    }
+
+    /// <summary>The inline connect action this page never had -- reachable
+    /// only from the one-time first-run wizard before this, with nothing in
+    /// the main app pointing back to it. Reuses the exact same setup IPC
+    /// calls the wizard's own "Computer access" step makes
+    /// (`AddSetupComputerRootAsync` -> `SetSetupComputerAsync` -> the
+    /// wizard's scan), so connecting a folder from here behaves identically
+    /// to connecting it during onboarding -- read-only by default, still
+    /// subject to authority for every action afterward.</summary>
+    private StackPanel BuildComputerConnectPrompt()
+    {
+        var panel = new StackPanel { Spacing = 8 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "HAVEN can't see your files yet. Connect a folder to search, recall, and open documents from here.",
+            Opacity = 0.72,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        var connect = new Button
+        {
+            Content = "Connect a folder…",
+            Style = (Style)Application.Current.Resources["HavenPrimaryButtonStyle"],
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        connect.Click += async (_, _) => await ConnectComputerFolderAsync();
+        panel.Children.Add(connect);
+        return panel;
+    }
+
+    private async Task ConnectComputerFolderAsync()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        var folder = await PickFolderAsync();
+        if (folder is null)
+        {
+            return;
+        }
+        try
+        {
+            var added = await _client.AddSetupComputerRootAsync(folder);
+            if (added.ValueKind == JsonValueKind.Object && added.TryGetProperty("ok", out var addedOk) && !addedOk.GetBoolean())
             {
-                Text = "No authorized files observed yet. Enable the computer provider in Setup and scan an allowed folder.",
-                Opacity = 0.72,
-                TextWrapping = TextWrapping.Wrap,
-            });
+                ComputerErrorText.Text = added.TryGetProperty("error", out var addedError) && addedError.ValueKind == JsonValueKind.String
+                    ? addedError.GetString() ?? "Could not add that folder."
+                    : "Could not add that folder.";
+                return;
+            }
+            var enabled = await _client.SetSetupComputerAsync(true, readOnly: true);
+            if (enabled.ValueKind == JsonValueKind.Object && enabled.TryGetProperty("ok", out var enabledOk) && !enabledOk.GetBoolean())
+            {
+                ComputerErrorText.Text = enabled.TryGetProperty("error", out var enabledError) && enabledError.ValueKind == JsonValueKind.String
+                    ? enabledError.GetString() ?? "Could not enable computer access."
+                    : "Could not enable computer access.";
+                return;
+            }
+            await _client.ScanSetupComputerAsync();
+            ComputerErrorText.Text = "";
+            ComputerStatusText.Text = $"Connected {folder}.";
+            await LoadComputerFilesExplorerAsync();
+        }
+        catch (Exception ex)
+        {
+            ComputerErrorText.Text = ex.Message;
         }
     }
 

@@ -132,10 +132,15 @@ class AutomationSpec:
     lifecycle once a scheduler exists to run it. `source_text` mirrors
     `RuleDraft.source_text`: what the household actually said or chose,
     kept alongside the structured form the same way `RuleDraft` already
-    keeps both.
+    keeps both. `household_id` matches every other scoped value in this
+    repo (`Principal`, `RuleDraft`, `ResourceActionRequest`) -- added
+    alongside `haven.automation.lifecycle`/`haven.automation.resource_scheduler`,
+    the first real consumers, rather than in the original contract-only pass
+    that had no cross-household check to enforce yet.
     """
 
     spec_id: str
+    household_id: str
     trigger: Trigger
     selector: Selector
     action: ActionTarget
@@ -144,6 +149,7 @@ class AutomationSpec:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "spec_id", _require_text(self.spec_id, name="spec_id"))
+        object.__setattr__(self, "household_id", _require_text(self.household_id, name="household_id"))
         if not isinstance(self.trigger, Trigger):
             raise ValueError("trigger must be a Trigger")
         if not isinstance(self.selector, Selector):
