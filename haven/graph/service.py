@@ -6,8 +6,13 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
+from haven.core.correlation import current as current_correlation, new_id as new_correlation_id
+from haven.core.domain import EventType, Principal, RoleTier, Transition, TransitionKind
+from haven.core.store import HavenStore, RelationshipAdmission
+from haven.errors import InvalidTransition, ScopeViolation, StateConflict
 from haven.graph.candidates import CandidateRelationship, Correlator, candidate_id
 from haven.graph.deterministic import RelationshipProjector
 from haven.graph.model_proposer import ModelRelationshipProposer
@@ -25,6 +30,11 @@ class RelationshipService:
         ontology: OntologyStore,
         state_path: str | Path,
         model_proposers: tuple[ModelRelationshipProposer, ...] = (),
+        transition_store: HavenStore | None = None,
+        principal: Principal | None = None,
+        transition_store_provider: Callable[[], HavenStore] | None = None,
+        principal_provider: Callable[[], Principal] | None = None,
+        on_admitted: Callable[[], None] | None = None,
     ) -> None:
         self._projector = projector
         self._correlator = correlator
@@ -37,6 +47,11 @@ class RelationshipService:
         # Empty by default -- every existing caller that only ever passed
         # `correlator=` keeps behaving exactly as before.
         self._model_proposers = model_proposers
+        self._transition_store = transition_store
+        self._principal = principal
+        self._transition_store_provider = transition_store_provider
+        self._principal_provider = principal_provider
+        self._on_admitted = on_admitted
         self._lock = threading.Lock()
         self._rejected = self._load_rejected()
 
@@ -102,13 +117,66 @@ class RelationshipService:
 
     # -- decisions ---------------------------------------------------------------
 
-    def admit(self, *, candidate_id_value: str | None, visible_scopes: tuple[str, ...]) -> dict:
+    def admit(
+        self,
+        *,
+        candidate_id_value: str | None,
+        visible_scopes: tuple[str, ...],
+        justification: str | None,
+    ) -> dict:
+        if not isinstance(justification, str) or not justification.strip():
+            return {"ok": False, "error": "relationship admission requires a non-empty justification"}
+        transition_store = (
+            self._transition_store_provider() if self._transition_store_provider is not None else self._transition_store
+        )
+        principal = self._principal_provider() if self._principal_provider is not None else self._principal
+        if transition_store is None or principal is None:
+            return {"ok": False, "error": "relationship admission governance is not configured"}
+        if principal.role_tier != RoleTier.OWNER:
+            return {"ok": False, "error": "only an owner can admit a household relationship"}
+        if principal.household_id != transition_store.household_id:
+            return {"ok": False, "error": "relationship admission household scope does not match"}
         candidate = self._find_candidate(candidate_id_value, visible_scopes)
         if candidate is None:
             return {"ok": False, "error": f"unknown candidate: {candidate_id_value}"}
         if candidate.scope_id not in visible_scopes:
             return {"ok": False, "error": "the candidate's scope is not visible"}
-        return self._policy.admit(candidate)
+        assertion = self._policy.build_assertion(candidate)
+        with self._lock:
+            if any(
+                event.event_type is EventType.RELATIONSHIP_ADMITTED
+                and dict(event.payload).get("assertion_id") == assertion.assertion_id
+                for event in transition_store.events
+            ):
+                return {"ok": False, "error": f"relationship assertion already admitted: {assertion.assertion_id}"}
+            prior_assertion = self._ontology.get(assertion.assertion_id)
+            self._ontology.save(assertion)
+            try:
+                event = transition_store.execute_transition(
+                    Transition(
+                        kind=TransitionKind.ADMIT_RELATIONSHIP,
+                        household_id=principal.household_id,
+                        actor_id=principal.actor_id,
+                        payload=RelationshipAdmission(
+                            candidate_id=candidate.candidate_id,
+                            assertion_id=assertion.assertion_id,
+                            scope_id=candidate.scope_id,
+                            predicate=candidate.predicate,
+                            admitted_by=principal.actor_id,
+                            admitted_by_role=principal.role_tier,
+                            justification=justification.strip(),
+                        ),
+                        correlation_id=current_correlation() or new_correlation_id(),
+                    ),
+                    now=assertion.created_at,
+                )
+            except (InvalidTransition, ScopeViolation, StateConflict, TypeError, ValueError) as exc:
+                if prior_assertion is None:
+                    self._ontology.remove(assertion.assertion_id)
+                return {"ok": False, "error": str(exc)}
+            if self._on_admitted is not None:
+                self._on_admitted()
+        return {"ok": True, "assertion_id": assertion.assertion_id, "event_id": event.event_id}
 
     def reject(self, *, candidate_id_value: str | None, visible_scopes: tuple[str, ...]) -> dict:
         candidate = self._find_candidate(candidate_id_value, visible_scopes)

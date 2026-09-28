@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,9 +11,11 @@ import pytest
 
 from haven.ipc import request_message
 from haven.sync import FolderSyncTransport, LocalSyncEngine, SyncEventStore
+from haven.sync.events import SyncEvent
 from haven.web.server import make_server
 
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
+SYNC_KEY = "test-shared-sync-key"
 
 
 @pytest.fixture()
@@ -38,7 +41,11 @@ def pair():
                 request_message(
                     "t",
                     "sync.transport.set",
-                    {"export_dir": str(out), "import_dir": str(incoming)},
+                    {
+                        "export_dir": str(out),
+                        "import_dir": str(incoming),
+                        "auth_key": SYNC_KEY,
+                    },
                 )
             )
             dispatcher(request_message("e", "sync.set", {"enabled": True}))
@@ -82,7 +89,13 @@ def test_excluded_kinds_never_export_and_never_apply() -> None:
         engine = LocalSyncEngine(
             data_dir=Path(tmp) / "data", clock=lambda: NOW, outbox=SyncEventStore(Path(tmp) / "ev.db")
         )
-        engine.set_enabled(True)
+        inbox = Path(tmp) / "in"
+        inbox.mkdir()
+        engine.set_transport(
+            FolderSyncTransport(export_dir=Path(tmp) / "out", import_dir=inbox),
+            auth_key=SYNC_KEY,
+        )
+        assert engine.set_enabled(True)["ok"] is True
         refused = engine.record_mutation(
             object_id="cred:ha-token", kind="provider_credential",
             scope_id="scope:personal", revision=0, payload={"token": "secret"},
@@ -95,8 +108,6 @@ def test_excluded_kinds_never_export_and_never_apply() -> None:
         import json
         from haven.sync.events import SyncEvent
 
-        inbox = Path(tmp) / "in"
-        inbox.mkdir()
         hostile = SyncEvent(
             event_id="evt-hostile", seq=1, origin_device_id="device:other",
             object_id="cred:x", kind="provider_credential", scope_id="scope:personal",
@@ -104,10 +115,82 @@ def test_excluded_kinds_never_export_and_never_apply() -> None:
             occurred_at=NOW,
         )
         (inbox / "outbox.jsonl").write_text(json.dumps(hostile.wire()) + "\n", encoding="utf-8")
-        engine.set_transport(FolderSyncTransport(export_dir=Path(tmp) / "out", import_dir=inbox))
         result = engine.pull()
         assert result["applied"] == 0
         assert result["rejected"] == 1
+
+
+def test_sync_cannot_enable_without_protected_key() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = LocalSyncEngine(data_dir=Path(tmp) / "data", clock=lambda: NOW)
+        refused = engine.set_enabled(True)
+        assert refused == {"ok": False, "error": "sync requires a protected shared transport key"}
+        assert engine.enabled is False
+
+
+def test_sync_outbound_scope_is_fail_closed() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = LocalSyncEngine(
+            data_dir=Path(tmp) / "data",
+            clock=lambda: NOW,
+            allowed_local_scopes=("scope:personal",),
+        )
+        engine.set_transport(
+            FolderSyncTransport(export_dir=Path(tmp) / "out", import_dir=Path(tmp) / "in"),
+            auth_key=SYNC_KEY,
+        )
+        engine.set_enabled(True)
+        refused = engine.record_mutation(
+            object_id="task:foreign",
+            kind="task",
+            scope_id="scope:foreign",
+            revision=1,
+            payload={"scope_id": "scope:foreign", "title": "must not leave"},
+        )
+        assert refused == {"ok": False, "error": "scope is not visible: scope:foreign"}
+        assert engine._outbox.since(0) == ()
+
+
+def test_sync_key_survives_restart_without_entering_state_file() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp) / "data"
+        engine = LocalSyncEngine(data_dir=data_dir, clock=lambda: NOW)
+        engine.set_transport(
+            FolderSyncTransport(export_dir=Path(tmp) / "out", import_dir=Path(tmp) / "in"),
+            auth_key=SYNC_KEY,
+        )
+        assert SYNC_KEY not in (data_dir / "sync_state.json").read_text(encoding="utf-8")
+        reopened = LocalSyncEngine(data_dir=data_dir, clock=lambda: NOW)
+        assert reopened.status()["authenticated"] is True
+
+
+def test_sync_rejects_tampered_signed_event() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        sender = LocalSyncEngine(data_dir=root / "sender", clock=lambda: NOW)
+        receiver = LocalSyncEngine(data_dir=root / "receiver", clock=lambda: NOW)
+        inbox = root / "inbox"
+        sender.set_transport(FolderSyncTransport(export_dir=root / "sender-out", import_dir=root / "unused"), auth_key=SYNC_KEY)
+        receiver.set_transport(FolderSyncTransport(export_dir=root / "receiver-out", import_dir=inbox), auth_key=SYNC_KEY)
+        sender.set_enabled(True)
+        receiver.set_enabled(True)
+        applied: list[dict] = []
+        receiver.register_applier("task", lambda payload, _event: applied.append(payload) or {"ok": True})
+        sender.record_mutation(
+            object_id="task:1", kind="task", scope_id="scope:personal", revision=1,
+            payload={"scope_id": "scope:personal", "title": "trusted"},
+        )
+        event = sender._outbox.since(0)[0]
+        tampered = SyncEvent(
+            **{**event.__dict__, "payload": (("scope_id", "scope:personal"), ("title", "forged"))}
+        )
+        inbox.mkdir(parents=True)
+        (inbox / "outbox.jsonl").write_text(json.dumps(tampered.wire()) + "\n", encoding="utf-8")
+        result = receiver.pull()
+        assert result["applied"] == 0
+        assert result["rejected"] == 1
+        assert result["cursor"] == "0"
+        assert applied == []
 
 
 def test_scope_aliases_reject_hidden_local_targets_and_persist() -> None:
@@ -213,9 +296,17 @@ def test_conflict_requires_review_and_resolution(pair) -> None:
         "merge_fields": {"not_a_field": "x"},
     })
     assert unknown_field["ok"] is False
+    missing_justification = _call(db, "sync.resolve", {
+        "conflict_id": conflicts[0]["conflict_id"], "choice": "remote",
+    })
+    assert missing_justification == {
+        "ok": False,
+        "error": "conflict resolution requires a non-empty justification",
+    }
 
     resolved = _call(db, "sync.resolve", {
         "conflict_id": conflicts[0]["conflict_id"], "choice": "remote",
+        "justification": "owner selected the remote revision",
     })
     assert resolved["applied"]["title"] == "A title"
     assert _call(db, "sync.conflicts", {})["conflicts"] == []
@@ -240,6 +331,7 @@ def test_merge_resolution_bumps_revision(pair) -> None:
     merged = _call(db, "sync.resolve", {
         "conflict_id": conflict["conflict_id"], "choice": "merge",
         "merge_fields": {"title": "Merged title"},
+        "justification": "owner merged the two reviewed revisions",
     })
     assert merged["applied"]["title"] == "Merged title"
     assert merged["applied"]["revision"] == base["revision"] + 2  # max + 1

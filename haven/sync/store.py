@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS sync_events (
     revision INTEGER NOT NULL,
     causal_parents TEXT NOT NULL,
     payload TEXT NOT NULL,
-    occurred_at TEXT NOT NULL
+    occurred_at TEXT NOT NULL,
+    signature TEXT
 );
 CREATE INDEX IF NOT EXISTS sync_events_object ON sync_events(object_id);
 """
@@ -42,6 +43,9 @@ class SyncEventStore:
         conn = self._connect()
         try:
             conn.executescript(_SCHEMA)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(sync_events)").fetchall()}
+            if "signature" not in columns:
+                conn.execute("ALTER TABLE sync_events ADD COLUMN signature TEXT")
             conn.commit()
         finally:
             conn.close()
@@ -59,8 +63,8 @@ class SyncEventStore:
             try:
                 conn.execute(
                     "INSERT OR IGNORE INTO sync_events(seq, event_id, origin_device_id, object_id, kind, scope_id, "
-                    "revision, causal_parents, payload, occurred_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "revision, causal_parents, payload, occurred_at, signature) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         event.seq if event.seq > 0 else None,
                         event.event_id,
@@ -72,6 +76,7 @@ class SyncEventStore:
                         json.dumps(list(event.causal_parents)),
                         json.dumps(dict(event.payload)),
                         event.occurred_at.isoformat(),
+                        event.signature,
                     ),
                 )
                 conn.commit()
@@ -84,7 +89,7 @@ class SyncEventStore:
             try:
                 rows = conn.execute(
                     "SELECT seq, event_id, origin_device_id, object_id, kind, scope_id, revision, causal_parents, "
-                    "payload, occurred_at FROM sync_events WHERE seq > ? ORDER BY seq LIMIT ?",
+                    "payload, occurred_at, signature FROM sync_events WHERE seq > ? ORDER BY seq LIMIT ?",
                     (seq, limit),
                 ).fetchall()
             finally:
@@ -101,6 +106,7 @@ class SyncEventStore:
                 causal_parents=tuple(json.loads(row[7])),
                 payload=tuple(json.loads(row[8]).items()),
                 occurred_at=datetime.fromisoformat(row[9]),
+                signature=row[10],
             )
             for row in rows
         )
@@ -111,7 +117,7 @@ class SyncEventStore:
             try:
                 row = conn.execute(
                     "SELECT seq, event_id, origin_device_id, object_id, kind, scope_id, revision, causal_parents, "
-                    "payload, occurred_at FROM sync_events WHERE object_id = ? ORDER BY seq DESC LIMIT 1",
+                    "payload, occurred_at, signature FROM sync_events WHERE object_id = ? ORDER BY seq DESC LIMIT 1",
                     (object_id,),
                 ).fetchone()
             finally:
@@ -129,6 +135,7 @@ class SyncEventStore:
             causal_parents=tuple(json.loads(row[7])),
             payload=tuple(json.loads(row[8]).items()),
             occurred_at=datetime.fromisoformat(row[9]),
+            signature=row[10],
         )
 
     def next_seq(self) -> int:

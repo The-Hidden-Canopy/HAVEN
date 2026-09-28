@@ -21,10 +21,13 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
+from ..credentials import CredentialKind, CredentialStore, UnknownCredentialError
 from .events import SyncEvent, device_id_for, is_syncable
 from .store import SyncEventStore
 
 _DEFAULT_CLOCK = lambda: datetime.now(timezone.utc)  # noqa: E731
+_SYNC_CREDENTIAL_ID = "sync:folder-transport"
+_SYNC_CREDENTIAL_PROVIDER = "haven.sync"
 
 _CONFLICT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sync_conflicts (
@@ -39,7 +42,8 @@ CREATE TABLE IF NOT EXISTS sync_conflicts (
     causal_parents TEXT NOT NULL,
     occurred_at TEXT NOT NULL,
     resolved INTEGER NOT NULL DEFAULT 0,
-    resolution TEXT
+    resolution TEXT,
+    resolution_justification TEXT
 );
 """
 
@@ -60,7 +64,14 @@ class LocalSyncEngine:
         self._device_id = device_id_for(self._data_dir)
         self._state_path = self._data_dir / "sync_state.json"
         self._state = self._load_state()
-        self._enabled = bool(self._state.get("enabled", False))
+        self._sync_key = self._load_sync_key()
+        self._enabled = bool(self._state.get("enabled", False)) and self._sync_key is not None
+        if bool(self._state.get("enabled", False)) and self._sync_key is None:
+            # A pre-authentication state file must never reactivate sync after
+            # restart. It remains inspectable, but the live engine is off
+            # until the owner configures a protected shared key.
+            self._state["enabled"] = False
+            self._save_state()
         self._transport: Any = None
         if self._state.get("transport"):
             from .transport import FolderSyncTransport
@@ -93,6 +104,9 @@ class LocalSyncEngine:
         conn = sqlite3.connect(str(self._conflicts_path))
         try:
             conn.executescript(_CONFLICT_SCHEMA)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(sync_conflicts)").fetchall()}
+            if "resolution_justification" not in columns:
+                conn.execute("ALTER TABLE sync_conflicts ADD COLUMN resolution_justification TEXT")
             conn.commit()
         finally:
             conn.close()
@@ -108,13 +122,43 @@ class LocalSyncEngine:
         return self._enabled
 
     def set_enabled(self, enabled: bool) -> dict:
+        if bool(enabled) and self._sync_key is None:
+            return {"ok": False, "error": "sync requires a protected shared transport key"}
         self._enabled = bool(enabled)
         self._state["enabled"] = self._enabled
         self._save_state()
         return {"ok": True, "enabled": self._enabled}
 
-    def set_transport(self, transport) -> dict:
+    def set_transport(self, transport, *, auth_key: str | None = None) -> dict:
         """The transport seam: FolderSyncTransport today, P2P/relay later."""
+
+        if auth_key is not None:
+            if not isinstance(auth_key, str) or not auth_key.strip():
+                return {"ok": False, "error": "auth_key must be a non-empty string"}
+            new_key = auth_key.strip().encode("utf-8")
+            if self._sync_key != new_key and self._outbox.since(self._state["outbound_seq"]):
+                return {
+                    "ok": False,
+                    "error": "cannot rotate a key while outbound events are pending",
+                }
+            try:
+                credentials = self._credentials()
+                existing = next(
+                    iter(credentials.list_metadata(provider=_SYNC_CREDENTIAL_PROVIDER)), None
+                )
+                if existing is None:
+                    credentials.create(
+                        credential_id=_SYNC_CREDENTIAL_ID,
+                        provider=_SYNC_CREDENTIAL_PROVIDER,
+                        account_label=self._device_id,
+                        kind=CredentialKind.DEVICE,
+                        secret=auth_key.strip(),
+                    )
+                else:
+                    credentials.rotate(_SYNC_CREDENTIAL_ID, new_secret=auth_key.strip())
+            except (OSError, RuntimeError, ValueError, UnknownCredentialError) as exc:
+                return {"ok": False, "error": f"could not protect sync key: {exc}"}
+            self._sync_key = new_key
 
         self._transport = transport
         self._state["transport"] = (
@@ -126,7 +170,11 @@ class LocalSyncEngine:
             else None
         )
         self._save_state()
-        return {"ok": True, "transport": type(transport).__name__ if transport else None}
+        return {
+            "ok": True,
+            "transport": type(transport).__name__ if transport else None,
+            "authenticated": self._sync_key is not None,
+        }
 
     def set_scope_aliases(
         self,
@@ -176,6 +224,16 @@ class LocalSyncEngine:
         state["inbound_seq"] = int(data.get("inbound_seq", 0))
         return state
 
+    def _credentials(self) -> CredentialStore:
+        return CredentialStore(self._data_dir / "credentials.db", clock=self._clock)
+
+    def _load_sync_key(self) -> bytes | None:
+        try:
+            secret = self._credentials().get_secret(_SYNC_CREDENTIAL_ID)
+        except (UnknownCredentialError, OSError, RuntimeError, ValueError):
+            return None
+        return secret.encode("utf-8") if secret else None
+
     def _save_state(self) -> None:
         self._state_path.write_text(json.dumps(self._state, indent=2), encoding="utf-8")
 
@@ -195,6 +253,8 @@ class LocalSyncEngine:
 
         if not is_syncable(kind):
             return {"ok": False, "error": f"{kind!r} is not in the sync allow-set"}
+        if self._allowed_local_scopes and scope_id not in self._allowed_local_scopes:
+            return {"ok": False, "error": f"scope is not visible: {scope_id}"}
         if not self._enabled:
             return {"ok": True, "recorded": False, "reason": "sync is disabled"}
         latest = self._outbox.latest_for(object_id)
@@ -209,7 +269,7 @@ class LocalSyncEngine:
             causal_parents=tuple(causal_parents) or ((latest.event_id,) if latest else ()),
             payload=tuple(sorted(payload.items())),
             occurred_at=self._clock(),
-        )
+        ).signed(self._sync_key)
         self._outbox.append(event)
         return {"ok": True, "recorded": True, "event_id": event.event_id, "seq": event.seq}
 
@@ -221,6 +281,8 @@ class LocalSyncEngine:
         if self._transport is None:
             return {"ok": False, "error": "no sync transport is configured"}
         events = self._outbox.since(self._state["outbound_seq"])
+        if any(not event.verify(self._sync_key) for event in events):
+            return {"ok": False, "error": "outbox contains unsigned or invalid sync events"}
         sent = self._transport.send(events)
         if sent:
             self._state["outbound_seq"] = events[sent - 1].seq
@@ -232,10 +294,19 @@ class LocalSyncEngine:
             return {"ok": False, "error": "sync is disabled"}
         if self._transport is None:
             return {"ok": False, "error": "no sync transport is configured"}
-        events, watermark = self._transport.fetch(since_seq=self._state["inbound_seq"])
+        events, _watermark = self._transport.fetch(since_seq=self._state["inbound_seq"])
         applied = rejected = skipped = 0
         conflicts: list[str] = []
+        trusted_watermark = self._state["inbound_seq"]
         for event in events:
+            if not event.verify(self._sync_key):
+                rejected += 1
+                continue
+            # Only authenticated records may advance the cursor. Otherwise
+            # a forged high sequence number could permanently skip legitimate
+            # lower-sequence events from the peer (a denial-of-service at the
+            # same boundary we use to reject the forged mutation).
+            trusted_watermark = max(trusted_watermark, event.seq)
             if event.origin_device_id == self._device_id:
                 skipped += 1  # our own event echoed back
                 continue
@@ -245,7 +316,7 @@ class LocalSyncEngine:
             skipped += outcome.get("skipped", 0)
             if outcome.get("conflict_id"):
                 conflicts.append(outcome["conflict_id"])
-        self._state["inbound_seq"] = watermark
+        self._state["inbound_seq"] = trusted_watermark
         self._save_state()
         return {
             "ok": True,
@@ -254,7 +325,7 @@ class LocalSyncEngine:
             "rejected": rejected,
             "skipped": skipped,
             "conflicts": conflicts,
-            "cursor": str(watermark),
+            "cursor": str(trusted_watermark),
         }
 
     def _apply(self, event: SyncEvent) -> dict:
@@ -269,6 +340,8 @@ class LocalSyncEngine:
         if not isinstance(raw_scope, str) or raw_scope.strip() != event.scope_id:
             return {"rejected": 1}
         payload["scope_id"] = self._aliased_scope(raw_scope.strip())
+        if self._allowed_local_scopes and payload["scope_id"] not in self._allowed_local_scopes:
+            return {"rejected": 1}
         local = self._outbox.latest_for(event.object_id)
         local_payload = dict(local.payload) if local is not None else None
         if (
@@ -305,7 +378,7 @@ class LocalSyncEngine:
                 causal_parents=(event.event_id,),
                 payload=event.payload,
                 occurred_at=self._clock(),
-            )
+            ).signed(self._sync_key)
         )
         return {"applied": 1}
 
@@ -376,13 +449,22 @@ class LocalSyncEngine:
             ],
         }
 
-    def resolve(self, *, conflict_id: str | None, choice: str | None, merge_fields=None) -> dict:
+    def resolve(
+        self,
+        *,
+        conflict_id: str | None,
+        choice: str | None,
+        merge_fields=None,
+        justification: str | None,
+    ) -> dict:
         """Choose A (local), B (remote), or merge fields where legal."""
 
         if not isinstance(conflict_id, str) or not conflict_id.strip():
             return {"ok": False, "error": "a non-empty 'conflict_id' is required"}
         if choice not in ("local", "remote", "merge"):
             return {"ok": False, "error": "choice must be 'local', 'remote', or 'merge'"}
+        if not isinstance(justification, str) or not justification.strip():
+            return {"ok": False, "error": "conflict resolution requires a non-empty justification"}
         conn = sqlite3.connect(str(self._conflicts_path))
         try:
             row = conn.execute(
@@ -418,6 +500,18 @@ class LocalSyncEngine:
             chosen["revision"] = revision
             source = "merge"
 
+        chosen_scope = chosen.get("scope_id", scope_id)
+        expected_local_scope = self._aliased_scope(scope_id)
+        if (
+            not isinstance(chosen_scope, str)
+            or chosen_scope.strip() not in {scope_id, expected_local_scope}
+            or (
+                self._allowed_local_scopes
+                and self._aliased_scope(chosen_scope.strip()) not in self._allowed_local_scopes
+            )
+        ):
+            return {"ok": False, "error": "conflict resolution scope is not visible"}
+
         result = applier(chosen, None)
         if not result.get("ok"):
             return result
@@ -433,13 +527,14 @@ class LocalSyncEngine:
                 causal_parents=(),
                 payload=tuple(sorted(chosen.items())),
                 occurred_at=self._clock(),
-            )
+            ).signed(self._sync_key)
         )
         conn = sqlite3.connect(str(self._conflicts_path))
         try:
             conn.execute(
-                "UPDATE sync_conflicts SET resolved = 1, resolution = ? WHERE conflict_id = ?",
-                (source, conflict_id.strip()),
+                "UPDATE sync_conflicts SET resolved = 1, resolution = ?, "
+                "resolution_justification = ? WHERE conflict_id = ?",
+                (source, justification.strip(), conflict_id.strip()),
             )
             conn.commit()
         finally:
@@ -452,6 +547,7 @@ class LocalSyncEngine:
             "enabled": self._enabled,
             "device_id": self._device_id,
             "transport": type(self._transport).__name__ if self._transport is not None else None,
+            "authenticated": self._sync_key is not None,
             "outbound_seq": self._state["outbound_seq"],
             "inbound_seq": self._state["inbound_seq"],
         }

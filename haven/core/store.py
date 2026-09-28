@@ -81,6 +81,17 @@ class RuleSchedulerChange:
 
 
 @dataclass(frozen=True)
+class RelationshipAdmission:
+    candidate_id: str
+    assertion_id: str
+    scope_id: str
+    predicate: str
+    admitted_by: str
+    admitted_by_role: RoleTier
+    justification: str
+
+
+@dataclass(frozen=True)
 class RuleDecision:
     rule_id: str
     decision: AuthorityDecision
@@ -420,6 +431,44 @@ class HavenStore:
                 ),
             )
 
+        if transition.kind == TransitionKind.ADMIT_RELATIONSHIP:
+            admission = transition.payload
+            if not isinstance(admission, RelationshipAdmission):
+                raise TypeError("ADMIT_RELATIONSHIP requires a RelationshipAdmission")
+            for field_name in (
+                "candidate_id",
+                "assertion_id",
+                "scope_id",
+                "predicate",
+                "admitted_by",
+                "justification",
+            ):
+                value = getattr(admission, field_name)
+                if not isinstance(value, str) or not value.strip():
+                    raise InvalidTransition(f"relationship admission requires a non-empty {field_name}")
+            if admission.admitted_by != transition.actor_id:
+                raise InvalidTransition("relationship admission actor does not match the transition actor")
+            if admission.admitted_by_role != RoleTier.OWNER:
+                raise InvalidTransition("only an owner can admit a household relationship")
+            if any(
+                event.event_type == EventType.RELATIONSHIP_ADMITTED
+                and dict(event.payload).get("assertion_id") == admission.assertion_id
+                for event in self._events
+            ):
+                raise InvalidTransition(f"relationship assertion already admitted: {admission.assertion_id}")
+            return (
+                state,
+                EventType.RELATIONSHIP_ADMITTED,
+                _payload(
+                    candidate_id=admission.candidate_id,
+                    assertion_id=admission.assertion_id,
+                    scope_id=admission.scope_id,
+                    predicate=admission.predicate,
+                    admitted_by=admission.admitted_by,
+                    justification=admission.justification,
+                ),
+            )
+
         if transition.kind == TransitionKind.AUTHORIZE_ACTION:
             action = transition.payload
             if not isinstance(action, ActionRecord):
@@ -538,6 +587,7 @@ class HavenStore:
 __all__ = [
     "HavenState",
     "HavenStore",
+    "RelationshipAdmission",
     "RuleApproval",
     "RuleClarification",
     "RuleDecision",

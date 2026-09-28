@@ -11,7 +11,7 @@ same "the proposer can't reach the door it isn't given a key to" shape
 `haven.intelligence.gateway`'s proposal-only seam already establishes for
 rule drafts and chat replies. Every suggestion becomes an ordinary
 `CandidateRelationship` and goes through the exact same review pipeline
-(`RelationshipAdmissionPolicy.classify()`/`admit()`) a deterministic
+(`RelationshipAdmissionPolicy.classify()`/`RelationshipService.admit()`) a deterministic
 candidate does -- `Correlator` and this proposer are two *sources* feeding
 one admission boundary, not two authorities.
 """
