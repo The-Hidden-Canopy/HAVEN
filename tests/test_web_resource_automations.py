@@ -12,6 +12,8 @@ from pathlib import Path
 
 from haven.web.server import make_server
 
+STATIC_ROOT = Path(__file__).parents[1] / "haven" / "web" / "static"
+
 NOW = datetime(2026, 10, 1, 21, 0, tzinfo=timezone.utc)
 
 
@@ -107,3 +109,26 @@ def test_resource_automation_http_rejects_foreign_household() -> None:
         )
         assert status == 400
         assert body["ok"] is False
+
+
+def test_web_panel_projects_resource_automation_lifecycle() -> None:
+    index = (STATIC_ROOT / "index.html").read_text(encoding="utf-8")
+    app = (STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+    styles = (STATIC_ROOT / "styles.css").read_text(encoding="utf-8")
+
+    for element_id in (
+        "resource-automations-list",
+        "resource-automations-count",
+        "resource-automations-refresh",
+        "resource-automations-error",
+    ):
+        assert f'id="{element_id}"' in index
+    for route in (
+        "/api/resource-automations",
+        "'/api/resource-automations/' + encodeURIComponent(ruleId) + '/approve'",
+        "'/api/resource-automations/' + encodeURIComponent(ruleId) + '/enable'",
+        "'/api/resource-automations/' + encodeURIComponent(ruleId) + '/revoke'",
+    ):
+        assert route in app
+    for marker in ("renderResourceAutomations", "resource_automations.changed", "resource-automation-row"):
+        assert marker in app or marker in styles
