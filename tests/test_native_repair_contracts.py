@@ -55,6 +55,25 @@ def test_today_uses_one_snapshot_request_and_never_renders_raw_provider_errors()
     assert "Text = ex.Message" not in today
 
 
+def test_today_keeps_unavailable_sections_distinct_from_empty_sections():
+    today = (NATIVE / "MainWindow.Today.cs").read_text(encoding="utf-8")
+    assert "ok.ValueKind == JsonValueKind.False" in today
+    assert "This section is temporarily unavailable." in today
+    assert "Focus is temporarily unavailable." in today
+    assert "Upcoming is temporarily unavailable." in today
+    assert "Needs You is temporarily unavailable." in today
+    assert "card.Visibility = Visibility.Collapsed" in today
+    assert "return true; // an error is shown, not silently treated as \"empty\"." in today
+
+
+def test_connection_center_reports_rpc_and_event_health_as_separate_channels():
+    connection = (NATIVE / "MainWindow.ConnectionCenter.cs").read_text(encoding="utf-8")
+    assert '"HAVEN Core (RPC)"' in connection
+    assert '"Live updates (events)"' in connection
+    assert '"Stalled (last frame ' in connection
+    assert '"Reconnecting (attempt ' in connection
+
+
 def test_native_settings_projects_the_support_safe_unified_receipt_export():
     system = (NATIVE / "MainWindow.System.cs").read_text(encoding="utf-8")
     xaml = (NATIVE / "MainWindow.xaml").read_text(encoding="utf-8")
