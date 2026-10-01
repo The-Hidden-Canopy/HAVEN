@@ -96,6 +96,17 @@ acceptance loop is closed.
   unavailable configured provider, and backup/restore still require separate
   hands-on runs.
 
+### Supplemental launch check — 2026-10-01
+
+A second disposable fresh-data launch was started with the native client and
+no `--web` fallback. Core initialization created the expected local stores and
+the native process exposed a `HAVEN` window, but the available Windows
+automation surface returned no targetable app windows (`apps: []`). No click,
+typing, screenshot, or proof-loop step was therefore claimed from this
+attempt; the disposable process was stopped after observation. A manual run on
+a host with a targetable WinUI surface is still required for the interactive
+steps and artifact checklist below.
+
 The evidence above was captured as live UI-automation observations; no
 screenshots or diagnostic exports were produced by this run. The full artifact
 checklist below remains required before a release tag.
