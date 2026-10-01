@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from haven.audit.receipts import ActionReceipt
 from haven.authority.policy import AuthorityEngine
+from haven.core.correlation import current as current_correlation
 from haven.core.domain import (
     ActionKind,
     ActionOrigin,
@@ -526,13 +527,14 @@ class HavenRuntime:
             if world.household_id == self.store.household_id and principal.household_id == self.store.household_id
             else ()
         )
+        correlation_id = current_correlation() or rule.rule_id
         if decision.status != DecisionStatus.ALLOW:
             return self._record_blocked(
                 request=request,
                 interpretation=rule.draft.interpretation,
                 evidence=evidence,
                 decision=decision,
-                correlation_id=rule.rule_id,
+                correlation_id=correlation_id,
                 principal=principal,
                 now=now,
             )
@@ -542,7 +544,7 @@ class HavenRuntime:
             evidence=evidence,
             decision=decision,
             service=self._service_for_device(rule.draft, target_device_id),
-            correlation_id=rule.rule_id,
+            correlation_id=correlation_id,
             principal=principal,
             now=now,
         )
@@ -629,13 +631,14 @@ class HavenRuntime:
                 and self.store.is_confirmation_consumed(confirmation_token.token_id)
             ),
         )
+        correlation_id = current_correlation() or rule_id
         if decision.status != DecisionStatus.ALLOW:
             return self._record_blocked(
                 request=request,
                 interpretation=justification,
                 evidence=(),
                 decision=decision,
-                correlation_id=rule_id,
+                correlation_id=correlation_id,
                 principal=principal,
                 now=now,
             )
@@ -645,7 +648,7 @@ class HavenRuntime:
             evidence=(),
             decision=decision,
             service=self._resolve_service(capability=capability, action_kind=action_kind, target_device_id=target_device_id),
-            correlation_id=rule_id,
+            correlation_id=correlation_id,
             principal=principal,
             now=now,
         )

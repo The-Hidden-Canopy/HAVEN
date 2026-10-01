@@ -12,6 +12,7 @@ from datetime import timedelta
 import pytest
 
 from haven.authority.policy import AuthorityEngine
+from haven.core import correlation
 from haven.core.domain import (
     ActionKind,
     ActionOrigin,
@@ -158,6 +159,7 @@ def test_member_direct_safe_action_executes_without_creating_a_rule() -> None:
     assert store.state.rules == ()
     assert store.state.actions[0].status == ActionStatus.EXECUTED
     assert len(adapter.commands) == 1
+
     assert adapter.commands[0].service == "light.turn_off"
     # same recording discipline, same event types as the rule path
     assert [event.event_type for event in store.events] == [
@@ -165,6 +167,23 @@ def test_member_direct_safe_action_executes_without_creating_a_rule() -> None:
         EventType.ACTION_EXECUTED,
     ]
     assert tuple(event.event_id for event in store.events) == receipt.event_ids
+
+
+def test_bound_request_correlation_reaches_home_action_receipt() -> None:
+    runtime, _store, _adapter, resident, _owner = _runtime()
+
+    with correlation.bind("corr-home-direct"):
+        receipt = runtime.run_action(
+            principal=resident,
+            action_kind=ActionKind.TURN_LIGHT_OFF,
+            target_device_id="bedroom_lights",
+            justification="correlation coverage",
+            world=_direct_world(resident),
+            now=BASE_TIME + timedelta(minutes=2),
+        )
+
+    assert receipt.correlation_id == "corr-home-direct"
+    assert correlation.current() is None
 
 
 def test_direct_action_with_capability_routes_service_from_the_manifest() -> None:
