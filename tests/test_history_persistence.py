@@ -150,6 +150,7 @@ def test_receipt_round_trip_preserves_evidence_and_drops_the_token():
         decision=_decision(),
         device_result=_result(),
         event_ids=("event-1", "event-2"),
+        correlation_id="request-1",
     )
     restored = receipt_from_dict(receipt_to_dict(receipt))
     assert restored.receipt_id == "receipt-1"
@@ -158,6 +159,7 @@ def test_receipt_round_trip_preserves_evidence_and_drops_the_token():
     assert restored.decision.status == DecisionStatus.ALLOW
     assert restored.device_result.success is True
     assert restored.event_ids == ("event-1", "event-2")
+    assert restored.correlation_id == "request-1"
 
 
 # -- HistoryStore --------------------------------------------------------------

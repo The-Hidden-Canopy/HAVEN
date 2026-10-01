@@ -113,6 +113,7 @@ public sealed partial class MainWindow
     {
         var personId = PeopleDirectory.SelectedItem is ListViewItem item ? item.Tag as string : null;
         _selectedPersonId = personId;
+        ApplyDrillInState(PeopleDirectory, PersonInspector, PersonBackButton, _narrow, personId is not null);
         RenderPersonDetail(personId is null
             ? null
             : Enumerate(_people).FirstOrDefault(p => GetString(p, "person_id") == personId));

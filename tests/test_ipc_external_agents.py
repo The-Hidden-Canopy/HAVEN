@@ -1,14 +1,14 @@
-"""Native external-agent management IPC adapter: connections/bindings CRUD.
+"""Native external-agent management IPC adapter and transport entry point.
 
-No MCP transport exists yet (Build/Ship/Shape WP2), so these exercise the
-owner-facing management surface only -- the same `ExternalAgentService`
-`self.external_agent_gateway` will sit beside once a transport calls
-`admit()`.
+The owner-facing management surface and the `external_agents.tools.call`
+bridge are exercised here; the native C# MCP host remains a thin protocol
+adapter over this pipe-level entry point.
 """
 
 from __future__ import annotations
 
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -226,6 +226,23 @@ def test_connection_create_emits_external_agents_changed(server) -> None:
     _dispatch(instance, "external_agents.connections.create", {"provider": "alexa_plus", "display_name": "Alexa+"})
 
     assert "external_agents.changed" in events
+
+
+def test_connection_create_reaches_the_native_event_publisher(server) -> None:
+    instance, _ = server
+    delivered: list[dict] = []
+    unsubscribe = instance.events.subscribe(delivered.append)
+    try:
+        _dispatch(instance, "external_agents.connections.create", {"provider": "alexa_plus", "display_name": "Alexa+"})
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not any(
+            frame["event"] == "external_agents.changed" for frame in delivered
+        ):
+            time.sleep(0.02)
+        frame = next(frame for frame in delivered if frame["event"] == "external_agents.changed")
+        assert frame["payload"]["domain"] == "external_agents"
+    finally:
+        unsubscribe()
 
 
 def test_reads_never_emit_external_agents_changed(server) -> None:

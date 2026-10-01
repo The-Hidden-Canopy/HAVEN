@@ -79,6 +79,7 @@ public sealed class McpHostService : IAsyncDisposable
                 // Shutdown is best-effort; a wedged host must not hold the UI.
             }
         }
+        StatusText = "Off";
     }
 
     public async ValueTask DisposeAsync() => await StopAsync();

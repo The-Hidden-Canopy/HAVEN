@@ -34,6 +34,20 @@ const els = {
   pluginsList: $('#plugins-list'),
   pluginsRefresh: $('#plugins-refresh'),
   pluginsCatalogError: $('#plugins-catalog-error'),
+  externalAgentsCount: $('#external-agents-count'),
+  externalAgentsList: $('#external-agents-list'),
+  externalAgentsRefresh: $('#external-agents-refresh'),
+  externalAgentsAdd: $('#external-agents-add'),
+  externalAgentsError: $('#external-agents-error'),
+  externalAgentsCreate: $('#external-agents-create'),
+  externalAgentsCreateForm: $('#external-agents-create-form'),
+  externalAgentsCreateCancel: $('#external-agents-create-cancel'),
+  externalAgentsProvider: $('#external-agents-provider'),
+  externalAgentsDisplayName: $('#external-agents-display-name'),
+  externalAgentsCredential: $('#external-agents-credential'),
+  externalAgentsAuditRefresh: $('#external-agents-audit-refresh'),
+  externalAgentsAuditStatus: $('#external-agents-audit-status'),
+  externalAgentsAuditList: $('#external-agents-audit-list'),
   runtimesStrip: $('#runtimes-strip'),
   jobsSection: $('#jobs-section'),
   jobsList: $('#jobs-list'),
@@ -117,7 +131,7 @@ const app = {
   focus: null,      // room id or null
   automationFocus: null, // rule id or null
   selectedRoom: null, // room id selected in the rooms view, or null
-  view: 'world',    // center view: world | rooms | activity | memory | people | automations | system | models | placeholder
+  view: 'world',    // center view: world | rooms | activity | memory | people | automations | system | models | external-agents | placeholder
   knowledgeClaims: null, // null until the Memory view loads durable knowledge
   peopleDirectory: null, // declared people from the authoring endpoint
   contextsDirectory: null, // declared contexts from the authoring endpoint
@@ -4345,6 +4359,349 @@ function makePluginRow(plugin) {
   return row;
 }
 
+/* ---------- external agents ----------
+   This is the owner-facing management projection for the same REST handlers
+   used by the native Settings surface.  Credentials are write-only here;
+   bindings and scopes stay visible as individual grants so an owner can see
+   exactly what an external subject may request. */
+
+const EXTERNAL_AGENT_SCOPES = [
+  ['world.read', 'Read current world'],
+  ['knowledge.read', 'Read durable knowledge'],
+  ['knowledge.correct', 'Correct knowledge'],
+  ['actions.request', 'Request governed actions'],
+  ['automations.propose', 'Propose automations'],
+  ['automations.approve', 'Approve automations'],
+  ['history.read', 'Read history'],
+  ['connections.manage', 'Manage connections'],
+];
+
+const externalAgentsState = {
+  connections: [],
+  details: new Map(),
+  audit: [],
+};
+
+function showExternalAgentsError(message) {
+  if (!els.externalAgentsError) return;
+  els.externalAgentsError.textContent = message || '';
+  els.externalAgentsError.hidden = !message;
+}
+
+function externalAgentActionButton(label, handler, extraClass = '') {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn ' + extraClass;
+  button.textContent = label;
+  button.addEventListener('click', handler);
+  return button;
+}
+
+function externalAgentScopePicker(selected = []) {
+  const chosen = new Set(selected);
+  const picker = document.createElement('div');
+  picker.className = 'external-agent-scopes';
+  for (const [value, label] of EXTERNAL_AGENT_SCOPES) {
+    const item = document.createElement('label');
+    item.className = 'external-agent-scope';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = value;
+    input.dataset.scope = value;
+    input.checked = chosen.has(value);
+    const text = document.createElement('span');
+    text.textContent = label + ' · ' + value;
+    item.appendChild(input);
+    item.appendChild(text);
+    picker.appendChild(item);
+  }
+  return picker;
+}
+
+function selectedExternalAgentScopes(picker) {
+  return Array.from(picker.querySelectorAll('input[data-scope]:checked'))
+    .map((input) => input.dataset.scope);
+}
+
+async function refreshExternalAgents() {
+  const response = await requestJSON('/api/external-agents/connections');
+  if (!response || response.httpOk !== true || response.ok !== true) {
+    showExternalAgentsError((response && response.error) || 'External-agent connections are unavailable.');
+    renderExternalAgents();
+    return;
+  }
+  showExternalAgentsError('');
+  externalAgentsState.connections = Array.isArray(response.connections) ? response.connections : [];
+  renderExternalAgents();
+}
+
+async function refreshExternalAgentAudit() {
+  const response = await requestJSON('/api/external-agents/audit?limit=50');
+  if (!response || response.httpOk !== true || response.ok !== true) {
+    els.externalAgentsAuditStatus.textContent = (response && response.error) || 'Audit unavailable';
+    return;
+  }
+  externalAgentsState.audit = Array.isArray(response.audit) ? response.audit : [];
+  els.externalAgentsAuditStatus.textContent = externalAgentsState.audit.length + ' entries';
+  els.externalAgentsAuditList.textContent = '';
+  if (!externalAgentsState.audit.length) {
+    const empty = document.createElement('p');
+    empty.className = 'feed-empty muted';
+    empty.textContent = 'No management actions recorded yet.';
+    els.externalAgentsAuditList.appendChild(empty);
+    return;
+  }
+  for (const entry of externalAgentsState.audit) {
+    const row = document.createElement('div');
+    row.className = 'feed-row';
+    const kind = document.createElement('span');
+    kind.className = 'feed-type micro';
+    kind.textContent = entry.kind || 'event';
+    const detail = document.createElement('span');
+    detail.className = 'feed-text';
+    detail.textContent = [entry.connection_id, entry.actor].filter(Boolean).join(' · ') || 'HAVEN';
+    const stamp = document.createElement('span');
+    stamp.className = 'feed-stamp';
+    stamp.textContent = fmtDateTime(entry.occurred_at);
+    row.appendChild(kind);
+    row.appendChild(detail);
+    row.appendChild(stamp);
+    els.externalAgentsAuditList.appendChild(row);
+  }
+}
+
+async function loadExternalAgentDetails(connection, detail) {
+  detail.textContent = '';
+  const loading = document.createElement('p');
+  loading.className = 'muted';
+  loading.textContent = 'Loading bindings and observed subjects…';
+  detail.appendChild(loading);
+  const id = encodeURIComponent(connection.connection_id);
+  const [bindings, subjects] = await Promise.all([
+    requestJSON('/api/external-agents/connections/' + id + '/bindings'),
+    requestJSON('/api/external-agents/connections/' + id + '/observed-subjects'),
+  ]);
+  if (!bindings || bindings.httpOk !== true || bindings.ok !== true ||
+      !subjects || subjects.httpOk !== true || subjects.ok !== true) {
+    detail.textContent = '';
+    const error = document.createElement('p');
+    error.className = 'model-error';
+    error.textContent = 'Could not load this connection’s details.';
+    detail.appendChild(error);
+    return;
+  }
+  renderExternalAgentDetails(connection, detail, {
+    bindings: Array.isArray(bindings.bindings) ? bindings.bindings : [],
+    subjects: Array.isArray(subjects.subjects) ? subjects.subjects : [],
+  });
+}
+
+function renderExternalAgentDetails(connection, detail, data) {
+  detail.textContent = '';
+  const subjects = document.createElement('div');
+  subjects.className = 'external-agent-detail-section';
+  const subjectsTitle = document.createElement('h3');
+  subjectsTitle.className = 'micro';
+  subjectsTitle.textContent = 'OBSERVED SUBJECTS';
+  subjects.appendChild(subjectsTitle);
+  if (!data.subjects.length) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.textContent = 'No external subjects have been observed through this connection.';
+    subjects.appendChild(empty);
+  } else {
+    for (const subject of data.subjects) {
+      const row = document.createElement('div');
+      row.className = 'external-agent-subject';
+      row.textContent = (subject.subject_label || subject.subject_key || 'unknown') +
+        ' · ' + (subject.subject_key || 'no stable key');
+      subjects.appendChild(row);
+    }
+  }
+  detail.appendChild(subjects);
+
+  const bindings = document.createElement('div');
+  bindings.className = 'external-agent-detail-section';
+  const bindingsTitle = document.createElement('h3');
+  bindingsTitle.className = 'micro';
+  bindingsTitle.textContent = 'SUBJECT BINDINGS';
+  bindings.appendChild(bindingsTitle);
+  for (const binding of data.bindings) {
+    const row = document.createElement('div');
+    row.className = 'external-agent-binding';
+    const info = document.createElement('div');
+    info.className = 'external-agent-binding-info';
+    const label = document.createElement('span');
+    label.className = 'model-id';
+    label.textContent = binding.subject_label || binding.subject_key;
+    const meta = document.createElement('span');
+    meta.className = 'model-meta';
+    meta.textContent = (binding.principal_id || 'unknown person') + ' · ' +
+      (Array.isArray(binding.scopes) && binding.scopes.length ? binding.scopes.join(', ') : 'no scopes');
+    info.appendChild(label);
+    info.appendChild(meta);
+    row.appendChild(info);
+    if (!binding.revoked_at) {
+      row.appendChild(externalAgentActionButton('Revoke', async () => {
+        if (!window.confirm('Revoke this external subject binding?')) return;
+        const response = await postJSONDetailed(
+          '/api/external-agents/bindings/' + encodeURIComponent(binding.binding_id) + '/revoke', {});
+        if (response.httpOk !== true || response.ok !== true) {
+          showExternalAgentsError(response.error || 'Could not revoke the binding.');
+          return;
+        }
+        await loadExternalAgentDetails(connection, detail);
+        await refreshExternalAgentAudit();
+      }));
+    }
+    bindings.appendChild(row);
+  }
+  if (!data.bindings.length) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.textContent = 'No subjects are bound to a HAVEN person.';
+    bindings.appendChild(empty);
+  }
+  detail.appendChild(bindings);
+
+  const people = Array.isArray(app.peopleDirectory) ? app.peopleDirectory : [];
+  const form = document.createElement('form');
+  form.className = 'external-agent-binding-form';
+  const subjectKey = document.createElement('input');
+  subjectKey.required = true;
+  subjectKey.placeholder = 'stable subject key';
+  subjectKey.autocomplete = 'off';
+  const subjectLabel = document.createElement('input');
+  subjectLabel.required = true;
+  subjectLabel.placeholder = 'subject label';
+  subjectLabel.autocomplete = 'off';
+  const principal = document.createElement('select');
+  principal.required = true;
+  principal.setAttribute('aria-label', 'HAVEN person');
+  for (const person of people) {
+    const option = document.createElement('option');
+    option.value = person.person_id || '';
+    option.textContent = person.name || person.person_id || 'unknown person';
+    principal.appendChild(option);
+  }
+  const scopes = externalAgentScopePicker();
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.textContent = 'Bind subject';
+  form.appendChild(subjectKey);
+  form.appendChild(subjectLabel);
+  form.appendChild(principal);
+  form.appendChild(scopes);
+  form.appendChild(submit);
+  if (!people.length) {
+    const note = document.createElement('p');
+    note.className = 'model-note';
+    note.textContent = 'Declare a household person before creating a binding.';
+    form.appendChild(note);
+    submit.disabled = true;
+  }
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const response = await postJSONDetailed(
+      '/api/external-agents/connections/' + encodeURIComponent(connection.connection_id) + '/bindings', {
+        subject_key: subjectKey.value.trim(),
+        subject_label: subjectLabel.value.trim(),
+        principal_id: principal.value,
+        scopes: selectedExternalAgentScopes(scopes),
+      });
+    if (response.httpOk !== true || response.ok !== true) {
+      showExternalAgentsError(response.error || 'Could not create the subject binding.');
+      return;
+    }
+    showExternalAgentsError('');
+    await loadExternalAgentDetails(connection, detail);
+    await refreshExternalAgentAudit();
+  });
+  detail.appendChild(form);
+}
+
+function renderExternalAgents() {
+  const connections = externalAgentsState.connections;
+  els.externalAgentsCount.textContent = connections.length +
+    (connections.length === 1 ? ' connection' : ' connections');
+  els.externalAgentsList.textContent = '';
+  if (!connections.length) {
+    const empty = document.createElement('p');
+    empty.className = 'feed-empty muted';
+    empty.textContent = 'No external-agent connections configured.';
+    els.externalAgentsList.appendChild(empty);
+    return;
+  }
+  for (const connection of connections) {
+    const card = document.createElement('article');
+    card.className = 'external-agent-card';
+    const head = document.createElement('div');
+    head.className = 'external-agent-head';
+    const main = document.createElement('div');
+    main.className = 'model-main';
+    const name = document.createElement('span');
+    name.className = 'model-id';
+    name.textContent = connection.display_name || connection.connection_id;
+    const meta = document.createElement('span');
+    meta.className = 'model-meta';
+    meta.textContent = String(connection.provider || 'unknown').replace(/_/g, ' ') +
+      ' · created ' + fmtDateTime(connection.created_at);
+    main.appendChild(name);
+    main.appendChild(meta);
+    if (Array.isArray(connection.unbound_scopes) && connection.unbound_scopes.length) {
+      const unbound = document.createElement('span');
+      unbound.className = 'model-extras';
+      unbound.textContent = 'Unbound read scopes: ' + connection.unbound_scopes.join(', ');
+      main.appendChild(unbound);
+    }
+    head.appendChild(main);
+    const badges = document.createElement('div');
+    badges.className = 'model-badges';
+    const status = connection.revoked_at ? 'REVOKED' : (connection.active ? 'ACTIVE' : 'DISABLED');
+    badges.appendChild(modelBadge(status, connection.revoked_at ? 'state-danger' : (connection.active ? 'src-local' : 'state-dim')));
+    head.appendChild(badges);
+    card.appendChild(head);
+
+    const actions = document.createElement('div');
+    actions.className = 'external-agent-actions';
+    if (!connection.revoked_at) {
+      actions.appendChild(externalAgentActionButton(connection.enabled ? 'Disable' : 'Enable', async () => {
+        const response = await postJSONDetailed(
+          '/api/external-agents/connections/' + encodeURIComponent(connection.connection_id) + '/enable',
+          { enabled: !connection.enabled });
+        if (response.httpOk !== true || response.ok !== true) {
+          showExternalAgentsError(response.error || 'Could not update the connection.');
+          return;
+        }
+        await refreshExternalAgents();
+        await refreshExternalAgentAudit();
+      }));
+      actions.appendChild(externalAgentActionButton('Revoke', async () => {
+        if (!window.confirm('Revoke this external-agent connection and its future requests?')) return;
+        const response = await postJSONDetailed(
+          '/api/external-agents/connections/' + encodeURIComponent(connection.connection_id) + '/revoke', {});
+        if (response.httpOk !== true || response.ok !== true) {
+          showExternalAgentsError(response.error || 'Could not revoke the connection.');
+          return;
+        }
+        await refreshExternalAgents();
+        await refreshExternalAgentAudit();
+      }, 'btn-danger'));
+    }
+    const detail = document.createElement('div');
+    detail.className = 'external-agent-detail';
+    detail.hidden = true;
+    const manage = externalAgentActionButton('Manage bindings', async () => {
+      detail.hidden = !detail.hidden;
+      if (!detail.hidden) await loadExternalAgentDetails(connection, detail);
+    });
+    actions.appendChild(manage);
+    card.appendChild(actions);
+    card.appendChild(detail);
+    els.externalAgentsList.appendChild(card);
+  }
+}
+
 /* ---------- nav views ---------- */
 
 function switchView(view, label) {
@@ -4354,6 +4711,10 @@ function switchView(view, label) {
   if (view === 'memory') refreshKnowledge();
   if (view === 'people') refreshAuthoringDirectories();
   if (view === 'models') refreshModels();
+  if (view === 'external-agents') {
+    refreshAuthoringDirectories();
+    refreshExternalAgents();
+  }
   if (view === 'plugins') refreshPlugins({ forceCatalogFetch: true });
   if (view === 'system') refreshSystemDetails();
   if (view === 'placeholder') {
@@ -4680,6 +5041,34 @@ function wireEvents() {
 
   els.pluginsRefresh.addEventListener('click', () => refreshPlugins({ forceCatalogFetch: true }));
 
+  els.externalAgentsRefresh.addEventListener('click', () => refreshExternalAgents());
+  els.externalAgentsAdd.addEventListener('click', () => {
+    els.externalAgentsCreate.hidden = !els.externalAgentsCreate.hidden;
+    if (!els.externalAgentsCreate.hidden) els.externalAgentsDisplayName.focus();
+  });
+  els.externalAgentsCreateCancel.addEventListener('click', () => {
+    els.externalAgentsCreate.hidden = true;
+    els.externalAgentsCreateForm.reset();
+  });
+  els.externalAgentsCreateForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const response = await postJSONDetailed('/api/external-agents/connections', {
+      provider: els.externalAgentsProvider.value,
+      display_name: els.externalAgentsDisplayName.value.trim(),
+      credential: els.externalAgentsCredential.value.trim() || undefined,
+    });
+    if (response.httpOk !== true || response.ok !== true) {
+      showExternalAgentsError(response.error || 'Could not create the connection.');
+      return;
+    }
+    showExternalAgentsError('');
+    els.externalAgentsCreate.hidden = true;
+    els.externalAgentsCreateForm.reset();
+    await refreshExternalAgents();
+    await refreshExternalAgentAudit();
+  });
+  els.externalAgentsAuditRefresh.addEventListener('click', () => refreshExternalAgentAudit());
+
   els.demoCamDown.addEventListener('click', async () => {
     const resp = await postJSON('/api/demo/camera-down', {});
     if (resp && resp.state) renderState(resp.state);
@@ -4742,6 +5131,13 @@ async function boot() {
       if (glow === 'completed') scheduleCompletedFade();
     } catch {
       // malformed payload — ignore
+    }
+  });
+
+  es.addEventListener('external_agents.changed', () => {
+    if (app.view === 'external-agents') {
+      refreshExternalAgents();
+      refreshExternalAgentAudit();
     }
   });
 

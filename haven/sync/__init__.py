@@ -2,18 +2,19 @@
 
 `contracts.py` is the Protocol; `events.py`/`store.py`/`transport.py`/
 `engine.py` are the local implementation: a monotonic outbox, an explicit
-per-type allow-set, a folder transport behind the two-method seam, and a
-conflict state that never resolves silently.
+per-type allow-set, plaintext and AES-GCM folder transports behind the
+two-method seam, and a conflict state that never resolves silently.
 """
 
 from .contracts import SyncBatch, SyncProvider, SyncReceipt, SyncRecord
 from .engine import LocalSyncEngine
 from .events import SYNCABLE_KINDS, SyncEvent, is_syncable
 from .store import SyncEventStore
-from .transport import FolderSyncTransport
+from .transport import EncryptedFolderSyncTransport, FolderSyncTransport
 
 __all__ = [
     "SYNCABLE_KINDS",
+    "EncryptedFolderSyncTransport",
     "FolderSyncTransport",
     "LocalSyncEngine",
     "SyncBatch",

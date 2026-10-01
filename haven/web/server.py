@@ -22,12 +22,13 @@ from threading import Lock
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..models import ModelManager, inspect_folder
-from ..ipc import IpcDispatcher
+from ..ipc import IpcDispatcher, request_message
 from ..ipc.events_pipe import EventPublisher
 from ..models.jobs import DownloadJobManager, job_to_dict
 from ..models.storage import default_models_root
-from ..core.correlation import bind as bind_correlation, new_id as new_correlation_id
+from ..core.correlation import bind as bind_correlation, current as current_correlation, new_id as new_correlation_id
 from ..core.domain import Principal, RoleTier
+from ..credentials import CredentialStore
 from .application import build_application
 from ..intelligence.intents import MutationProposal
 from .haven_application import Clock, HavenApplication
@@ -78,6 +79,15 @@ from ..identity import LocalIdentityProvider, provision_identity
 from ..scopes.migration import migrate_household_first_installation
 from ..scopes.store import ScopeStore
 from ..application import ProjectService, TaskService
+from ..automation import (
+    AutomationEventFeed,
+    ComputerResourceAutomationEmitter,
+    EmailAutomationEmitter,
+    ProviderHealthAutomationEmitter,
+    ResourceAutomationService,
+    TaskAutomationEmitter,
+)
+from ..automation.persistence import event_to_dict, lifecycle_event_to_dict, rule_to_dict, spec_from_dict
 from ..domains.projects import ProjectStore
 from ..domains.tasks import TaskStore
 from ..extensions import (
@@ -88,11 +98,12 @@ from ..extensions import (
     IntelligenceBoundary,
 )
 from ..graph import Correlator, RelationshipAdmissionPolicy, RelationshipProjector, RelationshipService
-from ..sync import FolderSyncTransport, LocalSyncEngine
+from ..sync import EncryptedFolderSyncTransport, FolderSyncTransport, LocalSyncEngine
 from ..integrations.browser import BrowserHub, BrowserObservationProvider, domain_of
 from ..today import TodayService
 from ..attention import NeedsYouService
-from ..attention.sources import AuthoritySource, KnowledgeSource, ModelSource, ProjectSource, TaskSource
+from ..attention.domain import attention_item_from_projection
+from ..attention.sources import AuthoritySource, KnowledgeSource, ModelSource, ProjectSource, ProviderSource, TaskSource
 from ..integrations.computer.windows import WindowObservationProvider
 from .browser_actions import BrowserActionService
 from .comms_service import CommsService
@@ -120,6 +131,7 @@ _KNOWLEDGE_CLAIM_ACTION_PATH = re.compile(r"^/api/knowledge/claims/([^/]+)/(corr
 _AUTHORING_AUTOMATION_ACTION_PATH = re.compile(r"^/api/automations/([^/]+)/(approve|revoke)$")
 _EXTERNAL_AGENTS_CONNECTION_PATH = re.compile(r"^/api/external-agents/connections/([^/]+)/(enable|revoke|bindings|observed-subjects)$")
 _EXTERNAL_AGENTS_BINDING_REVOKE_PATH = re.compile(r"^/api/external-agents/bindings/([^/]+)/revoke$")
+_RESOURCE_AUTOMATION_PATH = re.compile(r"^/api/resource-automations/([^/]+)/(approve|revoke|enable)$")
 
 _CORRELATION_HEADER = "X-HAVEN-Correlation-ID"
 _CORRELATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -172,6 +184,13 @@ _IPC_METHOD_EVENTS = {
     "automations.enable": "home.state.changed",
     "automations.approve": "home.state.changed",
     "automations.revoke": "home.state.changed",
+    "resource_automations.create": "resource_automations.changed",
+    "resource_automations.approve": "resource_automations.changed",
+    "resource_automations.revoke": "resource_automations.changed",
+    "resource_automations.enable": "resource_automations.changed",
+    "resource_automations.tick": "resource_automations.changed",
+    "needs_you.snooze": "needs_you.changed",
+    "needs_you.dismiss": "needs_you.changed",
     "requests.approve": "authority.pending.changed",
     "requests.deny": "authority.pending.changed",
     "models.download": "models.changed",
@@ -205,6 +224,10 @@ _IPC_METHOD_EVENTS = {
     "calendar.event.confirm": "calendar.changed",
     "calendar.event.deny": "calendar.changed",
     "email.maildir.set": "email.changed",
+    "email.configure": "email.changed",
+    "email.message.send": "email.changed",
+    "email.message.confirm": "email.changed",
+    "email.message.deny": "email.changed",
     "relationships.admit": "relationships.changed",
     "relationships.reject": "relationships.changed",
 }
@@ -314,6 +337,7 @@ class HavenWebServer(ThreadingHTTPServer):
         self.knowledge = KnowledgeService(resources=self.resources, claims=self.claims, clock=clock)
         self.search = HavenSearchService(resources=self.resources, ontology=self.ontology, claims=self.claims)
         self.action_ledger = ActionLedgerStore(Path(resolved_data_dir) / "action_ledger.db")
+        self.credentials = CredentialStore(Path(resolved_data_dir) / "credentials.db")
         # Personal scope (milestone C): the local principal, the personal
         # root scope with the household parented beneath it, and the
         # household-first migration of computer resources/claims into the
@@ -321,6 +345,18 @@ class HavenWebServer(ThreadingHTTPServer):
         # moves rows still scoped to the household id, so steady-state
         # boots are pure reads.
         scope_clock = clock or (lambda: datetime.now(timezone.utc))
+        # Cross-domain automation receives only publisher-stamped, bounded
+        # events. The feed is intentionally separate from the native UI
+        # invalidation publisher: automation consumers need the observed
+        # payload and evidence status, while UI clients need only a domain
+        # changed signal.
+        self.automation_events = AutomationEventFeed(
+            source="haven.web", household_id=self.director.household_id, clock=scope_clock
+        )
+        self.task_automation_events = TaskAutomationEmitter(self.automation_events)
+        self.computer_automation_events = ComputerResourceAutomationEmitter(self.automation_events)
+        self.email_automation_events = EmailAutomationEmitter(self.automation_events)
+        self.provider_health_automation_events = ProviderHealthAutomationEmitter(self.automation_events)
         self.scope_store = ScopeStore(Path(resolved_data_dir) / "scopes.db")
         self.identity, _identity_provisioned = provision_identity(
             data_dir=Path(resolved_data_dir),
@@ -393,6 +429,7 @@ class HavenWebServer(ThreadingHTTPServer):
             ontology=self.ontology,
             clock=scope_clock,
             mutation_listener=_sync_listener,
+            event_listener=self.task_automation_events.changed,
         )
         self.knowledge.set_mutation_listener(_sync_listener)
         self._register_sync_appliers()
@@ -511,6 +548,8 @@ class HavenWebServer(ThreadingHTTPServer):
             tasks_service=self.tasks_service,
             identity=self.identity,
             scope_id=self.identity.personal_scope_id,
+            credential_store=self.credentials,
+            message_event_listener=self.email_automation_events.new_messages,
             clock=scope_clock,
         )
         # Today reads calendar commitments through the comms façade.
@@ -526,6 +565,7 @@ class HavenWebServer(ThreadingHTTPServer):
             include_demo_candidates=self._director_demo,
             resource_store=self.resources,
             knowledge_service=self.knowledge,
+            resource_event_listener=self.computer_automation_events.new_resources,
         )
         # Everyday (post-setup) discovery: real transports only, no demo
         # fixtures -- distinct from `self.setup`'s one-time onboarding scan.
@@ -574,6 +614,32 @@ class HavenWebServer(ThreadingHTTPServer):
             ledger=self.action_ledger,
             clock=clock,
         )
+
+        def _resource_email_dispatch(*, action, resource_id, parameters, justification):
+            if action != "email.message.send":
+                return {"ok": False, "error": f"unsupported email automation action: {action}"}
+            return self.comms.send_message(
+                recipients=parameters.get("recipients"),
+                cc=parameters.get("cc", ()),
+                subject=parameters.get("subject"),
+                body=parameters.get("body"),
+                justification=justification,
+            )
+
+        # Domain-independent resource automations consume the trusted event
+        # feed and dispatch only through already-governed domain services.
+        # The sidecar preserves rules, lifecycle audit events, pending event
+        # deliveries, and scheduler dedup state across restarts.
+        self.resource_automations = ResourceAutomationService(
+            path=Path(resolved_data_dir) / "resource_automations.json",
+            household_id=self.director.household_id,
+            feed=self.automation_events,
+            dispatch={
+                "computer": self.computer_actions.request_action,
+                "email": _resource_email_dispatch,
+            },
+            clock=scope_clock,
+        )
         # Needs You (spec: HAVEN_Needs_You_Temporal_Home_Spec_REFRESHED.docx
         # sections 3-10): a cross-domain projection of conditions that
         # require a human decision. It never mutates a domain itself --
@@ -586,6 +652,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 TaskSource(tasks_store=self.tasks_store, identity=self.identity),
                 ProjectSource(projects_store=self.projects_store, tasks_store=self.tasks_store, identity=self.identity),
                 KnowledgeSource(knowledge=self.knowledge, identity=self.identity),
+                ProviderSource(credentials=self.credentials, identity=self.identity),
             ],
             identity=self.identity,
             state_path=Path(resolved_data_dir) / "needs_you.json",
@@ -594,7 +661,9 @@ class HavenWebServer(ThreadingHTTPServer):
         # Diagnostics reads through the server itself; backups own the
         # `backups/` subtree of the same single-root data dir.
         self._started_monotonic = time.monotonic()
-        self.diagnostics = SystemDiagnostics(server=self)
+        self.diagnostics = SystemDiagnostics(
+            server=self, provider_health_listener=self._on_provider_health_change
+        )
         self.backups = BackupManager(data_dir=Path(resolved_data_dir))
         # Logon-startup management: the launch command is built lazily per
         # call, so the port getter reads the bound port (ephemeral in tests,
@@ -612,6 +681,7 @@ class HavenWebServer(ThreadingHTTPServer):
         # The demo schedules for real: a daemon tick every 20 s asks the
         # runtime which approved rules are due. Stopped in server_close.
         self.director.start_scheduler()
+        self.resource_automations.start()
         # A real always-on voice loop, when native audio and a wake+ASR
         # model pair are available; a no-op (returns False) otherwise, so
         # boot never fails or blocks on missing hardware/models.
@@ -631,6 +701,24 @@ class HavenWebServer(ThreadingHTTPServer):
     def _on_model_job_transition(self, job) -> None:
         state = getattr(job.state, "value", job.state)
         self._emit_event("model.job.progress", job_id=job.job_id, state=state)
+
+    def _on_provider_health_change(self, **kwargs):
+        """Feed provider health into automation and native invalidation.
+
+        The automation emitter deliberately reports only reachability
+        transitions.  Native clients need the same edge-triggered behavior:
+        a repeated probe must not repaint Today/Settings when nothing
+        changed, while a real recovery or outage must invalidate both.
+        """
+
+        event = self.provider_health_automation_events.changed(**kwargs)
+        if event is not None:
+            self._emit_event(
+                "provider.health.changed",
+                provider_id=kwargs.get("provider_id"),
+                reachable=kwargs.get("reachable"),
+            )
+        return event
 
     def _register_sync_appliers(self) -> None:
         from ..domains.projects.models import ProjectRecord
@@ -1299,6 +1387,96 @@ class HavenWebServer(ThreadingHTTPServer):
                 ),
             )
 
+        def _resource_automation_payload() -> dict:
+            return {
+                "ok": True,
+                "automations": [rule_to_dict(rule) for rule in self.resource_automations.rules()],
+                "scheduler": [
+                    {
+                        "rule_id": row.rule_id,
+                        "domain": row.domain,
+                        "action": row.action,
+                        "summary": row.summary,
+                        "enabled": row.enabled,
+                        "due_now": row.due_now,
+                        "next_run_at": row.next_run_at,
+                        "last_fired_at": row.last_fired_at,
+                        "last_outcome": row.last_outcome,
+                    }
+                    for row in self.resource_automations.scheduler_status()
+                ],
+                "pending_events": [event_to_dict(event) for event in self.resource_automations.pending_events()],
+            }
+
+        def _resource_transition_payload(result) -> dict:
+            return {
+                "ok": result.status.value == "allow",
+                "status": result.status.value,
+                "reason": result.reason,
+                "automation": rule_to_dict(result.rule),
+                "audit_event": lifecycle_event_to_dict(result.event),
+            }
+
+        def _resource_principal(*, owner: bool = False) -> Principal:
+            if owner and getattr(self.director, "owner", None) is not None:
+                return self.director.owner
+            return self.identity.current_principal()
+
+        def _resource_automations_create(params: dict) -> dict:
+            rule_id = params.get("rule_id")
+            if not isinstance(rule_id, str) or not rule_id.strip():
+                raise ValueError("a non-empty 'rule_id' is required")
+            raw_spec = params.get("spec")
+            if not isinstance(raw_spec, dict):
+                raise ValueError("a 'spec' object is required")
+            spec = spec_from_dict(raw_spec)
+            rule = self.resource_automations.propose(spec, rule_id=rule_id.strip())
+            return {"ok": True, "automation": rule_to_dict(rule)}
+
+        def _resource_automations_approve(params: dict) -> dict:
+            result = self.resource_automations.approve(
+                params.get("rule_id"),
+                principal=_resource_principal(owner=True),
+                justification=_require_justification(
+                    params.get("justification"), operation="resource automation approval"
+                ),
+            )
+            return _resource_transition_payload(result)
+
+        def _resource_automations_revoke(params: dict) -> dict:
+            result = self.resource_automations.revoke(
+                params.get("rule_id"),
+                principal=_resource_principal(owner=True),
+                justification=_require_justification(
+                    params.get("justification"), operation="resource automation revocation"
+                ),
+            )
+            return _resource_transition_payload(result)
+
+        def _resource_automations_enable(params: dict) -> dict:
+            enabled = params.get("enabled")
+            if not isinstance(enabled, bool):
+                raise ValueError("enabled must be a boolean")
+            result = self.resource_automations.set_enabled(
+                params.get("rule_id"),
+                enabled,
+                principal=_resource_principal(owner=True),
+                justification=_require_justification(
+                    params.get("justification"), operation="resource automation enablement"
+                ),
+            )
+            return _resource_transition_payload(result)
+
+        def _resource_automations_tick(_params: dict) -> dict:
+            outcomes = self.resource_automations.tick()
+            return {
+                "ok": True,
+                "outcomes": [
+                    {"rule_id": item.rule_id, "outcome": item.outcome, "result": item.result}
+                    for item in outcomes
+                ],
+            }
+
         # -- model manager ---------------------------------------------------
         # Every method delegates to the same ModelManager / DownloadJobManager
         # the /api/models* handlers use, and mirrors their envelopes: manager
@@ -1863,6 +2041,32 @@ class HavenWebServer(ThreadingHTTPServer):
                 params.get("path") if isinstance(params.get("path"), str) else None
             )
 
+        def _email_configure(params: dict) -> dict:
+            return self.comms.configure_email(
+                imap_host=params.get("imap_host"),
+                imap_port=params.get("imap_port", 993),
+                smtp_host=params.get("smtp_host"),
+                smtp_port=params.get("smtp_port", 465),
+                username=params.get("username"),
+                secret=params.get("secret"),
+                mailbox=params.get("mailbox", "INBOX"),
+            )
+
+        def _email_send(params: dict) -> dict:
+            return self.comms.send_message(
+                recipients=params.get("recipients"),
+                cc=params.get("cc", ()),
+                subject=params.get("subject"),
+                body=params.get("body"),
+                justification=params.get("justification"),
+            )
+
+        def _email_confirm(params: dict) -> dict:
+            return self.comms.confirm(request_id=params.get("request_id"))
+
+        def _email_deny(params: dict) -> dict:
+            return self.comms.deny(request_id=params.get("request_id"))
+
 
         def _relationships_candidates(_params: dict) -> dict:
             return self.relationships.candidates(visible_scopes=self.identity.visible_scope_ids())
@@ -1915,14 +2119,48 @@ class HavenWebServer(ThreadingHTTPServer):
             regions: dict[str, dict] = {}
             errors: list[dict[str, str]] = []
 
+            def attach_attention_cards(name: str, value: dict) -> dict:
+                enriched = dict(value)
+                existing = value.get("attention_cards")
+                if isinstance(existing, list):
+                    cards = [item for item in existing if isinstance(item, dict)]
+                elif name == "needs_you":
+                    cards = [item for item in value.get("items", []) if isinstance(item, dict)]
+                else:
+                    row_key = {
+                        "tasks": "tasks",
+                        "files": "files",
+                        "activity": "events",
+                        "replies": "replies",
+                    }.get(name)
+                    rows = value.get(row_key, []) if row_key else []
+                    cards = []
+                    if isinstance(rows, list):
+                        for row in rows:
+                            if not isinstance(row, dict):
+                                continue
+                            cards.append(
+                                attention_item_from_projection(
+                                    row,
+                                    region=name,
+                                    scope_id=str(row.get("scope_id") or self.identity.personal_scope_id),
+                                    now=scope_clock(),
+                                ).to_dict()
+                            )
+                if name == "focus" and not cards:
+                    enriched.pop("attention_cards", None)
+                else:
+                    enriched["attention_cards"] = cards
+                return enriched
+
             def read_region(name: str, reader) -> None:
                 try:
                     value = reader()
                     if not isinstance(value, dict):
                         raise TypeError("provider returned a non-object result")
-                    regions[name] = value
+                    regions[name] = attach_attention_cards(name, value)
                 except Exception:
-                    regions[name] = {"ok": False, "available": False}
+                    regions[name] = {"ok": False, "available": False, "attention_cards": []}
                     errors.append({"region": name, "message": "Temporarily unavailable"})
 
             read_region("attention", self.today.cards)
@@ -1942,24 +2180,34 @@ class HavenWebServer(ThreadingHTTPServer):
                 pending = self.director.state().get("pending", [])
                 if not isinstance(pending, list):
                     pending = []
-                regions["pending"] = {"ok": True, "count": len(pending)}
+                regions["pending"] = {"ok": True, "count": len(pending), "attention_cards": []}
             except Exception:
-                regions["pending"] = {"ok": False, "available": False}
+                regions["pending"] = {"ok": False, "available": False, "attention_cards": []}
                 errors.append({"region": "pending", "message": "Temporarily unavailable"})
 
             # Reply-tracking is deliberately explicit: an unavailable
             # evidence source is different from an empty inbox.
-            regions["replies"] = {
+            regions["replies"] = attach_attention_cards("replies", {
                 "ok": True,
                 "available": False,
                 "reason": "No reply-tracking evidence source is connected.",
                 "replies": [],
-            }
+            })
+            attention_cards: list[dict] = []
+            seen_attention_ids: set[str] = set()
+            for region in regions.values():
+                for card in region.get("attention_cards", []):
+                    attention_id = card.get("attention_id")
+                    if not isinstance(attention_id, str) or attention_id in seen_attention_ids:
+                        continue
+                    seen_attention_ids.add(attention_id)
+                    attention_cards.append(card)
             return {
                 "ok": True,
                 "snapshot": {
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                     "regions": regions,
+                    "attention_cards": attention_cards,
                     "errors": errors,
                 },
             }
@@ -1984,10 +2232,27 @@ class HavenWebServer(ThreadingHTTPServer):
             auth_key = params.get("auth_key")
             if auth_key is not None and (not isinstance(auth_key, str) or not auth_key.strip()):
                 raise ValueError("auth_key must be a non-empty string when provided")
+            transport_kind = params.get("transport", "folder")
+            if transport_kind not in ("folder", "encrypted_folder"):
+                raise ValueError("transport must be 'folder' or 'encrypted_folder'")
+            if transport_kind == "encrypted_folder" and not isinstance(auth_key, str):
+                raise ValueError("encrypted_folder transport requires auth_key during configuration")
+            try:
+                transport = (
+                    EncryptedFolderSyncTransport(
+                        export_dir=export_dir.strip(),
+                        import_dir=import_dir.strip(),
+                        key=auth_key,
+                    )
+                    if transport_kind == "encrypted_folder"
+                    else FolderSyncTransport(
+                        export_dir=export_dir.strip(), import_dir=import_dir.strip()
+                    )
+                )
+            except (RuntimeError, ValueError) as exc:
+                raise ValueError(str(exc)) from exc
             return self.sync_engine.set_transport(
-                FolderSyncTransport(
-                    export_dir=export_dir.strip(), import_dir=import_dir.strip()
-                ),
+                transport,
                 auth_key=auth_key,
             )
 
@@ -2342,6 +2607,12 @@ class HavenWebServer(ThreadingHTTPServer):
                 "automations.enable": _automations_enable,
                 "automations.approve": _automations_approve,
                 "automations.revoke": _automations_revoke,
+                "resource_automations.list": lambda _params: _resource_automation_payload(),
+                "resource_automations.create": _resource_automations_create,
+                "resource_automations.approve": _resource_automations_approve,
+                "resource_automations.revoke": _resource_automations_revoke,
+                "resource_automations.enable": _resource_automations_enable,
+                "resource_automations.tick": _resource_automations_tick,
                 "models.list": lambda _params: models_payload(self.models),
                 "models.inspect": _models_inspect,
                 "models.download": _models_download,
@@ -2432,6 +2703,10 @@ class HavenWebServer(ThreadingHTTPServer):
                 "email.status": _email_status,
                 "email.messages.list": _email_messages,
                 "email.maildir.set": _email_maildir_set,
+                "email.configure": _email_configure,
+                "email.message.send": _email_send,
+                "email.message.confirm": _email_confirm,
+                "email.message.deny": _email_deny,
             }
 
         # External-agent management handlers are shared verbatim with the web
@@ -2442,9 +2717,13 @@ class HavenWebServer(ThreadingHTTPServer):
         def _with_event(event_name: str, handler):
             def _wrapped(params: dict):
                 # Emit only on success: exceptions propagate to the dispatcher
-                # and must not invalidate a domain that did not change.
+                # and must not invalidate a domain that did not change. Some
+                # governed handlers return an ordinary `{ok: false}` result
+                # for a refused transition instead of raising, so that shape
+                # is also explicitly non-mutating here.
                 result = handler(params)
-                self._emit_event(event_name)
+                if not (isinstance(result, dict) and result.get("ok") is False):
+                    self._emit_event(event_name)
                 return result
 
             return _wrapped
@@ -2558,6 +2837,7 @@ class HavenWebServer(ThreadingHTTPServer):
             ontology=self.ontology,
             clock=self._director_clock or (lambda: datetime.now(timezone.utc)),
             mutation_listener=self._sync_listener,
+            event_listener=self.task_automation_events.changed,
         )
         self.knowledge.set_mutation_listener(self._sync_listener)
         self.windows_provider = WindowObservationProvider(
@@ -2581,10 +2861,12 @@ class HavenWebServer(ThreadingHTTPServer):
             port_getter=lambda: self.server_address[1],
         )
         self.setup.set_resource_store(self.resources)
+        self.setup.set_resource_event_listener(self.computer_automation_events.new_resources)
         self.setup.set_knowledge_service(self.knowledge)
         self.computer_actions.set_director(new)
         self.computer_actions.set_resource_store(self.resources)
         self.computer_actions.set_ledger(self.action_ledger)
+        self.resource_automations.rebind_storage(data_dir / "resource_automations.json")
         # Rebuilt (not just rebound) because every source adapter closes
         # over the collaborators above, all of which are fresh objects
         # after a data-dir move; the on-disk snooze/dismiss state reloads
@@ -2596,6 +2878,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 TaskSource(tasks_store=self.tasks_store, identity=self.identity),
                 ProjectSource(projects_store=self.projects_store, tasks_store=self.tasks_store, identity=self.identity),
                 KnowledgeSource(knowledge=self.knowledge, identity=self.identity),
+                ProviderSource(credentials=self.credentials, identity=self.identity),
             ],
             identity=self.identity,
             state_path=data_dir / "needs_you.json",
@@ -2609,6 +2892,10 @@ class HavenWebServer(ThreadingHTTPServer):
         new.start_voice()
 
     def server_close(self) -> None:
+        try:
+            self.resource_automations.close()
+        except Exception:
+            pass
         try:
             self.events.stop()
         except Exception:
@@ -2819,6 +3106,13 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/api/contexts":
             household = self.setup_service.status()["setup"]["household"]
             self._send_json(200, {"ok": True, "contexts": household.get("contexts", [])})
+        elif path == "/api/email/status":
+            self._send_json(200, self.comms.email_status())
+        elif path == "/api/email/messages":
+            result = self.comms.list_messages()
+            self._send_json(200 if result.get("ok") else 400, result)
+        elif path == "/api/resource-automations":
+            self._call_resource_automations("resource_automations.list", {})
         elif path == "/api/automations":
             self._send_json(200, {"ok": True, "automations": self.director.state()["automations"]})
         elif path == "/api/automations/options":
@@ -3023,6 +3317,12 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/setup" or path.startswith("/api/setup/"):
             self._handle_setup_post(path)
+            return
+        if path.startswith("/api/email/"):
+            self._handle_email_post(path)
+            return
+        if path == "/api/resource-automations" or path == "/api/resource-automations/tick" or _RESOURCE_AUTOMATION_PATH.match(path):
+            self._handle_resource_automation_post(path)
             return
         if path == "/api/computer/actions" or path.startswith("/api/computer/actions/"):
             self._handle_computer_action_post(path)
@@ -3422,6 +3722,76 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "error": "limit must be a positive integer"})
                 return
         self._call_external_agents("external_agents.audit", params)
+
+    def _call_resource_automations(self, method: str, params: dict) -> None:
+        """Serve the shared resource-automation IPC handler over HTTP.
+
+        The compatibility surface supplies only HTTP parsing and status
+        mapping. The dispatcher remains the one validation and governance
+        implementation, and the current HTTP correlation id is retained so a
+        governed computer action records the originating request.
+        """
+
+        request_id = current_correlation() or new_correlation_id()
+        response = self.server.build_ipc_dispatcher()(request_message(request_id, method, params))
+        if response.get("ok"):
+            self._send_json(200, response.get("result", {}))
+        else:
+            self._send_json(400, {"ok": False, "error": response.get("error", "request failed")})
+
+    def _handle_resource_automation_post(self, path: str) -> None:
+        body = self._read_json(optional=True)
+        if body is None:
+            return
+        if path == "/api/resource-automations":
+            method = "resource_automations.create"
+            params = body
+        elif path == "/api/resource-automations/tick":
+            method = "resource_automations.tick"
+            params = body
+        else:
+            match = _RESOURCE_AUTOMATION_PATH.match(path)
+            if match is None:
+                self._send_json(404, {"error": "not found"})
+                return
+            rule_id, action = unquote(match.group(1)), match.group(2)
+            method = f"resource_automations.{action}"
+            params = dict(body)
+            params["rule_id"] = rule_id
+        self._call_resource_automations(method, params)
+
+    def _handle_email_post(self, path: str) -> None:
+        body = self._read_json(optional=True)
+        if body is None:
+            return
+        if path == "/api/email/configure":
+            result = self.server.comms.configure_email(
+                imap_host=body.get("imap_host"),
+                imap_port=body.get("imap_port", 993),
+                smtp_host=body.get("smtp_host"),
+                smtp_port=body.get("smtp_port", 465),
+                username=body.get("username"),
+                secret=body.get("secret"),
+                mailbox=body.get("mailbox", "INBOX"),
+            )
+        elif path == "/api/email/send":
+            result = self.server.comms.send_message(
+                recipients=body.get("recipients"),
+                cc=body.get("cc", ()),
+                subject=body.get("subject"),
+                body=body.get("body"),
+                justification=body.get("justification"),
+            )
+        elif path == "/api/email/confirm":
+            result = self.server.comms.confirm(request_id=body.get("request_id"))
+        elif path == "/api/email/deny":
+            result = self.server.comms.deny(request_id=body.get("request_id"))
+        else:
+            self._send_json(404, {"error": "not found"})
+            return
+        if result.get("ok"):
+            self.server._emit_event("email.changed")  # noqa: SLF001
+        self._send_json(200 if result.get("ok") else 400, result)
 
     def _handle_external_agents_post(self, path: str) -> None:
         body = self._read_json(optional=True)

@@ -16,6 +16,7 @@ from .domain import (
     AttentionStatus,
     Dismissibility,
     RouteRef,
+    attention_item_from_projection,
 )
 from .service import NeedsYouService
 
@@ -28,4 +29,5 @@ __all__ = [
     "Dismissibility",
     "NeedsYouService",
     "RouteRef",
+    "attention_item_from_projection",
 ]

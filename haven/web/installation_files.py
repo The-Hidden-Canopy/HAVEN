@@ -27,6 +27,7 @@ _FIXED_NAMES = (
     "enrolled_devices.json",
     "household.json",
     "rules.json",
+    "resource_automations.json",
     "history.db",
     "resources.db",
     "ontology.db",

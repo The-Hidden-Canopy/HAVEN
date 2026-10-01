@@ -43,6 +43,7 @@ class ActionReceipt:
     decision: AuthorityDecision
     device_result: DeviceResult | None
     event_ids: tuple[str, ...]
+    correlation_id: str | None = None
     # Redacted source block for an externally initiated action (connection,
     # tool, correlation ids -- never tokens or raw subject identifiers).
     # None for every action HAVEN's own surfaces initiate.
@@ -111,6 +112,7 @@ class ActionReceipt:
             },
             "execution": execution,
             "event_ids": list(self.event_ids),
+            "correlation_id": self.correlation_id,
             "outcome": self.outcome,
         }
         if self.external_source is not None:

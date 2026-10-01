@@ -5,6 +5,7 @@ same way `test_today_cards.py` exercises `today.*`."""
 from __future__ import annotations
 
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -81,12 +82,24 @@ def test_snooze_hides_item_and_dismiss_is_refused_for_a_blocker(server) -> None:
     _seed_blocked_task(server)
     source_ref = _dispatch(server, "needs_you.list", {})["result"]["items"][0]["source_ref"]
 
-    refused = _dispatch(server, "needs_you.dismiss", {"source_ref": source_ref})["result"]
-    assert refused["ok"] is False
+    delivered: list[dict] = []
+    unsubscribe = server.events.subscribe(delivered.append)
+    try:
+        refused = _dispatch(server, "needs_you.dismiss", {"source_ref": source_ref})["result"]
+        assert refused["ok"] is False
+        assert not any(frame["event"] == "needs_you.changed" for frame in delivered)
 
-    snoozed = _dispatch(server, "needs_you.snooze", {"source_ref": source_ref})["result"]
-    assert snoozed["ok"] is True
-    assert _dispatch(server, "needs_you.list", {})["result"]["count"] == 0
+        snoozed = _dispatch(server, "needs_you.snooze", {"source_ref": source_ref})["result"]
+        assert snoozed["ok"] is True
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not any(
+            frame["event"] == "needs_you.changed" for frame in delivered
+        ):
+            time.sleep(0.02)
+        assert any(frame["event"] == "needs_you.changed" for frame in delivered)
+        assert _dispatch(server, "needs_you.list", {})["result"]["count"] == 0
+    finally:
+        unsubscribe()
 
 
 def test_snapshot_needs_you_region_matches_needs_you_list(server) -> None:

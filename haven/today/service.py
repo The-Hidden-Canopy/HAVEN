@@ -15,6 +15,8 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from haven.attention.domain import attention_item_from_projection
+
 _GROUP_RANK = {"authority": 0, "deadline": 1, "commitment": 2, "suggestion": 3}
 
 _DEFAULT_CLOCK = lambda: datetime.now(timezone.utc)  # noqa: E731
@@ -74,7 +76,13 @@ class TodayService:
         cards.extend(self._suggestion_cards(visible, now))
         live = [card for card in cards if card["card_id"] not in self._dismissed]
         live.sort(key=lambda card: (_GROUP_RANK[card["group"]], card["at"] or "", card["card_id"]))
-        return {"ok": True, "cards": live, "dismissed_count": len(self._dismissed)}
+        canonical = [self._with_attention(card, region="attention", now=now) for card in live]
+        return {
+            "ok": True,
+            "cards": canonical,
+            "attention_cards": [card["attention"] for card in canonical],
+            "dismissed_count": len(self._dismissed),
+        }
 
     def focus(self) -> dict:
         """The single highest-consequence continuation (spec 18): overdue
@@ -101,7 +109,11 @@ class TodayService:
             reverse=True,
         )
         candidates = overdue + due_today + active_projects
-        return {"ok": True, "item": candidates[0] if candidates else None}
+        item = self._with_attention(candidates[0], region="focus", now=now) if candidates else None
+        result = {"ok": True, "item": item}
+        if item is not None:
+            result["attention_cards"] = [item["attention"]]
+        return result
 
     def upcoming(self, *, limit: int = 6) -> dict:
         """Chronological, bounded, purely time-bound evidence (spec 19) --
@@ -120,7 +132,12 @@ class TodayService:
             if card["card_id"] not in self._dismissed and card["card_id"] != focus_id
         ]
         items.sort(key=lambda c: c["at"])
-        return {"ok": True, "items": items[:limit]}
+        canonical = [self._with_attention(item, region="upcoming", now=now) for item in items[:limit]]
+        return {
+            "ok": True,
+            "items": canonical,
+            "attention_cards": [item["attention"] for item in canonical],
+        }
 
     def dismiss(self, *, card_id: str | None) -> dict:
         if not isinstance(card_id, str) or not card_id.strip():
@@ -131,6 +148,16 @@ class TodayService:
         return {"ok": True, "dismissed": card_id.strip()}
 
     # -- signal collectors ------------------------------------------------------------
+
+    def _with_attention(self, card: dict, *, region: str, now: datetime) -> dict:
+        enriched = dict(card)
+        enriched["attention"] = attention_item_from_projection(
+            enriched,
+            region=region,
+            scope_id=str(enriched.get("scope_id") or self._identity.personal_scope_id),
+            now=now,
+        ).to_dict()
+        return enriched
 
     def _authority_cards(self, now: datetime) -> list[dict]:
         cards = []

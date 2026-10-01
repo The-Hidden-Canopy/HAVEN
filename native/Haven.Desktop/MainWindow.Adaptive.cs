@@ -12,8 +12,8 @@ public sealed partial class MainWindow
 {
     // -- tablet adaptation (spec 06/07/21) -------------------------------------
     // Below ~900px the rail collapses to icons, touch targets grow, the
-    // content padding tightens, and right-pane inspectors stack below their
-    // lists instead of sitting beside them.
+    // content padding tightens, and list/detail surfaces become explicit
+    // drill-in pages instead of forcing a long stacked split onto a tablet.
 
     private const double NarrowWidth = 900;
     private bool _narrow;
@@ -56,14 +56,16 @@ public sealed partial class MainWindow
             : new Microsoft.UI.Xaml.Thickness(30, 16, 30, 24);
 
         // Master-detail splits: wide = list + right inspector; narrow =
-        // stacked single column (list on top, inspector below). Shared by
-        // every list+inspector page (Memory, People) so a new split only
-        // needs one call here, not a copy of this block.
+        // one surface at a time with an explicit back action. Shared by
+        // every list+inspector page so a new split only needs one call here.
         AdaptSplitGrid(MemorySplit, MemoryClaims, MemoryInspector, narrow, wideListHeight: 560, narrowListHeight: 320);
         AdaptSplitGrid(PeopleSplit, PeopleDirectory, PersonInspector, narrow, wideListHeight: 560, narrowListHeight: 320);
         // Search: 60/40 results/inspector (spec 22) rather than the other
         // splits' ~45/55 - the list is the primary surface here.
         AdaptSplitGrid(SearchSplit, SearchResults, SearchInspector, narrow, wideListHeight: 560, narrowListHeight: 320, listStar: 1.5, inspectorStar: 1);
+        ApplyDrillInState(MemoryClaims, MemoryInspector, MemoryBackButton, narrow, HasSelectedItem(MemoryClaims));
+        ApplyDrillInState(PeopleDirectory, PersonInspector, PersonBackButton, narrow, HasSelectedItem(PeopleDirectory));
+        ApplyDrillInState(SearchResults, SearchInspector, SearchBackButton, narrow, HasSelectedItem(SearchResults));
 
         // Project detail: not a list+inspector shape (the left side is the
         // tabbed work area, not a ListView), so it collapses inline rather
@@ -113,6 +115,31 @@ public sealed partial class MainWindow
             Grid.SetColumn(inspector, 1);
         }
     }
+
+    private static bool HasSelectedItem(ListView list) =>
+        list.SelectedItem is ListViewItem item && item.Tag is string tag && !string.IsNullOrWhiteSpace(tag);
+
+    private static void ApplyDrillInState(
+        ListView list, FrameworkElement inspector, Button backButton, bool narrow, bool hasSelection)
+    {
+        if (!narrow)
+        {
+            list.Visibility = Visibility.Visible;
+            inspector.Visibility = Visibility.Visible;
+            backButton.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        list.Visibility = hasSelection ? Visibility.Collapsed : Visibility.Visible;
+        inspector.Visibility = hasSelection ? Visibility.Visible : Visibility.Collapsed;
+        backButton.Visibility = hasSelection ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnMemoryBackClicked(object sender, RoutedEventArgs args) => MemoryClaims.SelectedItem = null;
+
+    private void OnPersonBackClicked(object sender, RoutedEventArgs args) => PeopleDirectory.SelectedItem = null;
+
+    private void OnSearchBackClicked(object sender, RoutedEventArgs args) => SearchResults.SelectedItem = null;
 
     private Grid ShellRoot() => RootGrid();
 

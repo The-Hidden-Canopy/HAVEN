@@ -45,6 +45,10 @@ public sealed partial class MainWindow
         ["browser.tabs.changed"] = new[] { "comms" },
         ["home.state.changed"] = new[] { "home", "authority" },
         ["authority.pending.changed"] = new[] { "home", "authority" },
+        ["external_agents.changed"] = new[] { "settings" },
+        ["resource_automations.changed"] = new[] { "today", "settings" },
+        ["needs_you.changed"] = new[] { "today" },
+        ["provider.health.changed"] = new[] { "today", "settings", "communications", "home" },
         ["models.changed"] = new[] { "models" },
         ["model.job.progress"] = new[] { "models" },
         ["core.shutdown"] = Array.Empty<string>(),
@@ -52,7 +56,7 @@ public sealed partial class MainWindow
 
     private static string[] DomainsForPage(string tag) => tag switch
     {
-        "today" => new[] { "tasks", "projects", "relationships", "comms", "models", "home" },
+        "today" => new[] { "tasks", "projects", "relationships", "comms", "models", "home", "today", "providers", "automations" },
         "tasks" => new[] { "tasks", "projects" },
         "projects" => new[] { "projects", "tasks", "relationships" },
         "people" => new[] { "home", "relationships" },
@@ -62,6 +66,7 @@ public sealed partial class MainWindow
         "home" => new[] { "home", "authority" },
         "models" => new[] { "models" },
         "search" => new[] { "search" },
+        "settings" => new[] { "settings", "providers", "external_agents", "automations" },
         _ => Array.Empty<string>(),
     };
 
@@ -361,6 +366,7 @@ public sealed partial class MainWindow
     private void OnSearchResultSelectionChanged(object sender, SelectionChangedEventArgs args)
     {
         var resourceId = SearchResults.SelectedItem is ListViewItem item ? item.Tag as string : null;
+        ApplyDrillInState(SearchResults, SearchInspector, SearchBackButton, _narrow, resourceId is not null);
         RenderSearchDetail(resourceId is not null && _searchHitsById.TryGetValue(resourceId, out var hit) ? hit : null);
     }
 

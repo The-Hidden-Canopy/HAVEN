@@ -72,11 +72,13 @@ def test_export_shape_and_no_secrets_over_http() -> None:
                 "model_assignments",
                 "event_channel",
                 "recent_receipts",
+                "unified_receipts",
             }
             assert isinstance(export["installation_id"], str) and export["installation_id"]
             assert export["pending_confirmations"] == 0
             assert all(value is None for value in export["model_assignments"].values())
             assert export["recent_receipts"] == []
+            assert export["unified_receipts"] == []
             _assert_no_secret_looking_keys(export)
 
 

@@ -26,11 +26,11 @@ by matching a caller-supplied batch of `AutomationEvent`s against each
 EVENT-triggered rule's `Trigger`/`Selector` parameters. Both paths dispatch
 through the exact same per-domain callable and the exact same outcome
 mapping, so an EVENT-triggered filesystem move is exactly as governed as a
-TIME-triggered one. **No production domain adapter emits an `AutomationEvent`
-yet** -- see `haven/automation/events.py`'s publisher boundary; this engine
-is ready to consume a real feed once one exists (a computer scan noticing a
-new resource, an email poll noticing a new message, a provider health check,
-a task update), not a running subscription to one. Raw events and
+TIME-triggered one. Production adapters in `haven/automation/emitters.py`
+now publish those four event families through the server's bounded feed.
+`ResourceAutomationService` supplies explicit boot/restart wiring: it persists
+pending deliveries and processed-event dedup state, consumes the feed in a
+daemon worker, and ticks time rules on the same worker. Raw events and
 stale/fallback/unavailable evidence are rejected before matching.
 Evidence/deadline/
 external-condition triggers remain unhandled by either method; a rule using
@@ -52,23 +52,18 @@ thing `ResourceActionRequest` keeps as its own field rather than folding
 into the parameter bag); it is extracted before the rest of the bag is
 passed through unchanged.
 
-**Not wired into `HavenApplication`'s boot sequence, native UI, or HTTP/IPC
-surface in this pass.** `SchedulerEngine`'s own wiring (`start_scheduler`'s
-background thread, `run_scheduler_tick`, the web/native automations panel)
-touches a very large, safety-critical file end to end; doing that in the
-same breath as introducing this engine -- with no interactive way in this
-environment to click through the result -- is exactly the kind of
-large-blast-radius change this repo's own convention (see `schema.py`,
-the model proposer, the unified receipt item) deliberately defers to a
-follow-up pass. What exists here is a complete, independently tested engine
-ready for that wiring: construct one, hand it real `AutomationRule`s and a
-real per-domain dispatch map, and `tick()` is a genuine end-to-end pass
-through the real authority pipeline.
+The resource scheduler is composed by `HavenWebServer` rather than by the
+home `HavenApplication`: the service owns the durable sidecar
+`resource_automations.json`, feed worker, restart recovery, periodic tick,
+and IPC lifecycle methods. The native desktop controls and additional domain
+dispatch adapters remain separate follow-up work; the current production map
+contains the governed computer-action adapter only.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import deque
 from datetime import date, datetime, time, timedelta
 from typing import Any, Callable, Iterable, Mapping
 
@@ -256,12 +251,16 @@ class ResourceActionScheduler:
         household_id: str,
         dispatch: Mapping[str, DispatchFn],
         cooldown: timedelta = DEFAULT_COOLDOWN,
+        processed_event_limit: int = 4096,
     ) -> None:
         self._household_id = _require_household_id(household_id)
         if cooldown < timedelta(0):
             raise ValueError("cooldown must not be negative")
+        if isinstance(processed_event_limit, bool) or not isinstance(processed_event_limit, int) or processed_event_limit < 1:
+            raise ValueError("processed_event_limit must be a positive integer")
         self._dispatch = dict(dispatch)
         self._cooldown = cooldown
+        self._processed_event_limit = processed_event_limit
         self._last_fired: dict[str, datetime] = {}
         self._last_outcome: dict[str, str] = {}
         # (rule_id, event_id) pairs already dispatched -- delivery dedup for
@@ -269,6 +268,7 @@ class ResourceActionScheduler:
         # is: in-memory only, lost on restart, matching every other
         # operational-not-durable state this engine already accepts.
         self._processed_events: set[tuple[str, str]] = set()
+        self._processed_event_order: deque[tuple[str, str]] = deque()
 
     @property
     def cooldown(self) -> timedelta:
@@ -277,6 +277,12 @@ class ResourceActionScheduler:
     @property
     def household_id(self) -> str:
         return self._household_id
+
+    @property
+    def dispatchers(self) -> dict[str, DispatchFn]:
+        """A defensive copy of the governed domain dispatch map."""
+
+        return dict(self._dispatch)
 
     def _rule_is_in_scope(self, rule: AutomationRule) -> bool:
         return rule.spec.household_id == self._household_id
@@ -338,6 +344,51 @@ class ResourceActionScheduler:
         self._last_outcome[rule.rule_id] = outcome
         return ResourceScheduleOutcome(rule_id=rule.rule_id, outcome=outcome, result=dict(result))
 
+    def snapshot_state(self) -> dict[str, object]:
+        """Return JSON-safe operational state for a restart boundary."""
+
+        return {
+            "last_fired": {rule_id: value.isoformat() for rule_id, value in self._last_fired.items()},
+            "last_outcome": dict(self._last_outcome),
+            "processed_events": [[rule_id, event_id] for rule_id, event_id in self._processed_event_order],
+        }
+
+    def restore_state(self, payload: Mapping[str, object] | None) -> None:
+        """Restore scheduler memory without replaying or dispatching anything."""
+
+        if not isinstance(payload, Mapping):
+            return
+        raw_fired = payload.get("last_fired", {})
+        if isinstance(raw_fired, Mapping):
+            for rule_id, value in raw_fired.items():
+                if not isinstance(rule_id, str) or not isinstance(value, str):
+                    continue
+                try:
+                    parsed = require_aware_utc(datetime.fromisoformat(value), name="restored scheduler time")
+                except (TypeError, ValueError):
+                    continue
+                self._last_fired[rule_id] = parsed
+        raw_outcome = payload.get("last_outcome", {})
+        if isinstance(raw_outcome, Mapping):
+            self._last_outcome.update(
+                {rule_id: value for rule_id, value in raw_outcome.items() if isinstance(rule_id, str) and isinstance(value, str)}
+            )
+        raw_processed = payload.get("processed_events", ())
+        if isinstance(raw_processed, (list, tuple)):
+            for item in raw_processed:
+                if not isinstance(item, (list, tuple)) or len(item) != 2:
+                    continue
+                rule_id, event_id = item
+                if not isinstance(rule_id, str) or not isinstance(event_id, str):
+                    continue
+                key = (rule_id, event_id)
+                if key in self._processed_events:
+                    continue
+                self._processed_events.add(key)
+                self._processed_event_order.append(key)
+                while len(self._processed_event_order) > self._processed_event_limit:
+                    self._processed_events.discard(self._processed_event_order.popleft())
+
     def tick(self, *, rules: Iterable[AutomationRule], now: datetime) -> list[ResourceScheduleOutcome]:
         """Dispatch every due (`TriggerKind.TIME`) automation through its
         domain's real governed entry point."""
@@ -374,6 +425,9 @@ class ResourceActionScheduler:
                 if not _event_trigger_matches(rule, event):
                     continue
                 self._processed_events.add(dedup_key)
+                self._processed_event_order.append(dedup_key)
+                while len(self._processed_event_order) > self._processed_event_limit:
+                    self._processed_events.discard(self._processed_event_order.popleft())
                 outcomes.append(
                     self._dispatch_rule(
                         rule,

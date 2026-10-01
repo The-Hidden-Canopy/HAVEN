@@ -109,10 +109,12 @@ public sealed partial class MainWindow
         {
             _selectedClaimId = null;
             SetMemoryActionButtons(false);
+            ApplyDrillInState(MemoryClaims, MemoryInspector, MemoryBackButton, _narrow, hasSelection: false);
             return;
         }
         _selectedClaimId = claimId;
         SetMemoryActionButtons(true);
+        ApplyDrillInState(MemoryClaims, MemoryInspector, MemoryBackButton, _narrow, hasSelection: true);
         try
         {
             var result = await _client.GetKnowledgeClaimAsync(claimId);

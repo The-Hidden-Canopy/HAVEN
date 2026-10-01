@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from haven.credentials import CredentialKind, CredentialStore, UnknownCredentialError
 from haven.actions import (
     ActionLedgerEntry,
     ActionLedgerStore,
@@ -25,10 +26,13 @@ from haven.core import correlation
 from haven.core.domain import ConfirmationToken, DecisionStatus, RiskTier
 from haven.integrations.comms import (
     EMAIL_PROVIDER_ID,
+    IMAP_SMTP_PROVIDER_ID,
+    CredentialEmailProvider,
     ICS_PROVIDER_ID,
     CalendarEvent,
     LocalIcsCalendarProvider,
     LocalMaildirProvider,
+    EmailProviderError,
     UnconfiguredEmailProvider,
 )
 from haven.resources.models import ResourceRecord
@@ -59,6 +63,8 @@ class CommsService:
         tasks_service,
         identity,
         scope_id: str,
+        credential_store: CredentialStore | None = None,
+        message_event_listener=None,
         clock=_DEFAULT_CLOCK,
     ) -> None:
         self._config_path = Path(config_path)
@@ -67,6 +73,8 @@ class CommsService:
         self._tasks = tasks_service
         self._identity = identity
         self._scope_id = scope_id
+        self._credentials = credential_store
+        self._message_event_listener = message_event_listener
         self._clock = clock
         self._lock = threading.Lock()
         self._engine = ResourceAuthorityEngine(
@@ -74,6 +82,7 @@ class CommsService:
                 "calendar.event.create": RiskTier.CONFIRMATION_REQUIRED,
                 "calendar.event.update": RiskTier.CONFIRMATION_REQUIRED,
                 "calendar.event.delete": RiskTier.CONFIRMATION_REQUIRED,
+                "email.message.send": RiskTier.CONFIRMATION_REQUIRED,
             }
         )
         self._pending: dict[str, ResourceActionRequest] = {}
@@ -85,14 +94,18 @@ class CommsService:
         try:
             data = json.loads(self._config_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return {"calendar_sources": [], "maildir": None}
+            return {"calendar_sources": [], "maildir": None, "email": None}
         if not isinstance(data, dict):
-            return {"calendar_sources": [], "maildir": None}
+            return {"calendar_sources": [], "maildir": None, "email": None}
+        email_config = data.get("email")
+        if not isinstance(email_config, dict):
+            email_config = None
         return {
             "calendar_sources": [
                 str(item) for item in data.get("calendar_sources", []) if isinstance(item, str)
             ],
             "maildir": data.get("maildir") if isinstance(data.get("maildir"), str) else None,
+            "email": email_config,
         }
 
     def _save_config(self) -> None:
@@ -123,12 +136,82 @@ class CommsService:
             self._save_config()
         return {"ok": True, "maildir": self._config["maildir"]}
 
+    def configure_email(
+        self,
+        *,
+        imap_host: str | None,
+        username: str | None,
+        secret: str | None,
+        imap_port: int = 993,
+        smtp_host: str | None = None,
+        smtp_port: int = 465,
+        mailbox: str = "INBOX",
+    ) -> dict:
+        """Persist only email connection metadata; store the secret in DPAPI."""
+
+        if self._credentials is None:
+            return {"ok": False, "error": "credential storage is unavailable"}
+        if not isinstance(imap_host, str) or not imap_host.strip():
+            return {"ok": False, "error": "a non-empty 'imap_host' is required"}
+        if not isinstance(username, str) or not username.strip():
+            return {"ok": False, "error": "a non-empty 'username' is required"}
+        if not isinstance(secret, str) or not secret:
+            return {"ok": False, "error": "a non-empty email secret is required"}
+        if isinstance(imap_port, bool) or not isinstance(imap_port, int) or not 1 <= imap_port <= 65535:
+            return {"ok": False, "error": "imap_port must be between 1 and 65535"}
+        if isinstance(smtp_port, bool) or not isinstance(smtp_port, int) or not 1 <= smtp_port <= 65535:
+            return {"ok": False, "error": "smtp_port must be between 1 and 65535"}
+        if not isinstance(mailbox, str) or not mailbox.strip():
+            return {"ok": False, "error": "mailbox must be a non-empty string"}
+        credential_id = "comms.email.password"
+        try:
+            self._credentials.rotate(credential_id, new_secret=secret)
+        except UnknownCredentialError:
+            self._credentials.create(
+                credential_id=credential_id,
+                provider=IMAP_SMTP_PROVIDER_ID,
+                account_label=username.strip(),
+                kind=CredentialKind.USER,
+                secret=secret,
+            )
+        self._config["email"] = {
+            "imap_host": imap_host.strip(),
+            "imap_port": imap_port,
+            "smtp_host": (smtp_host.strip() if isinstance(smtp_host, str) and smtp_host.strip() else imap_host.strip()),
+            "smtp_port": smtp_port,
+            "username": username.strip(),
+            "mailbox": mailbox.strip(),
+            "credential_id": credential_id,
+        }
+        self._config["maildir"] = None
+        self._save_config()
+        return {"ok": True, "provider": IMAP_SMTP_PROVIDER_ID, "username": username.strip()}
+
     # -- provider seams ------------------------------------------------------------
 
     def calendar_provider(self) -> LocalIcsCalendarProvider:
         return LocalIcsCalendarProvider(self._config["calendar_sources"])
 
     def email_provider(self):
+        email_config = self._config.get("email")
+        if isinstance(email_config, dict) and self._credentials is not None:
+            credential_id = email_config.get("credential_id")
+            try:
+                metadata = self._credentials.list_metadata(provider=IMAP_SMTP_PROVIDER_ID, include_revoked=False)
+            except Exception:
+                return UnconfiguredEmailProvider(detail="email credential metadata is unavailable")
+            if isinstance(credential_id, str) and credential_id and any(
+                item.credential_id == credential_id for item in metadata
+            ):
+                return CredentialEmailProvider(
+                    imap_host=str(email_config.get("imap_host") or ""),
+                    imap_port=int(email_config.get("imap_port") or 993),
+                    smtp_host=str(email_config.get("smtp_host") or email_config.get("imap_host") or ""),
+                    smtp_port=int(email_config.get("smtp_port") or 465),
+                    username=str(email_config.get("username") or ""),
+                    mailbox=str(email_config.get("mailbox") or "INBOX"),
+                    secret_loader=lambda: self._credentials.get_secret(credential_id),
+                )
         if not self._config["maildir"]:
             return UnconfiguredEmailProvider()
         return LocalMaildirProvider(self._config["maildir"])
@@ -177,10 +260,11 @@ class CommsService:
         }
 
     def email_status(self) -> dict:
-        capabilities = self.email_provider().capabilities()
+        provider = self.email_provider()
+        capabilities = provider.capabilities()
         return {
             "ok": True,
-            "provider": EMAIL_PROVIDER_ID,
+            "provider": getattr(provider, "provider_id", EMAIL_PROVIDER_ID),
             "configured": capabilities.read,
             "capabilities": {
                 "read": capabilities.read,
@@ -204,8 +288,29 @@ class CommsService:
                 "detail": status["detail"],
             }
         provider = self.email_provider()
-        messages = provider.messages(limit=limit)
+        try:
+            messages = provider.messages(limit=limit)
+        except (EmailProviderError, OSError, UnknownCredentialError) as exc:
+            return {
+                "ok": False,
+                "error": str(exc),
+                "provider": status["provider"],
+                "configured": True,
+                "capabilities": status["capabilities"],
+                "detail": "email provider unavailable while reading the mailbox",
+            }
         now = self._clock()
+        if self._message_event_listener is not None:
+            try:
+                self._message_event_listener(
+                    messages,
+                    is_new=lambda message_id: self._resources.get(f"email:{message_id}") is None,
+                    occurred_at=now,
+                )
+            except Exception:
+                # Event consumers are advisory; a mailbox read that
+                # succeeded must remain a successful read if delivery fails.
+                pass
         for message in messages:
             self._resources.save(
                 ResourceRecord(
@@ -242,6 +347,47 @@ class CommsService:
                 for message in messages
             ],
         }
+
+    def send_message(
+        self,
+        *,
+        recipients,
+        subject: str | None,
+        body: str | None,
+        cc=(),
+        justification: str | None = None,
+    ) -> dict:
+        """Request a governed outbound message; the provider sends only after confirmation."""
+
+        if not isinstance(recipients, (list, tuple)) or not recipients:
+            return {"ok": False, "error": "at least one recipient is required"}
+        if any(not isinstance(item, str) or not item.strip() for item in recipients):
+            return {"ok": False, "error": "recipients must be non-empty strings"}
+        if not isinstance(subject, str) or not subject.strip():
+            return {"ok": False, "error": "a non-empty 'subject' is required"}
+        if not isinstance(body, str) or not body.strip():
+            return {"ok": False, "error": "a non-empty 'body' is required"}
+        if not isinstance(cc, (list, tuple)) or any(not isinstance(item, str) or not item.strip() for item in cc):
+            return {"ok": False, "error": "cc must be a list of non-empty strings"}
+        if not isinstance(justification, str) or not justification.strip():
+            return {"ok": False, "error": "email send requires a non-empty justification"}
+        status = self.email_status()
+        if not status["capabilities"]["send"]:
+            return {"ok": False, "error": status["detail"]}
+        message_id = _new_id("outbound")
+        return self._request(
+            "email.message.send",
+            provider_id=IMAP_SMTP_PROVIDER_ID,
+            resource_id=f"email:{message_id}",
+            event_payload={
+                "message_id": message_id,
+                "recipients": [item.strip() for item in recipients],
+                "cc": [item.strip() for item in cc],
+                "subject": subject.strip(),
+                "body": body,
+            },
+            justification=justification.strip(),
+        )
 
     # -- task proposals (never auto-created) -------------------------------------------
 
@@ -362,16 +508,24 @@ class CommsService:
         )
         return {"ok": True}
 
-    def _request(self, action: str, *, event_payload: dict, justification: str) -> dict:
+    def _request(
+        self,
+        action: str,
+        *,
+        event_payload: dict,
+        justification: str,
+        provider_id: str = ICS_PROVIDER_ID,
+        resource_id: str | None = None,
+    ) -> dict:
         principal = self._identity.current_principal()
         now = self._clock()
         request = ResourceActionRequest(
             request_id=_new_id("action"),
             household_id=principal.household_id,
             requested_by=principal.actor_id,
-            provider_id=ICS_PROVIDER_ID,
+            provider_id=provider_id,
             action=action,
-            resource_id=event_resource_id(event_payload["event_id"]),
+            resource_id=resource_id or event_resource_id(event_payload["event_id"]),
             parameters=tuple(sorted((key, json.dumps(value)) for key, value in event_payload.items())),
             justification=justification,
             requested_at=now,
@@ -427,6 +581,21 @@ class CommsService:
 
     def _dispatch(self, request: ResourceActionRequest, decision) -> dict:
         payload = {key: json.loads(value) for key, value in request.parameters}
+        if request.action == "email.message.send":
+            provider = self.email_provider()
+            try:
+                message_id = provider.send(
+                    recipients=tuple(payload["recipients"]),
+                    cc=tuple(payload.get("cc") or ()),
+                    subject=payload["subject"],
+                    body=payload["body"],
+                )
+            except (EmailProviderError, OSError, UnknownCredentialError) as exc:
+                self._record(request, decision, success=False, detail=str(exc))
+                return {"ok": True, "success": False, "detail": str(exc), "message_id": None}
+            self._record(request, decision, success=True, detail="accepted by SMTP provider")
+            return {"ok": True, "success": True, "detail": "accepted by SMTP provider", "message_id": message_id}
+
         provider = self.calendar_provider()
         verified = None
         if request.action == "calendar.event.create":

@@ -87,6 +87,34 @@ def test_cards_ranking_and_contract(server, tmp_path) -> None:
         assert card["evidence_refs"]
 
 
+def test_snapshot_exposes_one_shared_attention_card_contract(server, tmp_path) -> None:
+    _seed(server, tmp_path)
+    snapshot = _dispatch(server, "today.snapshot", {})["result"]["snapshot"]
+    required = {
+        "attention_id",
+        "kind",
+        "title",
+        "why_now",
+        "source_domain",
+        "source_ref",
+        "scope_id",
+        "evidence_refs",
+        "available_actions",
+        "confidence",
+        "consequence_class",
+    }
+
+    assert snapshot["attention_cards"]
+    assert all(required <= set(card) for card in snapshot["attention_cards"])
+    for region_name in ("attention", "focus", "needs_you", "upcoming", "tasks", "files", "activity", "replies"):
+        region = snapshot["regions"][region_name]
+        assert "attention_cards" in region
+        assert all(required <= set(card) for card in region["attention_cards"])
+
+    legacy_card = _dispatch(server, "today.cards", {})["result"]["cards"][0]
+    assert legacy_card["attention"]["attention_id"] == legacy_card["card_id"]
+
+
 def test_pending_authority_outranks_deadlines(server, tmp_path) -> None:
     _seed(server, tmp_path)
     # A failed download job is an authority-group card and must outrank deadlines.

@@ -28,7 +28,7 @@ HOUSEHOLD = "household-1"
 NOW = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
 
 
-def _device_receipt(*, with_execution: bool = True) -> ActionReceipt:
+def _device_receipt(*, with_execution: bool = True, correlation_id: str | None = None) -> ActionReceipt:
     request = ActionRequest(
         request_id="request-1",
         household_id=HOUSEHOLD,
@@ -54,6 +54,7 @@ def _device_receipt(*, with_execution: bool = True) -> ActionReceipt:
         decision=decision,
         device_result=result,
         event_ids=("event-1",),
+        correlation_id=correlation_id,
     )
 
 
@@ -89,8 +90,13 @@ def test_device_receipt_projects_into_the_unified_shape():
     assert unified.execution_attempted is True
     assert unified.execution_success is True
     assert unified.execution_detail == "http_200"
-    assert unified.correlation_id is None  # not wired yet -- see module docstring
+    assert unified.correlation_id is None
     assert unified.recorded_at == NOW
+
+
+def test_device_receipt_projects_its_runtime_correlation_id():
+    unified = from_action_receipt(_device_receipt(correlation_id="request-1"))
+    assert unified.correlation_id == "request-1"
 
 
 def test_device_receipt_with_no_execution_reports_not_attempted():

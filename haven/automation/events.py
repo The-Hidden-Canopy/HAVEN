@@ -8,17 +8,17 @@ Deliberately one generic shape rather than four domain-specific event
 classes: `event_name` plus a `payload` parameter bag (the same
 `tuple[tuple[str, Any], ...]` shape `Trigger`/`Selector`/`ActionTarget`
 already use) lets `ResourceActionScheduler.handle_events` match against it
-generically, and lets a future emitter (a computer scan noticing a new
-resource, an email poll noticing a new message, a provider health check
-noticing a state change, a task update crossing a status boundary) produce
-one without this module needing to know anything about where it came from --
+generically, and lets a computer scan noticing a new resource, an email poll
+noticing a new message, a provider health check noticing a state change, or a
+task update crossing a status boundary produce one without this module
+needing to know anything about where it came from --
 the same open-vocabulary discipline `ResourceActionRequest.action` already
 uses for provider actions.
 
-No production domain adapter emits an `AutomationEvent` yet. The
-`AutomationEventPublisher` added here is the trusted, household-scoped
-construction boundary that a future adapter must receive; a raw event value
-is intentionally ineligible for scheduler execution.
+`AutomationEventPublisher` is the trusted, household-scoped construction
+boundary. `AutomationEventFeed` is the bounded in-process delivery seam that
+production domain adapters use; a raw event value is intentionally ineligible
+for scheduler execution.
 """
 
 from __future__ import annotations
@@ -26,6 +26,8 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
+from collections import deque
+import threading
 from typing import Any, Mapping
 
 from ..core.domain import EvidenceStatus
@@ -97,6 +99,31 @@ class AutomationEvent:
         # Do not hand callers aliases into the event's retained evidence.
         return deepcopy(dict(self.payload))
 
+    @classmethod
+    def restore_published(
+        cls,
+        *,
+        event_id: str,
+        event_name: str,
+        household_id: str,
+        occurred_at: datetime,
+        source: str,
+        payload: Mapping[str, Any] | tuple[tuple[str, Any], ...] = (),
+        evidence_status: EvidenceStatus = EvidenceStatus.OBSERVED,
+    ) -> "AutomationEvent":
+        """Rehydrate a locally persisted publisher-stamped occurrence."""
+
+        return cls(
+            event_id=event_id,
+            event_name=event_name,
+            household_id=household_id,
+            occurred_at=occurred_at,
+            source=source,
+            payload=payload,
+            evidence_status=evidence_status,
+            _publisher_token=_PUBLISHER_TOKEN,
+        )
+
 
 @dataclass(frozen=True)
 class AutomationEventPublisher:
@@ -136,4 +163,82 @@ class AutomationEventPublisher:
         )
 
 
-__all__ = ["AutomationEvent", "AutomationEventPublisher"]
+class AutomationEventFeed:
+    """Bounded delivery seam for trusted domain automation events.
+
+    The feed deliberately stays in-process and bounded. It is a handoff
+    between real observation adapters and a scheduler/consumer owned by the
+    same HAVEN process, not a claim of durable event sourcing. Subscribers
+    receive immutable, publisher-stamped events; a slow or failing consumer
+    cannot break the mutation or observation that produced the event.
+    """
+
+    def __init__(
+        self,
+        *,
+        source: str,
+        household_id: str,
+        clock,
+        max_events: int = 256,
+    ) -> None:
+        if isinstance(max_events, bool) or not isinstance(max_events, int) or max_events < 1:
+            raise ValueError("max_events must be a positive integer")
+        self._publisher = AutomationEventPublisher(source=source, household_id=household_id)
+        self._clock = clock
+        self._events: deque[AutomationEvent] = deque(maxlen=max_events)
+        self._listeners: list = []
+        self._lock = threading.Lock()
+
+    @property
+    def household_id(self) -> str:
+        return self._publisher.household_id
+
+    def subscribe(self, listener) -> None:
+        if not callable(listener):
+            raise TypeError("listener must be callable")
+        with self._lock:
+            if listener not in self._listeners:
+                self._listeners.append(listener)
+
+    def unsubscribe(self, listener) -> None:
+        with self._lock:
+            if listener in self._listeners:
+                self._listeners.remove(listener)
+
+    def publish(
+        self,
+        *,
+        event_id: str,
+        event_name: str,
+        occurred_at: datetime | None = None,
+        payload: Mapping[str, Any] | tuple[tuple[str, Any], ...] = (),
+        evidence_status: EvidenceStatus = EvidenceStatus.OBSERVED,
+    ) -> AutomationEvent:
+        event = self._publisher.publish(
+            event_id=event_id,
+            event_name=event_name,
+            occurred_at=occurred_at if occurred_at is not None else self._clock(),
+            payload=payload,
+            evidence_status=evidence_status,
+        )
+        with self._lock:
+            self._events.append(event)
+            listeners = tuple(self._listeners)
+        for listener in listeners:
+            try:
+                listener(event)
+            except Exception:
+                # Event delivery is advisory to the producing domain. A
+                # scheduler failure must never roll back a task/file/mail
+                # observation or mutation that already happened.
+                continue
+        return event
+
+    def recent(self, *, limit: int = 100) -> tuple[AutomationEvent, ...]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        with self._lock:
+            return tuple(self._events)[-limit:]
+
+
+__all__ = ["AutomationEvent", "AutomationEventFeed", "AutomationEventPublisher"]
