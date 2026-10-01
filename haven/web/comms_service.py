@@ -9,7 +9,10 @@ never auto-created (spec page 32).
 from __future__ import annotations
 
 import json
+import hashlib
+import math
 import threading
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -31,7 +34,10 @@ from haven.integrations.comms import (
     CredentialEmailProvider,
     ICS_PROVIDER_ID,
     CalendarEvent,
+    CompositeCalendarProvider,
     LocalIcsCalendarProvider,
+    REMOTE_ICS_PROVIDER_ID,
+    RemoteIcsCalendarProvider,
     LocalMaildirProvider,
     EmailProviderError,
     UnconfiguredEmailProvider,
@@ -95,16 +101,37 @@ class CommsService:
         try:
             data = json.loads(self._config_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return {"calendar_sources": [], "maildir": None, "email": None}
+            return {"calendar_sources": [], "calendar_remotes": [], "maildir": None, "email": None}
         if not isinstance(data, dict):
-            return {"calendar_sources": [], "maildir": None, "email": None}
+            return {"calendar_sources": [], "calendar_remotes": [], "maildir": None, "email": None}
         email_config = data.get("email")
         if not isinstance(email_config, dict):
             email_config = None
+        calendar_remotes = []
+        for item in data.get("calendar_remotes", []):
+            if not isinstance(item, dict):
+                continue
+            url = item.get("url")
+            credential_id = item.get("credential_id")
+            if isinstance(url, str) and url.strip() and isinstance(credential_id, str) and credential_id.strip():
+                try:
+                    timeout = float(item.get("timeout") or 10.0)
+                except (TypeError, ValueError):
+                    timeout = 10.0
+                calendar_remotes.append(
+                    {
+                        "url": url.strip(),
+                        "username": str(item.get("username") or "").strip(),
+                        "auth_mode": str(item.get("auth_mode") or "bearer"),
+                        "credential_id": credential_id.strip(),
+                        "timeout": timeout,
+                    }
+                )
         return {
             "calendar_sources": [
                 str(item) for item in data.get("calendar_sources", []) if isinstance(item, str)
             ],
+            "calendar_remotes": calendar_remotes,
             "maildir": data.get("maildir") if isinstance(data.get("maildir"), str) else None,
             "email": email_config,
         }
@@ -130,6 +157,100 @@ class CommsService:
                 ]
                 self._save_config()
         return {"ok": True, "calendar_sources": list(self._config["calendar_sources"])}
+
+    def configure_calendar(
+        self,
+        *,
+        url: str | None,
+        secret: str | None,
+        username: str = "",
+        auth_mode: str = "bearer",
+        timeout: float = 10.0,
+    ) -> dict:
+        """Persist remote-feed metadata and its secret by credential reference."""
+
+        if self._credentials is None:
+            return {"ok": False, "error": "credential storage is unavailable"}
+        if not isinstance(url, str) or not url.strip():
+            return {"ok": False, "error": "a non-empty 'url' is required"}
+        try:
+            parsed = urllib.parse.urlparse(url.strip())
+        except ValueError:
+            parsed = None
+        if parsed is None or parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return {"ok": False, "error": "url must use http or https"}
+        if not isinstance(secret, str) or not secret:
+            return {"ok": False, "error": "a non-empty calendar secret is required"}
+        if not isinstance(username, str):
+            return {"ok": False, "error": "username must be a string"}
+        if auth_mode not in {"bearer", "basic"}:
+            return {"ok": False, "error": "auth_mode must be 'bearer' or 'basic'"}
+        if auth_mode == "basic" and (not isinstance(username, str) or not username.strip()):
+            return {"ok": False, "error": "username is required for basic authentication"}
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(float(timeout))
+            or not 0 < float(timeout) <= 60
+        ):
+            return {"ok": False, "error": "timeout must be between 0 and 60 seconds"}
+        normalized_url = url.strip()
+        credential_base = "comms.calendar." + hashlib.sha256(normalized_url.encode("utf-8")).hexdigest()[:24]
+        try:
+            metadata = self._credentials.list_metadata(provider=REMOTE_ICS_PROVIDER_ID, include_revoked=True)
+            active = next((item for item in metadata if item.credential_id == credential_base and not item.revoked), None)
+            credential_id = credential_base if active is not None else credential_base
+            if any(item.credential_id == credential_base and item.revoked for item in metadata):
+                credential_id = credential_base + "." + uuid4().hex[:8]
+            if active is not None:
+                self._credentials.rotate(credential_id, new_secret=secret)
+            else:
+                self._credentials.create(
+                    credential_id=credential_id,
+                    provider=REMOTE_ICS_PROVIDER_ID,
+                    account_label=(username.strip() or normalized_url),
+                    kind=CredentialKind.USER,
+                    secret=secret,
+                )
+        except Exception as exc:
+            return {"ok": False, "error": f"calendar credential could not be stored: {exc}"}
+        self._config["calendar_remotes"] = [
+            item for item in self._config["calendar_remotes"] if item.get("url") != normalized_url
+        ]
+        self._config["calendar_remotes"].append(
+            {
+                "url": normalized_url,
+                "username": username.strip(),
+                "auth_mode": auth_mode,
+                "credential_id": credential_id,
+                "timeout": float(timeout),
+            }
+        )
+        self._save_config()
+        return {
+            "ok": True,
+            "provider": REMOTE_ICS_PROVIDER_ID,
+            "url": normalized_url,
+            "auth_mode": auth_mode,
+        }
+
+    def remove_calendar_remote(self, url: str) -> dict:
+        if not isinstance(url, str) or not url.strip():
+            return {"ok": False, "error": "a non-empty 'url' is required"}
+        normalized_url = url.strip()
+        removed = [item for item in self._config["calendar_remotes"] if item.get("url") == normalized_url]
+        self._config["calendar_remotes"] = [
+            item for item in self._config["calendar_remotes"] if item.get("url") != normalized_url
+        ]
+        for item in removed:
+            credential_id = item.get("credential_id")
+            if self._credentials is not None and isinstance(credential_id, str):
+                try:
+                    self._credentials.revoke(credential_id)
+                except UnknownCredentialError:
+                    pass
+        self._save_config()
+        return {"ok": True, "calendar_remotes": self._calendar_remote_wire()}
 
     def set_maildir(self, path: str | None) -> dict:
         with self._lock:
@@ -190,17 +311,95 @@ class CommsService:
 
     # -- provider seams ------------------------------------------------------------
 
-    def calendar_provider(self) -> LocalIcsCalendarProvider:
-        return LocalIcsCalendarProvider(self._config["calendar_sources"])
+    def _calendar_remote_wire(self) -> list[dict]:
+        return [
+            {
+                "url": item["url"],
+                "username": item.get("username", ""),
+                "auth_mode": item.get("auth_mode", "bearer"),
+                "timeout": item.get("timeout", 10.0),
+            }
+            for item in self._config["calendar_remotes"]
+        ]
+
+    def _calendar_remote_providers(self) -> tuple[RemoteIcsCalendarProvider, ...]:
+        if self._credentials is None:
+            return ()
+        try:
+            metadata = self._credentials.list_metadata(provider=REMOTE_ICS_PROVIDER_ID, include_revoked=False)
+        except Exception:
+            return ()
+        active = {item.credential_id for item in metadata}
+        providers = []
+        for item in self._config["calendar_remotes"]:
+            credential_id = item.get("credential_id")
+            if credential_id not in active:
+                continue
+            try:
+                providers.append(
+                    RemoteIcsCalendarProvider(
+                        url=item["url"],
+                        username=item.get("username", ""),
+                        auth_mode=item.get("auth_mode", "bearer"),
+                        timeout=item.get("timeout", 10.0),
+                        secret_loader=lambda credential_id=credential_id: self._credentials.get_secret(credential_id),
+                    )
+                )
+            except ValueError:
+                continue
+        return tuple(providers)
+
+    def calendar_provider(self) -> CompositeCalendarProvider:
+        return CompositeCalendarProvider(
+            LocalIcsCalendarProvider(self._config["calendar_sources"]),
+            self._calendar_remote_providers(),
+        )
+
+    def calendar_status(self, *, errors: tuple[str, ...] = ()) -> dict:
+        configured_remotes = self._config["calendar_remotes"]
+        try:
+            active_remote_ids = {
+                item.credential_id
+                for item in (
+                    self._credentials.list_metadata(provider=REMOTE_ICS_PROVIDER_ID, include_revoked=False)
+                    if self._credentials
+                    else ()
+                )
+            }
+        except Exception:
+            active_remote_ids = set()
+        sources = [
+            {"kind": "local_ics", "source": path, "configured": True, "read": True, "mutate": True}
+            for path in self._config["calendar_sources"]
+        ]
+        for item in configured_remotes:
+            credential_available = item["credential_id"] in active_remote_ids
+            sources.append(
+                {
+                    "kind": "remote_ics",
+                    "source": item["url"],
+                    "configured": credential_available,
+                    "read": credential_available,
+                    "mutate": False,
+                    "detail": "credential reference is unavailable" if not credential_available else "reachability checked on read",
+                }
+            )
+        return {
+            "ok": True,
+            "configured": bool(sources),
+            "provider": REMOTE_ICS_PROVIDER_ID if configured_remotes and not self._config["calendar_sources"] else ICS_PROVIDER_ID,
+            "sources": sources,
+            "errors": list(errors),
+            "detail": "one or more calendar sources are unavailable" if errors else "calendar sources are configured",
+        }
 
     def automation_deadlines(self, *, household_id: str) -> tuple[AutomationDeadline, ...]:
-        """Project authoritative local-calendar starts into the automation seam.
+        """Project authoritative calendar starts into the automation seam.
 
-        The ICS adapter is a read-through provider: every observation comes
-        from the configured source file at projection time and is marked
-        observed. Missing or unreadable files produce no runnable signal. A
-        credentialed remote-calendar adapter remains a separate deployment
-        boundary and is intentionally not implied by this local projection.
+        Local files and credentialed remote feeds are read through at
+        projection time and marked observed. Missing, unreadable, unreachable,
+        or credential-unavailable sources produce no runnable signal; source
+        health is published separately by ``calendar.status``.
         """
 
         seen: dict[str, CalendarEvent] = {}
@@ -261,7 +460,7 @@ class CommsService:
                     resource_id=event_resource_id(event.event_id),
                     resource_type="calendar_event",
                     scope_id=self._scope_id,
-                    provider_id=ICS_PROVIDER_ID,
+                    provider_id=event.provider_id,
                     title=event.title,
                     locator=None,
                     capabilities=(),
@@ -278,6 +477,8 @@ class CommsService:
         return {
             "ok": True,
             "sources": list(provider.paths),
+            "status": self.calendar_status(errors=provider.errors),
+            "source_errors": list(provider.errors),
             "events": [
                 {
                     "event_id": event.event_id,
@@ -490,6 +691,8 @@ class CommsService:
         event = provider.get(event_id.strip()) if isinstance(event_id, str) else None
         if event is None:
             return {"ok": False, "error": f"unknown calendar event: {event_id}"}
+        if event.provider_id != ICS_PROVIDER_ID:
+            return {"ok": False, "error": "remote calendar events are read-only"}
         updated = CalendarEvent(
             event_id=event.event_id,
             title=str(changes.get("title") or event.title),
@@ -518,6 +721,8 @@ class CommsService:
         event = provider.get(event_id.strip()) if isinstance(event_id, str) else None
         if event is None:
             return {"ok": False, "error": f"unknown calendar event: {event_id}"}
+        if event.provider_id != ICS_PROVIDER_ID:
+            return {"ok": False, "error": "remote calendar events are read-only"}
         return self._request(
             "calendar.event.delete",
             event_payload={"event_id": event.event_id},

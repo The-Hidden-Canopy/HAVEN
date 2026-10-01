@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from haven.integrations.browser import BrowserCommandResult, BrowserTabSnapshot
+from haven.integrations.comms import RemoteIcsCalendarProvider
 from haven.ipc import request_message
 from haven.web.server import make_server
 
@@ -283,3 +284,92 @@ def test_credentialed_email_configuration_uses_store_and_governed_send(server, m
         "detail": "accepted by SMTP provider",
         "message_id": "<sent@example.org>",
     }
+
+
+def test_credentialed_remote_calendar_configuration_is_metadata_only(server, monkeypatch) -> None:
+    instance, _commands = server
+    # The provider contract is about reference-only configuration; keep this
+    # IPC test independent of the host's DPAPI profile while the credential
+    # store's dedicated test covers the real Windows mechanism.
+    monkeypatch.setattr(instance.credentials, "_protect", lambda value: b"protected:" + value)
+    configured = _dispatch(
+        instance,
+        "calendar.remote.configure",
+        {
+            "url": "https://calendar.example.org/private.ics",
+            "secret": "calendar-token",
+            "auth_mode": "bearer",
+        },
+    )["result"]
+    assert configured == {
+        "ok": True,
+        "provider": "haven.calendar.ics_remote",
+        "url": "https://calendar.example.org/private.ics",
+        "auth_mode": "bearer",
+    }
+
+    config_text = (instance.setup_store.path.parent / "comms.json").read_text(encoding="utf-8")
+    assert "calendar-token" not in config_text
+    metadata = instance.credentials.list_metadata(provider="haven.calendar.ics_remote")
+    assert len(metadata) == 1
+    assert not hasattr(metadata[0], "secret")
+
+    status = _dispatch(instance, "calendar.status", {})["result"]
+    assert status["configured"] is True
+    assert status["sources"][0]["kind"] == "remote_ics"
+    assert status["sources"][0]["read"] is True
+    assert status["sources"][0]["mutate"] is False
+
+    removed = _dispatch(
+        instance,
+        "calendar.remote.remove",
+        {"url": "https://calendar.example.org/private.ics"},
+    )["result"]
+    assert removed["ok"] is True
+    assert removed["calendar_remotes"] == []
+    assert instance.credentials.list_metadata(provider="haven.calendar.ics_remote", include_revoked=False) == ()
+
+
+def test_remote_calendar_events_project_into_deadlines_and_fail_closed(server, monkeypatch) -> None:
+    instance, _commands = server
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return ICS.encode("utf-8")
+
+    provider = RemoteIcsCalendarProvider(
+        url="https://calendar.example.org/private.ics",
+        secret_loader=lambda: "calendar-token",
+        opener=lambda _request, *, timeout: FakeResponse(),
+    )
+    monkeypatch.setattr(instance.comms, "_calendar_remote_providers", lambda: (provider,))
+
+    listed = instance.comms.list_events()
+    assert listed["source_errors"] == []
+    assert listed["events"][0]["event_id"] == "evt-1"
+    deadlines = instance.comms.automation_deadlines(household_id=instance.director.household_id)
+    assert [item.deadline_id for item in deadlines] == ["calendar:evt-1"]
+    assert all(item.payload[2] == ("provider_id", "haven.calendar.ics_remote") for item in deadlines)
+
+    # A provider transport error is represented as an empty remote projection;
+    # the real provider converts network failures to CalendarProviderError and
+    # the composite records the source as unavailable.
+    def unavailable_opener(_request, *, timeout):
+        raise OSError("offline")
+
+    unavailable = RemoteIcsCalendarProvider(
+        url="https://calendar.example.org/private.ics",
+        secret_loader=lambda: "calendar-token",
+        opener=unavailable_opener,
+    )
+    monkeypatch.setattr(instance.comms, "_calendar_remote_providers", lambda: (unavailable,))
+    degraded = instance.comms.list_events()
+    assert degraded["events"] == []
+    assert degraded["status"]["errors"]
+    assert instance.comms.automation_deadlines(household_id=instance.director.household_id) == ()

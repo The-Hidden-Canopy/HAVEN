@@ -597,7 +597,9 @@
                             <Button Content="›" Click="OnCalendarNextWeekClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
                             <Button Content="Today" Click="OnCalendarTodayClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
                             <Button Content="Add .ics file…" Click="OnAddIcsClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
+                            <Button Content="Connect remote iCalendar…" Click="OnRemoteCalendarClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
                         </StackPanel>
+                        <TextBlock x:Name="CalendarSourceStatusText" Style="{StaticResource HavenMetadataTextStyle}" TextWrapping="Wrap" />
                         <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                             <StackPanel x:Name="CalendarWeekGrid" Orientation="Horizontal" Spacing="8" />
                         </ScrollViewer>
