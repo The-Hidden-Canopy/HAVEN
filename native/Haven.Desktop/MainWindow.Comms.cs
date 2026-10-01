@@ -15,6 +15,7 @@ public sealed partial class MainWindow
     private string _commsTab = "email";
 
     private readonly Dictionary<string, JsonElement> _emailMessagesById = new();
+    private bool _emailCanMutate;
 
     private async void OnCommsRefreshClicked(object sender, RoutedEventArgs args)
     {
@@ -229,8 +230,11 @@ public sealed partial class MainWindow
             var canSend = capabilities.ValueKind == JsonValueKind.Object
                 && capabilities.TryGetProperty("send", out var send)
                 && send.ValueKind == JsonValueKind.True;
+            _emailCanMutate = capabilities.ValueKind == JsonValueKind.Object
+                && capabilities.TryGetProperty("mutate", out var mutate)
+                && mutate.ValueKind == JsonValueKind.True;
             EmailConnectionText.Text = configured
-                ? $"Connected: {GetString(status, "provider")} ({(canSend ? "read + send" : "read-only")})"
+                ? $"Connected: {GetString(status, "provider")} ({(canSend ? "read + send" : "read-only")}{(_emailCanMutate ? " + delete" : "")})"
                 : $"Not connected: {GetString(status, "detail") ?? "no email provider configured"}";
             EmailFolderButton.Content = configured ? "Change mail folder…" : "Connect a mail folder…";
 
@@ -324,6 +328,88 @@ public sealed partial class MainWindow
             Style = (Style)Application.Current.Resources["HavenBodyTextStyle"],
             TextWrapping = TextWrapping.Wrap,
         });
+        if (_emailCanMutate)
+        {
+            var messageId = GetString(m, "message_id") ?? "";
+            var delete = new Button
+            {
+                Content = "Delete from mailbox…",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Style = (Style)Application.Current.Resources["HavenDangerButtonStyle"],
+            };
+            delete.Click += async (_, _) => await DeleteEmailMessageAsync(messageId, GetString(m, "subject") ?? "(no subject)");
+            EmailDetail.Children.Add(delete);
+        }
+    }
+
+    private async Task DeleteEmailMessageAsync(string messageId, string subject)
+    {
+        if (_client is null || string.IsNullOrWhiteSpace(messageId))
+        {
+            return;
+        }
+        var justification = await PromptForJustificationAsync(
+            "Delete this email?",
+            $"HAVEN will request deletion of \"{subject}\" from the connected mailbox. The local read-only maildir path never exposes this action.",
+            "Why should this email be deleted?",
+            "Request delete");
+        if (justification is null)
+        {
+            return;
+        }
+        try
+        {
+            var pending = await _client.DeleteEmailMessageAsync(messageId, justification);
+            if (pending.ValueKind == JsonValueKind.Object
+                && pending.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                CommsErrorText.Text = GetString(pending, "error") ?? "HAVEN Core refused the email deletion.";
+                return;
+            }
+            if (GetString(pending, "status") != "confirmation_required")
+            {
+                CommsStatusText.Text = "Done.";
+                await LoadCommsTabAsync();
+                return;
+            }
+            var requestId = GetString(pending, "request_id");
+            if (string.IsNullOrWhiteSpace(requestId))
+            {
+                CommsErrorText.Text = "HAVEN returned a confirmation request without an id.";
+                return;
+            }
+            var confirm = new ContentDialog
+            {
+                Title = "Confirm email deletion",
+                Content = $"Delete \"{subject}\" from the connected mailbox? This cannot be undone by HAVEN.",
+                PrimaryButtonText = "Delete",
+                CloseButtonText = "Cancel",
+                XamlRoot = RootGrid().XamlRoot,
+            };
+            if (await confirm.ShowAsync() == ContentDialogResult.Primary)
+            {
+                var result = await _client.ConfirmEmailMessageAsync(requestId);
+                if (result.ValueKind == JsonValueKind.Object
+                    && result.TryGetProperty("ok", out var confirmedOk)
+                    && !confirmedOk.GetBoolean())
+                {
+                    CommsErrorText.Text = GetString(result, "error") ?? "HAVEN Core refused the confirmation.";
+                    return;
+                }
+                CommsStatusText.Text = "Email deleted and verified.";
+                await LoadCommsTabAsync();
+            }
+            else
+            {
+                await _client.DenyEmailMessageAsync(requestId);
+                CommsStatusText.Text = "Email deletion cancelled.";
+            }
+        }
+        catch (Exception ex)
+        {
+            CommsErrorText.Text = ex.Message;
+        }
     }
 
     private async void OnEmailFolderClicked(object sender, RoutedEventArgs args)

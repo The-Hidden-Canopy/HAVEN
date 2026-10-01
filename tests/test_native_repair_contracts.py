@@ -84,6 +84,17 @@ def test_discover_surfaces_transport_readiness_instead_of_claiming_bluetooth_sca
     assert "Scanning nearby WiFi (SSDP + mDNS) and Bluetooth" not in discover
 
 
+def test_native_email_delete_stays_confirmation_gated_and_provider_scoped():
+    client = (NATIVE / "Services" / "HavenCoreClient.cs").read_text(encoding="utf-8")
+    comms = (NATIVE / "MainWindow.Comms.cs").read_text(encoding="utf-8")
+    assert 'RequestResultAsync("email.message.delete"' in client
+    assert 'RequestResultAsync("email.message.confirm"' in client
+    assert 'RequestResultAsync("email.message.deny"' in client
+    assert "Delete from mailbox" in comms
+    assert "confirmation_required" in comms
+    assert "_emailCanMutate" in comms
+
+
 def test_native_settings_projects_the_support_safe_unified_receipt_export():
     system = (NATIVE / "MainWindow.System.cs").read_text(encoding="utf-8")
     xaml = (NATIVE / "MainWindow.xaml").read_text(encoding="utf-8")

@@ -90,6 +90,7 @@ class CommsService:
                 "calendar.event.update": RiskTier.CONFIRMATION_REQUIRED,
                 "calendar.event.delete": RiskTier.CONFIRMATION_REQUIRED,
                 "email.message.send": RiskTier.CONFIRMATION_REQUIRED,
+                "email.message.delete": RiskTier.CONFIRMATION_REQUIRED,
             }
         )
         self._pending: dict[str, ResourceActionRequest] = {}
@@ -618,6 +619,29 @@ class CommsService:
             justification=justification.strip(),
         )
 
+    def delete_message(self, *, message_id: str | None, justification: str | None = None) -> dict:
+        """Request a governed remote-mailbox deletion.
+
+        A local maildir is intentionally read-only; only a provider that
+        explicitly advertises ``mutate`` can reach this action path.
+        """
+
+        if not isinstance(message_id, str) or not message_id.strip():
+            return {"ok": False, "error": "a non-empty 'message_id' is required"}
+        if not isinstance(justification, str) or not justification.strip():
+            return {"ok": False, "error": "email delete requires a non-empty justification"}
+        status = self.email_status()
+        if not status["capabilities"]["mutate"]:
+            return {"ok": False, "error": status["detail"]}
+        normalized_id = message_id.strip()
+        return self._request(
+            "email.message.delete",
+            provider_id=IMAP_SMTP_PROVIDER_ID,
+            resource_id=f"email:{normalized_id.strip('<>')}",
+            event_payload={"message_id": normalized_id},
+            justification=justification.strip(),
+        )
+
     # -- task proposals (never auto-created) -------------------------------------------
 
     def propose_task(self, *, event_id: str | None, visible) -> dict:
@@ -828,6 +852,25 @@ class CommsService:
                 return {"ok": True, "success": False, "detail": str(exc), "message_id": None}
             self._record(request, decision, success=True, detail="accepted by SMTP provider")
             return {"ok": True, "success": True, "detail": "accepted by SMTP provider", "message_id": message_id}
+
+        if request.action == "email.message.delete":
+            provider = self.email_provider()
+            delete = getattr(provider, "delete", None)
+            if not callable(delete):
+                detail = "email provider advertises mutation but has no delete operation"
+                self._record(request, decision, success=False, detail=detail)
+                return {"ok": True, "success": False, "detail": detail, "message_id": payload["message_id"]}
+            try:
+                deleted = delete(payload["message_id"])
+            except (EmailProviderError, OSError, UnknownCredentialError) as exc:
+                self._record(request, decision, success=False, detail=str(exc))
+                return {"ok": True, "success": False, "detail": str(exc), "message_id": payload["message_id"]}
+            success = deleted is True
+            detail = "deleted and verified by IMAP provider" if success else "message was not found"
+            self._record(request, decision, success=success, detail=detail)
+            if success:
+                self._resources.mark_stale(request.resource_id)
+            return {"ok": True, "success": success, "detail": detail, "message_id": payload["message_id"]}
 
         provider = self.calendar_provider()
         verified = None

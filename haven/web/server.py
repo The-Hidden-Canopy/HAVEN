@@ -233,6 +233,7 @@ _IPC_METHOD_EVENTS = {
     "email.maildir.set": "email.changed",
     "email.configure": "email.changed",
     "email.message.send": "email.changed",
+    "email.message.delete": "email.changed",
     "email.message.confirm": "email.changed",
     "email.message.deny": "email.changed",
     "relationships.admit": "relationships.changed",
@@ -634,6 +635,10 @@ class HavenWebServer(ThreadingHTTPServer):
         )
 
         def _resource_email_dispatch(*, action, resource_id, parameters, justification):
+            if action == "email.message.delete":
+                return self.comms.delete_message(
+                    message_id=parameters.get("message_id"), justification=justification
+                )
             if action != "email.message.send":
                 return {"ok": False, "error": f"unsupported email automation action: {action}"}
             return self.comms.send_message(
@@ -1471,7 +1476,7 @@ class HavenWebServer(ThreadingHTTPServer):
                         },
                         {
                             "domain": "email",
-                            "actions": ["email.message.send"],
+                            "actions": ["email.message.send", "email.message.delete"],
                         },
                     ],
                 }
@@ -2145,6 +2150,11 @@ class HavenWebServer(ThreadingHTTPServer):
                 justification=params.get("justification"),
             )
 
+        def _email_delete(params: dict) -> dict:
+            return self.comms.delete_message(
+                message_id=params.get("message_id"), justification=params.get("justification")
+            )
+
         def _email_confirm(params: dict) -> dict:
             return self.comms.confirm(request_id=params.get("request_id"))
 
@@ -2801,6 +2811,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 "email.maildir.set": _email_maildir_set,
                 "email.configure": _email_configure,
                 "email.message.send": _email_send,
+                "email.message.delete": _email_delete,
                 "email.message.confirm": _email_confirm,
                 "email.message.deny": _email_deny,
             }
@@ -3879,6 +3890,10 @@ class _Handler(BaseHTTPRequestHandler):
                 subject=body.get("subject"),
                 body=body.get("body"),
                 justification=body.get("justification"),
+            )
+        elif path == "/api/email/delete":
+            result = self.server.comms.delete_message(
+                message_id=body.get("message_id"), justification=body.get("justification")
             )
         elif path == "/api/email/confirm":
             result = self.server.comms.confirm(request_id=body.get("request_id"))

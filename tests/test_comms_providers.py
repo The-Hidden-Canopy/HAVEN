@@ -217,6 +217,60 @@ def test_credential_email_provider_reads_imap_and_sends_smtp_without_exposing_se
     assert sent[0].get_payload(decode=True) is not None
 
 
+def test_credential_email_provider_deletes_and_verifies_one_message() -> None:
+    class FakeImap:
+        def __init__(self, host, port):
+            self.deleted = False
+            self.select_modes = []
+            self.store_calls = []
+
+        def login(self, _username, _secret):
+            return "OK", [b"logged in"]
+
+        def select(self, mailbox, readonly=True):
+            assert mailbox == "INBOX"
+            self.select_modes.append(readonly)
+            return "OK", [b"1"]
+
+        def search(self, _charset, *_query):
+            return "OK", [b"" if self.deleted else b"7"]
+
+        def store(self, sequence_id, operation, flags):
+            self.store_calls.append((sequence_id, operation, flags))
+            self.deleted = True
+            return "OK", [b"stored"]
+
+        def expunge(self):
+            return "OK", [b"expunged"]
+
+        def close(self):
+            pass
+
+        def logout(self):
+            pass
+
+    clients = []
+
+    def factory(host, port):
+        client = FakeImap(host, port)
+        clients.append(client)
+        return client
+
+    provider = CredentialEmailProvider(
+        imap_host="imap.example.org",
+        imap_port=993,
+        smtp_host="smtp.example.org",
+        smtp_port=465,
+        username="bryan@example.org",
+        secret_loader=lambda: "mail-secret",
+        imap_factory=factory,
+    )
+
+    assert provider.delete("<remote-1@example.org>") is True
+    assert clients[0].select_modes == [False]
+    assert clients[0].store_calls == [(b"7", "+FLAGS", "\\Deleted")]
+
+
 def test_remote_ics_provider_reads_with_bounded_credentialed_transport() -> None:
     requests = []
 

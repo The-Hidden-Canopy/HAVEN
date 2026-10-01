@@ -166,6 +166,64 @@ class CredentialEmailProvider:
             raise EmailProviderError(f"SMTP send failed: {exc}") from exc
         return str(message["Message-ID"] or "")
 
+    def delete(self, message_id: str) -> bool:
+        """Delete exactly one message by its RFC 5322 ``Message-ID``.
+
+        IMAP sequence numbers are mailbox-local and can change between reads,
+        so the provider resolves the stable message id inside the same
+        selected mailbox before marking the message deleted. The final search
+        after EXPUNGE is the provider-side verification boundary; callers
+        still place this operation behind HAVEN's confirmation ledger.
+        """
+
+        if not isinstance(message_id, str) or not message_id.strip():
+            raise ValueError("message_id must be a non-empty string")
+        normalized_id = message_id.strip()
+        client = None
+        try:
+            client = self._imap_factory(self._imap_host, self._imap_port)
+            status, _ = client.login(self._username, self._secret_loader())
+            if status != "OK":
+                raise EmailProviderError("IMAP login was rejected")
+            status, _ = client.select(self._mailbox, readonly=False)
+            if status != "OK":
+                raise EmailProviderError(f"IMAP mailbox is unavailable: {self._mailbox}")
+            status, data = client.search(None, "HEADER", "Message-ID", normalized_id)
+            if status != "OK":
+                raise EmailProviderError("IMAP message lookup failed")
+            message_ids = (data[0] if data else b"").split()
+            if not message_ids:
+                return False
+            if len(message_ids) > 1:
+                raise EmailProviderError("message id matched more than one mailbox message")
+            sequence_id = message_ids[0]
+            status, _ = client.store(sequence_id, "+FLAGS", "\\Deleted")
+            if status != "OK":
+                raise EmailProviderError("IMAP message delete was rejected")
+            status, _ = client.expunge()
+            if status != "OK":
+                raise EmailProviderError("IMAP expunge failed")
+            status, data = client.search(None, "HEADER", "Message-ID", normalized_id)
+            if status != "OK":
+                raise EmailProviderError("IMAP delete verification failed")
+            if (data[0] if data else b"").split():
+                raise EmailProviderError("IMAP message delete could not be verified")
+            return True
+        except EmailProviderError:
+            raise
+        except (OSError, imaplib.IMAP4.error, email.errors.MessageError) as exc:
+            raise EmailProviderError(f"IMAP delete failed: {exc}") from exc
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except (OSError, imaplib.IMAP4.error):
+                    pass
+                try:
+                    client.logout()
+                except (OSError, imaplib.IMAP4.error):
+                    pass
+
 
 def _parsed_email_message(parsed) -> EmailMessage:
     body = ""
