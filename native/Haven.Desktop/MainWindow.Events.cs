@@ -46,7 +46,7 @@ public sealed partial class MainWindow
         ["home.state.changed"] = new[] { "home", "authority" },
         ["authority.pending.changed"] = new[] { "home", "authority" },
         ["external_agents.changed"] = new[] { "settings" },
-        ["resource_automations.changed"] = new[] { "today", "settings" },
+        ["resource_automations.changed"] = new[] { "today", "settings", "home" },
         ["needs_you.changed"] = new[] { "today" },
         ["provider.health.changed"] = new[] { "today", "settings", "communications", "home" },
         ["models.changed"] = new[] { "models" },

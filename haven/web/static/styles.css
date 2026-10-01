@@ -446,6 +446,10 @@ a {
 
 .automation-row .feed-text { min-width: 120px; }
 
+.resource-automation-row .feed-text {
+  min-width: 180px;
+}
+
 .automation-actions {
   display: flex;
   gap: 6px;
