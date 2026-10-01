@@ -8,7 +8,7 @@ Milestones **A through I are complete** (native default, native parity B1–B6, 
 - **Model-derived relationship candidates** — the deterministic correlator feeds the pipeline; a model proposer plugs into `CandidateRelationship` unchanged.
 - **IPC event stream** — ~~request/response only; views re-poll~~ **resolved by Product Pass phase 2**: the `haven-events-<installation-id>` push pipe + `HavenEventClient` now invalidate domains without polling (the 2s models poll is gone). Residual: a few ambient emitters (director-driven `home.state.changed` from web-originated edits, wake-set internal bumps) still only notify via the sync listener domains — see the Product Pass section.
 - **Interactive UI QA passes** — WinUI compositing on the dev machine is intermittent, so several native surfaces are compile-verified + contract-tested but not pixel-clicked end-to-end.
-- Also open: conversation providers (Slack/Teams-style), feature modules (contract exists, none built), tablet pixel pass, screen-capture tiers (spec page 37, intentionally deferred).
+- Also open: conversation providers (Slack/Teams-style), first-party feature modules (the contract/loader now exist, none shipped yet), tablet pixel pass, screen-capture tiers (spec page 37, intentionally deferred).
 
 # Native Product Consolidation — Next-Phase Engineering Plan
 
@@ -273,8 +273,8 @@ Source: spec pages 12, 41 (extension taxonomy, business model).
   - Product language updated, package name unchanged: `docs/plugin-boundary.md` carries the taxonomy note; web surface copy says "Export consumers" (index.html nav/heading + app.js count/empty labels, behavior untouched); native Settings → Extensions lists the plugin surface under Export Consumers (with per-entry enable/disable reusing the plugin registry — no forked path); `extensions.list` surfaces the registry's `exported_receipts_only` boundary on every entry.
 - [x] Intelligence-service boundary: bounded context in, proposals/answers out, never authority-bearing mutations; paid services get no broader data access than free local models.
   - `haven/extensions/intelligence.py`: `IntelligenceBoundary` builds the `BoundedContext` (visible scopes only, capped 25/25, titles+propositions only — locators and out-of-scope records never cross, tested); responses are validated `IntelligenceResponse`s (answer / action/mutation proposal / clarification, reusing the existing intent types) returned as an envelope the caller routes through the governed paths — the boundary never touches a store. **Enforcement tested**: a malicious service's "delete everything" proposal leaves every store untouched, and routing that same proposal through `director._run_proposal` makes the guarded action PEND (authority engaged, never silent); invalid/wrong-type responses are refused. `EchoIntelligenceService` (diagnostic, builtin) proves the seam; `intelligence.echo` IPC returns the answer plus the exact bounded context the service saw.
-- [~] Feature-module contract: native/domain extensions must call application services, not stores directly.
-  - Contract shape only: the taxonomy declares the boundary (application services, never stores) and the native surface shows an honest empty state; no module loader exists yet — first-party features already demonstrate the services-only idiom.
+- [x] Feature-module contract and loader: native/domain extensions must call application services, not stores directly.
+  - `haven/extensions/features.py` adds metadata-only `haven.features` discovery, explicit inspect/build/attach steps, and `FeatureServiceCatalog`, which exposes only composition-root-supplied application-service operations and refuses unknown calls. `docs/feature-modules.md` records the boundary. No first-party feature module is shipped yet; the native surface remains an honest empty state until a real feature is selected.
 
 # Native Product Pass — Connectivity • Density • Themes v1.0 (phases 1–7)
 
