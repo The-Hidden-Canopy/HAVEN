@@ -1442,7 +1442,9 @@ class HavenWebServer(ThreadingHTTPServer):
                     "trigger_kinds": [
                         TriggerKind.TIME.value,
                         TriggerKind.EVENT.value,
+                        TriggerKind.EVIDENCE.value,
                         TriggerKind.DEADLINE.value,
+                        TriggerKind.EXTERNAL_CONDITION.value,
                     ],
                     "consequence_classes": [item.value for item in ConsequenceClass],
                     "actions": [
