@@ -26,6 +26,6 @@ No Alexa+ simulator, no live Ring transport, no Bedrock provider, no Governed MC
 
 ## Verification as of this file
 
-- Current full-suite refresh (2026-10-01): pytest collected 1829 tests and completed successfully with a writable external temp root. The OneDrive checkout's pytest temp root can fail with filesystem ACL errors during atomic replacement; that host boundary is not a product failure and is recorded in `docs/qa/native-proof-loop.md`.
+- Current full-suite refresh (2026-10-01): pytest collected 1836 tests and completed successfully with a writable external temp root. The OneDrive checkout's pytest temp root can fail with filesystem ACL errors during atomic replacement; that host boundary is not a product failure and is recorded in `docs/qa/native-proof-loop.md`.
 - `dotnet build -p:Platform=x64` for `native/Haven.Desktop`: 0 warnings, 0 errors.
 - No secrets, credentials, or `.env` files are present in this window's diff.
