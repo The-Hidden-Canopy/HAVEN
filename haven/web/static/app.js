@@ -27,6 +27,10 @@ const els = {
   automationsList: $('#automations-list'),
   automationsCount: $('#automations-count'),
   automationsAdd: $('#automations-add'),
+  resourceAutomationsList: $('#resource-automations-list'),
+  resourceAutomationsCount: $('#resource-automations-count'),
+  resourceAutomationsRefresh: $('#resource-automations-refresh'),
+  resourceAutomationsError: $('#resource-automations-error'),
   systemBody: $('#system-body'),
   modelsCount: $('#models-count'),
   modelsList: $('#models-list'),
@@ -128,6 +132,7 @@ const VOICE_ACTIVE = new Set(['wake', 'listening', 'interpreting']);
 
 const app = {
   data: null,
+  resourceAutomations: null,
   focus: null,      // room id or null
   automationFocus: null, // rule id or null
   selectedRoom: null, // room id selected in the rooms view, or null
@@ -273,6 +278,7 @@ function renderState(payload) {
   renderMemory(payload);
   renderPeople(payload);
   renderAutomations(payload);
+  renderResourceAutomations();
   renderSystem(payload);
   renderFocusLabel();
   setGlow(payload.glow || 'idle', payload.glow_target);
@@ -4359,6 +4365,129 @@ function makePluginRow(plugin) {
   return row;
 }
 
+async function refreshResourceAutomations() {
+  const response = await requestJSON('/api/resource-automations');
+  if (response && response.httpOk === true && response.ok === true) {
+    app.resourceAutomations = response;
+  } else {
+    app.resourceAutomations = {
+      automations: [],
+      scheduler: [],
+      error: (response && (response.error || response.detail)) ||
+        'HAVEN could not load resource automations.',
+    };
+  }
+  renderResourceAutomations();
+  return response;
+}
+
+function renderResourceAutomations() {
+  if (!els.resourceAutomationsList) return;
+  const state = app.resourceAutomations;
+  const rules = state && Array.isArray(state.automations) ? state.automations : [];
+  const scheduler = state && Array.isArray(state.scheduler) ? state.scheduler : [];
+  els.resourceAutomationsCount.textContent =
+    state ? rules.length + (rules.length === 1 ? ' rule' : ' rules') : '\u2014';
+  els.resourceAutomationsList.textContent = '';
+  els.resourceAutomationsError.hidden = !(state && state.error);
+  els.resourceAutomationsError.textContent = state && state.error ? state.error : '';
+  if (!state) {
+    const loading = document.createElement('div');
+    loading.className = 'feed-empty muted';
+    loading.textContent = 'Loading resource automations...';
+    els.resourceAutomationsList.appendChild(loading);
+    return;
+  }
+  if (!rules.length) {
+    const empty = document.createElement('div');
+    empty.className = 'feed-empty muted';
+    empty.textContent = 'No cross-domain resource automations yet.';
+    els.resourceAutomationsList.appendChild(empty);
+    return;
+  }
+  for (const rule of rules) {
+    const spec = rule && rule.spec && typeof rule.spec === 'object' ? rule.spec : {};
+    const action = spec.action && typeof spec.action === 'object' ? spec.action : {};
+    const trigger = spec.trigger && typeof spec.trigger === 'object' ? spec.trigger : {};
+    const status = typeof rule.status === 'string' ? rule.status : 'unknown';
+    const ruleId = typeof rule.rule_id === 'string' ? rule.rule_id : '';
+    const operational = scheduler.find((row) => row && row.rule_id === ruleId) || {};
+    const row = document.createElement('div');
+    row.className = 'feed-row automation-row resource-automation-row';
+
+    const type = document.createElement('span');
+    type.className = 'feed-type micro';
+    type.textContent = action.domain && action.action
+      ? action.domain + '.' + action.action : 'resource action';
+    row.appendChild(type);
+
+    const badge = document.createElement('span');
+    badge.className = 'auto-badge ' + status;
+    badge.textContent = status.toUpperCase();
+    row.appendChild(badge);
+
+    const text = document.createElement('span');
+    text.className = 'feed-text';
+    text.textContent = spec.source_text || ruleId;
+    row.appendChild(text);
+
+    const meta = document.createElement('span');
+    meta.className = 'feed-target';
+    const triggerKind = trigger.kind || 'unknown trigger';
+    const outcome = operational.last_outcome ? ' · last ' + operational.last_outcome : '';
+    meta.textContent = triggerKind + (rule.enabled === false ? ' · paused' : '') + outcome;
+    row.appendChild(meta);
+
+    const actions = document.createElement('span');
+    actions.className = 'automation-actions';
+    if (status === 'proposed') {
+      actions.appendChild(authoringButton('Approve', async () => {
+        await applyResourceAutomationResponse(await postJSONDetailed(
+          '/api/resource-automations/' + encodeURIComponent(ruleId) + '/approve',
+          { justification: 'owner approved resource automation from HAVEN' }
+        ));
+      }, 'btn-approve'));
+    }
+    if (status === 'approved') {
+      actions.appendChild(authoringButton(rule.enabled === false ? 'Enable' : 'Pause', async () => {
+        await applyResourceAutomationResponse(await postJSONDetailed(
+          '/api/resource-automations/' + encodeURIComponent(ruleId) + '/enable',
+          {
+            enabled: rule.enabled === false,
+            justification: (rule.enabled === false ? 'resume' : 'pause') +
+              ' resource automation from HAVEN',
+          }
+        ));
+      }));
+    }
+    if (status === 'proposed' || status === 'approved') {
+      actions.appendChild(authoringButton('Revoke', async () => {
+        if (!window.confirm('Revoke this resource automation?')) return;
+        await applyResourceAutomationResponse(await postJSONDetailed(
+          '/api/resource-automations/' + encodeURIComponent(ruleId) + '/revoke',
+          { justification: 'owner revoked resource automation from HAVEN' }
+        ));
+      }));
+    }
+    if (actions.childNodes.length) row.appendChild(actions);
+    els.resourceAutomationsList.appendChild(row);
+  }
+}
+
+async function applyResourceAutomationResponse(response) {
+  if (!response || response.httpOk !== true || response.ok !== true) {
+    app.resourceAutomations = {
+      ...(app.resourceAutomations || { automations: [], scheduler: [] }),
+      error: (response && (response.error || response.reason || response.detail)) ||
+        'HAVEN could not save that resource automation change.',
+    };
+    renderResourceAutomations();
+    return false;
+  }
+  await refreshResourceAutomations();
+  return true;
+}
+
 /* ---------- external agents ----------
    This is the owner-facing management projection for the same REST handlers
    used by the native Settings surface.  Credentials are write-only here;
@@ -4715,6 +4844,7 @@ function switchView(view, label) {
     refreshAuthoringDirectories();
     refreshExternalAgents();
   }
+  if (view === 'automations') refreshResourceAutomations();
   if (view === 'plugins') refreshPlugins({ forceCatalogFetch: true });
   if (view === 'system') refreshSystemDetails();
   if (view === 'placeholder') {
@@ -4904,6 +5034,7 @@ function wireEvents() {
   els.peopleAdd.addEventListener('click', () => openAuthoringDialog('person'));
   els.contextsAdd.addEventListener('click', () => openAuthoringDialog('context'));
   els.automationsAdd.addEventListener('click', () => openAuthoringDialog('automation'));
+  els.resourceAutomationsRefresh.addEventListener('click', refreshResourceAutomations);
   els.authoringClose.addEventListener('click', closeAuthoringDialog);
   els.authoringScrim.addEventListener('click', closeAuthoringDialog);
 
@@ -5139,6 +5270,10 @@ async function boot() {
       refreshExternalAgents();
       refreshExternalAgentAudit();
     }
+  });
+
+  es.addEventListener('resource_automations.changed', () => {
+    if (app.view === 'automations') refreshResourceAutomations();
   });
 
   // EventSource auto-reconnects; nothing to do but stay alive.

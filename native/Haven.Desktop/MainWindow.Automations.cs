@@ -17,8 +17,15 @@ public sealed partial class MainWindow
     private JsonElement _automations = default;
     private JsonElement _scheduler = default;
     private JsonElement _automationOptions = default;
+    private JsonElement _resourceAutomations = default;
+    private JsonElement _resourceScheduler = default;
 
     private async void OnAutomationsRefreshClicked(object sender, RoutedEventArgs args)
+    {
+        await LoadAutomationsAsync();
+    }
+
+    private async void OnResourceAutomationsRefreshClicked(object sender, RoutedEventArgs args)
     {
         await LoadAutomationsAsync();
     }
@@ -33,17 +40,25 @@ public sealed partial class MainWindow
         {
             var result = await _client.GetAutomationsAsync();
             var options = await _client.GetAutomationOptionsAsync();
+            var resourceResult = await _client.GetResourceAutomationsAsync();
             _automations = result.GetProperty("automations").Clone();
             _scheduler = result.GetProperty("scheduler").Clone();
             _automationOptions = options.GetProperty("options").Clone();
+            _resourceAutomations = resourceResult.GetProperty("automations").Clone();
+            _resourceScheduler = resourceResult.GetProperty("scheduler").Clone();
             AutomationsErrorText.Text = "";
             AutomationsStatusText.Text = "";
+            ResourceAutomationsErrorText.Text = "";
+            ResourceAutomationsStatusText.Text = "";
             RenderAutomations();
+            RenderResourceAutomations();
         }
         catch (Exception ex)
         {
             AutomationsStatusText.Text = "";
             AutomationsErrorText.Text = $"Could not load automations: {ex.Message} Use Refresh to retry.";
+            ResourceAutomationsStatusText.Text = "";
+            ResourceAutomationsErrorText.Text = $"Could not load cross-domain automations: {ex.Message} Use Refresh to retry.";
         }
     }
 
@@ -66,6 +81,188 @@ public sealed partial class MainWindow
                     return Task.CompletedTask;
                 }));
         }
+    }
+
+    private void RenderResourceAutomations()
+    {
+        ResourceAutomationsList.Children.Clear();
+        foreach (var rule in Enumerate(_resourceAutomations))
+        {
+            ResourceAutomationsList.Children.Add(MakeResourceAutomationCard(rule));
+        }
+        if (ResourceAutomationsList.Children.Count == 0)
+        {
+            ResourceAutomationsList.Children.Add(new TextBlock
+            {
+                Text = "No cross-domain resource automations yet.",
+                Opacity = 0.72,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+        ResourceAutomationsStatusText.Text = $"{ResourceAutomationsList.Children.Count} durable resource automation(s)";
+    }
+
+    private Border MakeResourceAutomationCard(JsonElement rule)
+    {
+        var ruleId = GetString(rule, "rule_id") ?? "";
+        var status = GetString(rule, "status") ?? "unknown";
+        var enabled = rule.ValueKind == JsonValueKind.Object
+            && rule.TryGetProperty("enabled", out var enabledValue)
+            && enabledValue.ValueKind == JsonValueKind.True;
+        var spec = rule.ValueKind == JsonValueKind.Object
+            && rule.TryGetProperty("spec", out var specValue)
+            ? specValue
+            : default;
+        var action = spec.ValueKind == JsonValueKind.Object
+            && spec.TryGetProperty("action", out var actionValue)
+            ? actionValue
+            : default;
+        var trigger = spec.ValueKind == JsonValueKind.Object
+            && spec.TryGetProperty("trigger", out var triggerValue)
+            ? triggerValue
+            : default;
+        var schedulerRow = Enumerate(_resourceScheduler).FirstOrDefault(row => GetString(row, "rule_id") == ruleId);
+
+        var card = new StackPanel { Spacing = 4 };
+        var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        head.Children.Add(new TextBlock
+        {
+            Text = $"{GetString(action, "domain") ?? "resource"}.{GetString(action, "action") ?? "action"}",
+            Opacity = 0.72,
+        });
+        var (chipTint, chipForeground) = status switch
+        {
+            "approved" => ("HavenSuccessTintBrush", "HavenSuccessBrush"),
+            "proposed" => ("HavenWarningTintBrush", "HavenWarningBrush"),
+            "revoked" => ("HavenStrokeBrush", "HavenMutedTextBrush"),
+            _ => ("HavenAccentTintBrush", "HavenMutedTextBrush"),
+        };
+        head.Children.Add(MakeChip(Sentence(status), chipTint, chipForeground));
+        if (status == "approved")
+        {
+            head.Children.Add(MakeStatusPill(enabled ? "Enabled" : "Paused", enabled));
+        }
+        card.Children.Add(head);
+        card.Children.Add(new TextBlock
+        {
+            Text = GetString(spec, "source_text") ?? ruleId,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        var details = new List<string>
+        {
+            $"Trigger: {GetString(trigger, "kind") ?? "unknown"}",
+        };
+        var lastOutcome = GetString(schedulerRow, "last_outcome");
+        if (lastOutcome is not null)
+        {
+            details.Add($"Last outcome: {lastOutcome}");
+        }
+        card.Children.Add(new TextBlock
+        {
+            Text = string.Join("  ·  ", details),
+            Opacity = 0.72,
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        if (status == "proposed")
+        {
+            var approve = new Button { Content = "Approve" };
+            approve.Click += async (_, _) => await ApproveResourceAutomationAsync(ruleId);
+            buttons.Children.Add(approve);
+        }
+        if (status == "approved")
+        {
+            var toggle = new Button { Content = enabled ? "Pause" : "Enable" };
+            toggle.Click += async (_, _) => await SetResourceAutomationEnabledAsync(ruleId, !enabled);
+            buttons.Children.Add(toggle);
+        }
+        if (status == "proposed" || status == "approved")
+        {
+            var revoke = new Button { Content = "Revoke" };
+            revoke.Click += async (_, _) => await RevokeResourceAutomationAsync(ruleId);
+            buttons.Children.Add(revoke);
+        }
+        if (buttons.Children.Count > 0)
+        {
+            card.Children.Add(buttons);
+        }
+        return WrapCard(card);
+    }
+
+    private async Task RunResourceAutomationMutationAsync(Func<Task<JsonElement>> operation)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var envelope = await operation();
+            if (envelope.ValueKind == JsonValueKind.Object
+                && envelope.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                ResourceAutomationsErrorText.Text = GetString(envelope, "error")
+                    ?? GetString(envelope, "reason")
+                    ?? "HAVEN Core refused the resource automation change.";
+                return;
+            }
+            ResourceAutomationsErrorText.Text = "";
+            await LoadAutomationsAsync();
+        }
+        catch (Exception ex)
+        {
+            ResourceAutomationsErrorText.Text = ex.Message;
+        }
+    }
+
+    private async Task ApproveResourceAutomationAsync(string ruleId)
+    {
+        var justification = await PromptForJustificationAsync(
+            "Approve this resource automation?",
+            "Approval attaches owner authority to this cross-domain action rule.",
+            "Why should this resource automation run?",
+            "Approve");
+        if (justification is null || _client is null)
+        {
+            return;
+        }
+        await RunResourceAutomationMutationAsync(() =>
+            _client.ApproveResourceAutomationAsync(ruleId, justification));
+    }
+
+    private async Task RevokeResourceAutomationAsync(string ruleId)
+    {
+        var justification = await PromptForJustificationAsync(
+            "Revoke this resource automation?",
+            "The rule remains in the durable audit history as revoked.",
+            "Why should this resource automation be revoked?",
+            "Revoke");
+        if (justification is null || _client is null)
+        {
+            return;
+        }
+        await RunResourceAutomationMutationAsync(() =>
+            _client.RevokeResourceAutomationAsync(ruleId, justification));
+    }
+
+    private async Task SetResourceAutomationEnabledAsync(string ruleId, bool enabled)
+    {
+        var justification = await PromptForJustificationAsync(
+            enabled ? "Enable this resource automation?" : "Pause this resource automation?",
+            enabled
+                ? "The approved rule may run when its trigger is due."
+                : "Pausing preserves the approved rule but prevents scheduled dispatch.",
+            enabled ? "Why should this resource automation resume?" : "Why should this resource automation pause?",
+            enabled ? "Enable" : "Pause");
+        if (justification is null || _client is null)
+        {
+            return;
+        }
+        await RunResourceAutomationMutationAsync(() =>
+            _client.SetResourceAutomationEnabledAsync(ruleId, enabled, justification));
     }
 
     private Border MakeAutomationCard(JsonElement rule)
