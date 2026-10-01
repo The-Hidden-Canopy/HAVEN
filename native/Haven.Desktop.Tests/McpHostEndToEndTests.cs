@@ -47,18 +47,63 @@ public sealed class McpHostEndToEndTests
             NullLoggerFactory.Instance);
 
         var tools = await client.ListToolsAsync();
-        Assert.Contains(tools, tool => tool.Name == "haven_world_get");
+        Assert.Equal(
+            new[]
+            {
+                "haven_action_confirm",
+                "haven_action_deny",
+                "haven_action_request",
+                "haven_rooms_list",
+                "haven_world_get",
+            },
+            tools.Select(tool => tool.Name).OrderBy(name => name));
 
         var result = await client.CallToolAsync("haven_world_get", new Dictionary<string, object?>());
         Assert.False(result.IsError);
         Assert.Contains(result.Content, content => content is ModelContextProtocol.Protocol.TextContentBlock block
             && block.Text.Contains("haven.world.get", StringComparison.Ordinal));
 
+        var rooms = await client.CallToolAsync("haven_rooms_list", new Dictionary<string, object?>());
+        Assert.False(rooms.IsError);
+
+        var request = await client.CallToolAsync(
+            "haven_action_request",
+            new Dictionary<string, object?>
+            {
+                ["device_id"] = "proof-device",
+                ["service"] = "light.turn_off",
+                ["parameters"] = new Dictionary<string, object?> { ["brightness_pct"] = 40 },
+            });
+        Assert.False(request.IsError);
+
+        var confirm = await client.CallToolAsync(
+            "haven_action_confirm",
+            new Dictionary<string, object?> { ["request_id"] = "proof-request" });
+        Assert.False(confirm.IsError);
+
+        var deny = await client.CallToolAsync(
+            "haven_action_deny",
+            new Dictionary<string, object?> { ["request_id"] = "proof-request" });
+        Assert.False(deny.IsError);
+
         var call = await core.LastToolCall;
         Assert.Equal("external_agents.tools.call", call.GetProperty("method").GetString());
-        Assert.Equal("haven.world.get", call.GetProperty("params").GetProperty("tool").GetString());
+        Assert.Equal(5, core.ToolCallCount);
+        Assert.Equal(
+            new[]
+            {
+                "haven.world.get",
+                "haven.rooms.list",
+                "haven.action.request",
+                "haven.action.confirm",
+                "haven.action.deny",
+            },
+            core.ToolCalls.Select(item => item.GetProperty("params").GetProperty("tool").GetString()));
         Assert.Equal("mcp-bearer", call.GetProperty("params").GetProperty("credential").GetString());
         Assert.Equal("subject-1", call.GetProperty("params").GetProperty("subject").GetString());
+        var actionRequest = core.ToolCalls[2].GetProperty("params");
+        Assert.Equal("proof-device", actionRequest.GetProperty("arguments").GetProperty("device_id").GetString());
+        Assert.Equal("light.turn_off", actionRequest.GetProperty("arguments").GetProperty("service").GetString());
 
         await host.StopAsync();
         Assert.Equal("Off", host.StatusText);
@@ -99,6 +144,7 @@ public sealed class McpHostEndToEndTests
         private readonly string _token;
         private readonly TaskCompletionSource<JsonElement> _lastToolCall =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly List<JsonElement> _toolCalls = new();
         private readonly CancellationTokenSource _stop = new();
         private NamedPipeServerStream? _server;
 
@@ -110,6 +156,7 @@ public sealed class McpHostEndToEndTests
 
         public Task<JsonElement> LastToolCall => _lastToolCall.Task;
         public int ToolCallCount { get; private set; }
+        public IReadOnlyList<JsonElement> ToolCalls => _toolCalls;
 
         public Task StartAsync()
         {
@@ -146,6 +193,7 @@ public sealed class McpHostEndToEndTests
                     {
                         ToolCallCount++;
                         var detached = root.Clone();
+                        _toolCalls.Add(detached);
                         _lastToolCall.TrySetResult(detached);
                         await WriteFrameAsync(
                             _server,
