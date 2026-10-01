@@ -127,6 +127,17 @@ current native build. Process inspection again confirmed a responsive
 and native processes were stopped and the disposable data directory removed.
 The interactive proof loop therefore remains unverified on this host.
 
+### Fourth targetability check — 2026-10-01
+
+A fresh native launch was first attempted detached and then repeated attached
+with the prebuilt client path quoted correctly. The attached run created the
+expected fresh local stores; process inspection showed a responsive
+`Haven.Desktop.exe` window titled `HAVEN`. The available Windows computer-use
+surface still returned `apps: []`, so it exposed no targetable window,
+accessibility tree, or screenshot-backed action target. No UI action or proof
+step was claimed. The Python/native processes and both disposable data
+directories were stopped and removed after observation.
+
 The evidence above was captured as live UI-automation observations; no
 screenshots or diagnostic exports were produced by this run. The full artifact
 checklist below remains required before a release tag.
