@@ -8,6 +8,7 @@ validation, event emission, response shape), not about any real transport.
 
 from __future__ import annotations
 
+import json
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -159,3 +160,36 @@ def test_discovery_enroll_emits_nothing_when_the_adapter_rejects_the_request(ser
     _dispatch(instance, "discovery.enroll", {"device_type": "light"})  # missing candidate_id
 
     assert events == []
+
+
+def test_discovery_enrollment_survives_a_real_server_restart() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp) / "data"
+        instance, _ = make_server(0, data_dir=data_dir, clock=lambda: NOW)
+        try:
+            declared = instance.setup.declare_person(name="Owner", role="owner")
+            assert declared["ok"] is True
+            instance.discovery = DiscoveryService(
+                director=instance.director,
+                providers=(FixtureDiscoveryProvider((_candidate("a"),)),),
+                persist_enrollment=instance.setup.persist_discovery_enrollment,
+            )
+            _dispatch(instance, "discovery.scan", {})
+            enrolled = _dispatch(
+                instance,
+                "discovery.enroll",
+                {"candidate_id": "a", "device_type": "light"},
+            )
+            assert enrolled["ok"] is True
+            sidecar = json.loads((data_dir / "enrolled_devices.json").read_text(encoding="utf-8"))
+            assert sidecar["version"] == 2
+            assert sidecar["manifests"][0]["device_id"] == "a"
+        finally:
+            instance.server_close()
+
+        reopened, _ = make_server(0, data_dir=data_dir, clock=lambda: NOW)
+        try:
+            assert reopened.director.registry.is_registered("a")
+            assert reopened.director.registry.get("a").room == "office"
+        finally:
+            reopened.server_close()

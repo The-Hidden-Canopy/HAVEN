@@ -169,6 +169,20 @@ def test_enroll_lets_the_household_override_the_suggested_room():
     assert service._director.registry.get("a").room == "bedroom"
 
 
+def test_enroll_does_not_register_when_durable_persistence_refuses():
+    service = DiscoveryService(
+        director=DemoDirector(clock=lambda: NOW),
+        providers=(FixtureDiscoveryProvider((_candidate("a"),)),),
+        persist_enrollment=lambda _manifest: "could not persist enrollment",
+    )
+    service.scan()
+
+    body = service.enroll("a", device_type="light")
+
+    assert body == {"ok": False, "error": "could not persist enrollment"}
+    assert not service._director.registry.is_registered("a")
+
+
 def test_default_discovery_providers_always_includes_ssdp_and_mdns():
     from haven.integrations.wifi.mdns import MdnsDiscoveryProvider
     from haven.integrations.wifi.ssdp import SsdpDiscoveryProvider
