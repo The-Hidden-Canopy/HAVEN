@@ -90,6 +90,17 @@ def test_connecting_a_provider_rebuilds_the_live_director_without_a_restart() ->
 
         assert status == 200
         assert body["ok"] is True
+        assert body["setup"]["provider"]["operational"] == {
+            "discovery": True,
+            "observation": True,
+            "read": True,
+            "mutation": True,
+            "webhook_push": False,
+            "required_credential_scopes": [],
+            "destructive_action_classes": ["reversible_external", "high_impact"],
+            "offline_behavior": "observations become unavailable and mutations fail closed when the provider cannot be reached",
+            "refresh_strategy": "on-demand GET /api/states polling; no webhook push",
+        }
 
         # The live director was swapped in place -- not just the config file.
         assert server.director is not original_director

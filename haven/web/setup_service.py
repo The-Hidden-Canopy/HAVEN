@@ -30,13 +30,14 @@ from pathlib import Path
 from typing import Callable
 
 from ..core.domain import RuleStatus
+from ..core.consequence import ConsequenceClass
 from ..credentials import CredentialKind, CredentialStore, UnknownCredentialError
 from ..devices import DeviceManifest
 from ..discovery.capability_presets import CAPABILITY_PRESETS
 from ..discovery.enrollment import enroll_device
 from ..discovery.models import DiscoveredDevice
 from ..integrations.home_assistant.client import LiveHomeAssistantAdapter
-from ..providers.plugin import ProviderManifest
+from ..providers.plugin import ProviderManifest, ProviderOperationalProfile
 from .computer_provider import (
     ComputerProviderConfig,
     build_filesystem_provider,
@@ -61,6 +62,20 @@ from .setup_config import (
 )
 
 
+def _provider_operational_to_dict(profile: ProviderOperationalProfile) -> dict:
+    return {
+        "discovery": profile.discovery,
+        "observation": profile.observation,
+        "read": profile.read,
+        "mutation": profile.mutation,
+        "webhook_push": profile.webhook_push,
+        "required_credential_scopes": list(profile.required_credential_scopes),
+        "destructive_action_classes": [c.value for c in profile.destructive_action_classes],
+        "offline_behavior": profile.offline_behavior,
+        "refresh_strategy": profile.refresh_strategy,
+    }
+
+
 def _provider_manifest_to_dict(manifest: ProviderManifest) -> dict:
     return {
         "provider_id": manifest.provider_id,
@@ -75,18 +90,31 @@ def _provider_manifest_to_dict(manifest: ProviderManifest) -> dict:
             {"name": f.name, "label": f.label, "required": f.required, "secret": f.secret}
             for f in manifest.config_fields
         ],
-        "operational": {
-            "discovery": manifest.operational.discovery,
-            "observation": manifest.operational.observation,
-            "read": manifest.operational.read,
-            "mutation": manifest.operational.mutation,
-            "webhook_push": manifest.operational.webhook_push,
-            "required_credential_scopes": list(manifest.operational.required_credential_scopes),
-            "destructive_action_classes": [c.value for c in manifest.operational.destructive_action_classes],
-            "offline_behavior": manifest.operational.offline_behavior,
-            "refresh_strategy": manifest.operational.refresh_strategy,
-        },
+        "operational": _provider_operational_to_dict(manifest.operational),
     }
+
+
+# Home Assistant is a built-in connection rather than a discoverable
+# ``haven.providers`` package, so it cannot publish a ProviderManifest of its
+# own. Keep the same operational shape at the setup/diagnostics boundary.
+# The profile describes the bounded integration exposed by HAVEN's discovery
+# presets and live adapter; it does not claim arbitrary Home Assistant service
+# access or webhook delivery.
+_HOME_ASSISTANT_OPERATIONAL_PROFILE = ProviderOperationalProfile(
+    discovery=True,
+    observation=True,
+    read=True,
+    mutation=True,
+    webhook_push=False,
+    required_credential_scopes=(),
+    destructive_action_classes=(
+        ConsequenceClass.REVERSIBLE_EXTERNAL,
+        ConsequenceClass.HIGH_IMPACT,
+    ),
+    offline_behavior="observations become unavailable and mutations fail closed when the provider cannot be reached",
+    refresh_strategy="on-demand GET /api/states polling; no webhook push",
+)
+
 
 _ENROLL_JUSTIFICATION = "enrolled from the setup wizard discovery scan"
 _TOKEN_FILENAME = "ha_token.txt"
@@ -593,6 +621,22 @@ class SetupService:
     def status(self) -> dict:
         config = self._config
         resolved = Path(config.data_dir) if config.data_dir is not None else default_data_dir()
+        provider = {
+            # Home Assistant's own dedicated field, never
+            # `provider_kind` -- that field no longer means "the"
+            # active provider (see `is_real_installation`), and
+            # this object is specifically the Home Assistant
+            # connect step's own status, not a household-wide
+            # summary (`list_provider_packages()` covers installed
+            # community providers separately).
+            "configured": config.provider_base_url is not None,
+            "kind": "home_assistant" if config.provider_base_url is not None else None,
+            "base_url": config.provider_base_url,
+        }
+        if config.provider_base_url is not None:
+            provider["operational"] = _provider_operational_to_dict(
+                _HOME_ASSISTANT_OPERATIONAL_PROFILE
+            )
         envelope = {
             "ok": True,
             "setup": {
@@ -601,18 +645,7 @@ class SetupService:
                     "source": "chosen" if config.data_dir is not None else "default",
                     "resolved": str(resolved),
                 },
-                "provider": {
-                    # Home Assistant's own dedicated field, never
-                    # `provider_kind` -- that field no longer means "the"
-                    # active provider (see `is_real_installation`), and
-                    # this object is specifically the Home Assistant
-                    # connect step's own status, not a household-wide
-                    # summary (`list_provider_packages()` covers installed
-                    # community providers separately).
-                    "configured": config.provider_base_url is not None,
-                    "kind": "home_assistant" if config.provider_base_url is not None else None,
-                    "base_url": config.provider_base_url,
-                },
+                "provider": provider,
                 "discovery": {
                     "candidates": [asdict(candidate) for candidate in self._last_scan]
                     if self._last_scan is not None

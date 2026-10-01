@@ -177,6 +177,17 @@ def test_diagnostics_shape_in_real_mode() -> None:
                 "configured": True,
                 "kind": "home_assistant",
                 "base_url": "http://ha.local:8123",
+                "operational": {
+                    "discovery": True,
+                    "observation": True,
+                    "read": True,
+                    "mutation": True,
+                    "webhook_push": False,
+                    "required_credential_scopes": [],
+                    "destructive_action_classes": ["reversible_external", "high_impact"],
+                    "offline_behavior": "observations become unavailable and mutations fail closed when the provider cannot be reached",
+                    "refresh_strategy": "on-demand GET /api/states polling; no webhook push",
+                },
             }
             assert diag["household"] == {"people": 1, "contexts": 0}
             assert diag["devices"] == {"enrolled": 2, "registered": 2}
