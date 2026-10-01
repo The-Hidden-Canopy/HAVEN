@@ -368,7 +368,7 @@ def test_status_includes_event_triggered_rules_with_no_time_projection():
     assert rows[0].next_run_at is None
 
 
-def test_status_omits_evidence_and_external_condition_but_projects_deadline_trigger():
+def test_status_includes_reactive_evidence_and_external_condition_triggers():
     scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
     for kind in (TriggerKind.EVIDENCE, TriggerKind.EXTERNAL_CONDITION):
         spec = AutomationSpec(
@@ -381,7 +381,10 @@ def test_status_omits_evidence_and_external_condition_but_projects_deadline_trig
             created_by="gerron",
         )
         rule = _approved_rule(spec)
-        assert scheduler.status([rule], now=NOW) == []
+        rows = scheduler.status([rule], now=NOW)
+        assert len(rows) == 1
+        assert rows[0].due_now is False
+        assert rows[0].next_run_at is None
     deadline_spec = AutomationSpec(
         spec_id="spec-deadline",
         household_id="household-a",
@@ -396,6 +399,86 @@ def test_status_omits_evidence_and_external_condition_but_projects_deadline_trig
     assert len(rows) == 1
     assert rows[0].due_now is False
     assert rows[0].next_run_at is None
+
+
+def test_evidence_and_external_condition_events_dispatch_only_when_their_contract_matches():
+    calls: list[dict] = []
+    scheduler = ResourceActionScheduler(
+        household_id="household-a",
+        dispatch={"computer": _recording_dispatch(calls, respond={"ok": True, "success": True})},
+    )
+    evidence_rule = _approved_rule(
+        AutomationSpec(
+            spec_id="evidence-spec", household_id="household-a",
+            trigger=Trigger(
+                kind=TriggerKind.EVIDENCE,
+                parameters={"evidence_kind": "presence", "present": True, "min_confidence": 0.8},
+            ),
+            selector=Selector(parameters={"room_id": "office"}),
+            action=ActionTarget(
+                domain="computer", action="computer.noop", consequence_class=ConsequenceClass.REVERSIBLE_LOCAL
+            ),
+            source_text="when the owner is present in the office", created_by="owner-1",
+        )
+    )
+    external_rule = _approved_rule(
+        AutomationSpec(
+            spec_id="external-spec", household_id="household-a",
+            trigger=Trigger(
+                kind=TriggerKind.EXTERNAL_CONDITION,
+                parameters={"provider_id": "calendar", "condition": "reachable", "value": True},
+            ),
+            selector=Selector(),
+            action=ActionTarget(
+                domain="computer", action="computer.noop", consequence_class=ConsequenceClass.REVERSIBLE_LOCAL
+            ),
+            source_text="when the calendar is reachable", created_by="owner-1",
+        ),
+        rule_id="external-rule",
+    )
+    from haven.automation import AutomationEventPublisher
+
+    publisher = AutomationEventPublisher(source="test", household_id="household-a")
+    evidence = publisher.publish(
+        event_id="evidence-1", event_name="evidence.changed", occurred_at=NOW,
+        payload={"evidence_kind": "presence", "present": True, "confidence": 0.9, "room_id": "office"},
+    )
+    external = publisher.publish(
+        event_id="external-1", event_name="external.condition.changed", occurred_at=NOW,
+        payload={"provider_id": "calendar", "condition": "reachable", "value": True},
+    )
+    outcomes = scheduler.handle_events(
+        rules=[evidence_rule, external_rule], events=[evidence, external], now=NOW
+    )
+    assert [item.rule_id for item in outcomes] == ["rule-1", "external-rule"]
+    assert len(calls) == 2
+
+
+def test_degraded_evidence_and_external_condition_events_fail_closed():
+    calls: list[dict] = []
+    scheduler = ResourceActionScheduler(
+        household_id="household-a",
+        dispatch={"computer": _recording_dispatch(calls, respond={"ok": True, "success": True})},
+    )
+    spec = AutomationSpec(
+        spec_id="evidence-spec", household_id="household-a",
+        trigger=Trigger(kind=TriggerKind.EVIDENCE, parameters={"evidence_kind": "presence"}),
+        selector=Selector(),
+        action=ActionTarget(
+            domain="computer", action="computer.noop", consequence_class=ConsequenceClass.REVERSIBLE_LOCAL
+        ),
+        source_text="when presence is observed", created_by="owner-1",
+    )
+    rule = _approved_rule(spec)
+    from haven.automation import AutomationEventPublisher
+
+    publisher = AutomationEventPublisher(source="test", household_id="household-a")
+    stale = publisher.publish(
+        event_id="stale-1", event_name="evidence.changed", occurred_at=NOW,
+        payload={"evidence_kind": "presence", "confidence": 1.0}, evidence_status=EvidenceStatus.STALE,
+    )
+    assert scheduler.handle_events(rules=[rule], events=[stale], now=NOW) == []
+    assert calls == []
 
 
 def _deadline(
