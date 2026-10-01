@@ -13,6 +13,16 @@ from .intelligence import (
     IntelligenceResponse,
     IntelligenceService,
 )
+from .features import (
+    DiscoveredFeatureModule,
+    FeatureLoadError,
+    FeatureModule,
+    FeatureModulePlugin,
+    FeatureServiceCatalog,
+    build_feature_module,
+    discover_feature_modules,
+    inspect_feature_module,
+)
 from .taxonomy import (
     CLASS_BOUNDARIES,
     ExtensionClass,
@@ -22,12 +32,20 @@ from .taxonomy import (
 
 __all__ = [
     "CLASS_BOUNDARIES",
+    "DiscoveredFeatureModule",
     "BoundedContext",
     "EchoIntelligenceService",
     "ExtensionClass",
     "ExtensionDescriptor",
     "ExtensionRegistry",
+    "FeatureLoadError",
+    "FeatureModule",
+    "FeatureModulePlugin",
+    "FeatureServiceCatalog",
     "IntelligenceBoundary",
     "IntelligenceResponse",
     "IntelligenceService",
+    "build_feature_module",
+    "discover_feature_modules",
+    "inspect_feature_module",
 ]
