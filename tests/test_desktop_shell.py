@@ -15,6 +15,7 @@ from haven.desktop.shell import (
     DesktopShell,
     DesktopShellAlreadyRunning,
     _configure_logging,
+    _redact_secret_text,
     _normalize_process_exit_code,
     _read_activation_record,
     find_edge_executable,
@@ -600,3 +601,33 @@ def test_configure_logging_is_idempotent_across_repeated_calls(tmp_path, _releas
         if isinstance(handler, RotatingFileHandler) and Path(handler.baseFilename) == (tmp_path / "haven.log")
     ]
     assert len(handlers_on_this_file) == 1
+
+
+def test_log_boundary_redacts_secret_fields_in_file_and_console_capture(tmp_path, _release_log_handler_after):
+    import logging
+    import sys
+
+    original_stdout, original_stderr = sys.stdout, sys.stderr
+    try:
+        assert _redact_secret_text("Authorization: Bearer calendar-token") == "Authorization: Bearer [REDACTED]"
+        assert _redact_secret_text('{"api_key":"calendar-token"}') == '{"api_key":"[REDACTED]"}'
+        assert "calendar-token" not in _redact_secret_text("token=calendar-token")
+
+        _configure_logging(tmp_path)
+        logging.getLogger("test.redaction").error(
+            "remote provider failed: Authorization: Bearer calendar-token"
+        )
+        log_text = (tmp_path / "haven.log").read_text(encoding="utf-8")
+        assert "calendar-token" not in log_text
+        assert "Authorization: Bearer [REDACTED]" in log_text
+
+        sys.stdout = None
+        sys.stderr = None
+        _configure_logging(tmp_path)
+        print("provider error: token=calendar-token", file=sys.stderr)
+    finally:
+        sys.stdout, sys.stderr = original_stdout, original_stderr
+
+    console_text = (tmp_path / "haven-console.log").read_text(encoding="utf-8")
+    assert "calendar-token" not in console_text
+    assert "token=[REDACTED]" in console_text
