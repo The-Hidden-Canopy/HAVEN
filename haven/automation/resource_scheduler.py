@@ -18,8 +18,9 @@ so a `CONFIRMATION_REQUIRED` resource action can only ever come back
 blocked here -- an unattended schedule cannot consent to a destructive
 action on a household member's behalf.
 
-**`TriggerKind.TIME`, `TriggerKind.EVENT`, and `TriggerKind.DEADLINE` are
-handled here; evidence/external-condition remain fail-closed.** `tick()` handles TIME triggers (a
+**`TriggerKind.TIME`, `TriggerKind.EVENT`, `TriggerKind.DEADLINE`,
+`TriggerKind.EVIDENCE`, and `TriggerKind.EXTERNAL_CONDITION` are handled
+here.** `tick()` handles TIME triggers (a
 time-window check); `handle_events()` handles EVENT triggers (new file, new
 message, provider state change, task status change -- plan §6.2's own list)
 by matching a caller-supplied batch of `AutomationEvent`s against each
@@ -34,8 +35,10 @@ boundary.
 pending deliveries and processed-event dedup state, consumes the feed in a
 daemon worker, and ticks time rules on the same worker. Raw events and
 stale/fallback/unavailable evidence are rejected before matching.
-Evidence and external-condition triggers remain unhandled by either method; a
-rule using one of those kinds is simply never due and never event-matched here.
+Evidence and external-condition triggers use the same trusted event delivery
+path as EVENT rules, but only match the fixed event names emitted by the typed
+adapters in `automation.emitters`. A raw event, a foreign household, or
+degraded evidence remains ineligible.
 
 **Household scope.** A scheduler is constructed for exactly one
 `household_id`; foreign rules are ignored before due computation, status
@@ -179,6 +182,48 @@ def _event_trigger_matches(rule: AutomationRule, event: AutomationEvent) -> bool
     if not _matches_filters(extra_filters, payload):
         return False
     return _matches_filters(rule.spec.selector.as_dict(), payload)
+
+
+def _evidence_trigger_matches(rule: AutomationRule, event: AutomationEvent) -> bool:
+    if not event.is_eligible_for_automation or event.event_name != "evidence.changed":
+        return False
+    if rule.spec.trigger.kind != TriggerKind.EVIDENCE or rule.spec.household_id != event.household_id:
+        return False
+    params = rule.spec.trigger.as_dict()
+    payload = event.as_dict()
+    evidence_kind = params.get("evidence_kind")
+    if evidence_kind is not None and payload.get("evidence_kind") != evidence_kind:
+        return False
+    minimum = params.get("min_confidence", 0.0)
+    if (
+        isinstance(minimum, bool)
+        or not isinstance(minimum, (int, float))
+        or not math.isfinite(float(minimum))
+        or not 0.0 <= float(minimum) <= 1.0
+    ):
+        return False
+    confidence = payload.get("confidence")
+    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or confidence < float(minimum):
+        return False
+    filters = {key: value for key, value in params.items() if key not in {"evidence_kind", "min_confidence"}}
+    return _matches_filters(filters, payload) and _matches_filters(rule.spec.selector.as_dict(), payload)
+
+
+def _external_condition_trigger_matches(rule: AutomationRule, event: AutomationEvent) -> bool:
+    if not event.is_eligible_for_automation or event.event_name != "external.condition.changed":
+        return False
+    if rule.spec.trigger.kind != TriggerKind.EXTERNAL_CONDITION or rule.spec.household_id != event.household_id:
+        return False
+    payload = event.as_dict()
+    return _matches_filters(rule.spec.trigger.as_dict(), payload) and _matches_filters(rule.spec.selector.as_dict(), payload)
+
+
+def _trigger_matches(rule: AutomationRule, event: AutomationEvent) -> bool:
+    return (
+        _event_trigger_matches(rule, event)
+        or _evidence_trigger_matches(rule, event)
+        or _external_condition_trigger_matches(rule, event)
+    )
 
 
 def _deadline_trigger_config(trigger: Trigger) -> tuple[str | None, str | None, float]:
@@ -540,7 +585,7 @@ class ResourceActionScheduler:
         self, *, rules: Iterable[AutomationRule], events: Iterable[AutomationEvent], now: datetime
     ) -> list[ResourceScheduleOutcome]:
         """Match a batch of `AutomationEvent`s against every approved,
-        enabled, `TriggerKind.EVENT` rule, dispatching each match exactly
+        enabled event-like rule, dispatching each match exactly
         once per `(rule, event)` pair -- redelivering the same event (an
         at-least-once emitter, a restart) never refires an automation twice.
         Rules and events are independent axes: one event can fire several
@@ -559,7 +604,7 @@ class ResourceActionScheduler:
                 dedup_key = (rule.rule_id, event.event_id)
                 if dedup_key in self._processed_events:
                     continue
-                if not _event_trigger_matches(rule, event):
+                if not _trigger_matches(rule, event):
                     continue
                 self._processed_events.add(dedup_key)
                 self._processed_event_order.append(dedup_key)
@@ -637,14 +682,14 @@ class ResourceActionScheduler:
         now: datetime,
         deadlines: Iterable[AutomationDeadline] = (),
     ) -> list[ResourceScheduleStatus]:
-        """Operational rows for every TIME-, EVENT-, or DEADLINE-triggered automation --
+        """Operational rows for every supported trigger kind --
         not only TIME ones, so a future automations panel can show all of
         what this engine actually handles in one list. An EVENT rule's
         `due_now` is always `False` and `next_run_at` always `None`: it fires
         reactively, there is no time-window sense of "due" to report. A
         DEADLINE rule projects the earliest eligible source deadline, while
-        evidence/external-condition rules remain omitted because this engine
-        cannot evaluate them."""
+        evidence/external-condition rules are reactive and have no time
+        projection, just like EVENT rules."""
 
         now = require_aware_utc(now, name="scheduler status time")
         rules = list(rules)
@@ -657,7 +702,7 @@ class ResourceActionScheduler:
             if not self._rule_is_in_scope(rule):
                 continue
             kind = rule.spec.trigger.kind
-            if kind not in (TriggerKind.TIME, TriggerKind.EVENT, TriggerKind.DEADLINE):
+            if kind not in tuple(TriggerKind):
                 continue
             if kind == TriggerKind.TIME:
                 nxt = self.next_run(rule, after=now)

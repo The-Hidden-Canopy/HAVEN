@@ -4,7 +4,8 @@
 observation adapters, and `resource_scheduler.py`'s
 entry point that dispatches a due (TIME or DEADLINE) or matched (EVENT)
 automation through its domain's own existing governed path. Evidence and
-external-condition triggers remain separate fail-closed boundaries.
+external-condition values enter through typed, publisher-stamped emitters and
+remain fail-closed when evidence is degraded.
 """
 
 from .deadlines import AutomationDeadline
@@ -13,7 +14,9 @@ from .persistence import ResourceAutomationSnapshot, ResourceAutomationStore
 from .service import ResourceAutomationService
 from .emitters import (
     ComputerResourceAutomationEmitter,
+    EvidenceAutomationEmitter,
     EmailAutomationEmitter,
+    ExternalConditionAutomationEmitter,
     ProviderHealthAutomationEmitter,
     TaskAutomationEmitter,
 )
@@ -63,7 +66,9 @@ __all__ = [
     "revoke",
     "set_enabled",
     "ComputerResourceAutomationEmitter",
+    "EvidenceAutomationEmitter",
     "EmailAutomationEmitter",
+    "ExternalConditionAutomationEmitter",
     "ProviderHealthAutomationEmitter",
     "TaskAutomationEmitter",
 ]

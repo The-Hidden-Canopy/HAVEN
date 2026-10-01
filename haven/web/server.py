@@ -83,7 +83,9 @@ from ..application import ProjectService, TaskService
 from ..automation import (
     AutomationEventFeed,
     ComputerResourceAutomationEmitter,
+    EvidenceAutomationEmitter,
     EmailAutomationEmitter,
+    ExternalConditionAutomationEmitter,
     ProviderHealthAutomationEmitter,
     ResourceAutomationService,
     TaskAutomationEmitter,
@@ -359,7 +361,9 @@ class HavenWebServer(ThreadingHTTPServer):
         )
         self.task_automation_events = TaskAutomationEmitter(self.automation_events)
         self.computer_automation_events = ComputerResourceAutomationEmitter(self.automation_events)
+        self.evidence_automation_events = EvidenceAutomationEmitter(self.automation_events)
         self.email_automation_events = EmailAutomationEmitter(self.automation_events)
+        self.external_condition_automation_events = ExternalConditionAutomationEmitter(self.automation_events)
         self.provider_health_automation_events = ProviderHealthAutomationEmitter(self.automation_events)
         self.scope_store = ScopeStore(Path(resolved_data_dir) / "scopes.db")
         self.identity, _identity_provisioned = provision_identity(
