@@ -1,15 +1,9 @@
 """`SyncProvider`: how a scope's records leave this machine, if ever.
 
-Contract only -- no `LocalOnlySyncProvider`/`FileExportSyncProvider`
-implementation yet, and definitely no hosted implementation: this package
-depends on nothing outside HAVEN Core, and nothing outside HAVEN Core is
-depended on here. A private, hosted synchronization service is exactly one
-more `SyncProvider` registered the same way any other provider plugs in
-(`haven/providers/loader.py`) -- HAVEN never imports it, it imports HAVEN's
-contract. That direction is the whole point: a household running zero
-private services still has a complete, working `LocalOnlySyncProvider`-
-shaped no-op available to it (a future implementation, not built here),
-never a stub that only works once a subscription is active.
+The generic provider contract remains independent of the concrete local
+engine. `LocalSyncEngine` currently supplies authenticated plaintext-folder
+and AES-GCM encrypted-folder transports; a hosted synchronization service is
+still just another provider registered behind this contract.
 """
 
 from __future__ import annotations

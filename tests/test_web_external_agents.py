@@ -21,6 +21,7 @@ from pathlib import Path
 from haven.web.server import make_server
 
 NOW = datetime(2026, 9, 26, 12, 0, tzinfo=timezone.utc)
+STATIC_ROOT = Path(__file__).parents[1] / "haven" / "web" / "static"
 
 
 @contextmanager
@@ -273,3 +274,27 @@ def test_web_reads_never_emit_external_agents_changed() -> None:
 
         assert status == 200
         assert events == []
+
+
+def test_web_external_agents_panel_covers_the_owner_management_surface() -> None:
+    index = (STATIC_ROOT / "index.html").read_text(encoding="utf-8")
+    app = (STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+    styles = (STATIC_ROOT / "styles.css").read_text(encoding="utf-8")
+
+    assert 'data-view="external-agents"' in index
+    for element_id in (
+        "external-agents-list",
+        "external-agents-create-form",
+        "external-agents-audit-list",
+    ):
+        assert f'id="{element_id}"' in index
+    for route in (
+        "/api/external-agents/connections",
+        "/api/external-agents/audit?limit=50",
+        "/bindings",
+        "/observed-subjects",
+    ):
+        assert route in app
+    for marker in ("externalAgentScopePicker", "Manage bindings", "Revoke", "external_agents.changed"):
+        assert marker in app
+    assert ".external-agent-card" in styles

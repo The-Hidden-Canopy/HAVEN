@@ -252,6 +252,39 @@ def propose(spec: AutomationSpec, *, rule_id: str) -> AutomationRule:
     return AutomationRule(rule_id=rule_id, spec=spec, status=RuleStatus.PROPOSED)
 
 
+def rehydrate(
+    *,
+    rule_id: str,
+    spec: AutomationSpec,
+    status: RuleStatus,
+    enabled: bool = True,
+    approved_by: str | None = None,
+    approved_by_role: RoleTier | None = None,
+    approved_at: datetime | None = None,
+    revoked_by: str | None = None,
+    revoked_at: datetime | None = None,
+) -> AutomationRule:
+    """Restore a previously persisted rule at a process boundary.
+
+    Persisted approved/revoked values must not be constructible by ordinary
+    callers, but a restart needs a narrow, explicit rehydration seam. Keeping
+    the lifecycle token here preserves the structural guard while making the
+    persistence boundary auditable and testable.
+    """
+
+    return _lifecycle_rule(
+        rule_id=rule_id,
+        spec=spec,
+        status=status,
+        enabled=enabled,
+        approved_by=approved_by,
+        approved_by_role=approved_by_role,
+        approved_at=approved_at,
+        revoked_by=revoked_by,
+        revoked_at=revoked_at,
+    )
+
+
 def approve(
     rule: AutomationRule,
     *,
@@ -537,6 +570,7 @@ __all__ = [
     "RuleTransitionResult",
     "approve",
     "propose",
+    "rehydrate",
     "revoke",
     "set_enabled",
 ]

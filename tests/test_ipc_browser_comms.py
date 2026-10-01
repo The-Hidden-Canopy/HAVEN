@@ -209,3 +209,65 @@ def test_email_unconfigured_then_local_maildir(server, tmp_path) -> None:
         assert status["configured"] is True
     finally:
         instance2.server_close()
+
+
+def test_credentialed_email_configuration_uses_store_and_governed_send(server, monkeypatch) -> None:
+    instance, _commands = server
+    instance.setup.declare_person(name="Gerron Smith", role="owner")
+
+    configured = _dispatch(
+        instance,
+        "email.configure",
+        {
+            "imap_host": "imap.example.org",
+            "smtp_host": "smtp.example.org",
+            "username": "gerron@example.org",
+            "secret": "mail-secret",
+        },
+    )["result"]
+    assert configured == {
+        "ok": True,
+        "provider": "haven.email.imap_smtp",
+        "username": "gerron@example.org",
+    }
+    metadata = instance.credentials.list_metadata(provider="haven.email.imap_smtp")
+    assert len(metadata) == 1
+    assert not hasattr(metadata[0], "secret")
+
+    class FakeProvider:
+        provider_id = "haven.email.imap_smtp"
+
+        def capabilities(self):
+            from haven.integrations.comms import EmailCapabilities
+
+            return EmailCapabilities(True, True, True, "fake transport")
+
+        def send(self, **_kwargs):
+            return "<sent@example.org>"
+
+        def messages(self, *, limit=100):
+            return ()
+
+    monkeypatch.setattr(instance.comms, "email_provider", lambda: FakeProvider())
+    pending = _dispatch(
+        instance,
+        "email.message.send",
+        {
+            "recipients": ["ada@example.org"],
+            "subject": "Governed update",
+            "body": "The message body.",
+            "justification": "Send the update requested by the resident.",
+        },
+    )["result"]
+    assert pending["status"] == "confirmation_required"
+    sent = _dispatch(
+        instance,
+        "email.message.confirm",
+        {"request_id": pending["request_id"]},
+    )["result"]
+    assert sent == {
+        "ok": True,
+        "success": True,
+        "detail": "accepted by SMTP provider",
+        "message_id": "<sent@example.org>",
+    }

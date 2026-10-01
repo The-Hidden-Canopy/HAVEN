@@ -45,6 +45,10 @@ EVENT_DOMAINS: dict[str, str] = {
     "browser.tabs.changed": "browser",
     "home.state.changed": "home",
     "authority.pending.changed": "authority",
+    "external_agents.changed": "external_agents",
+    "resource_automations.changed": "automations",
+    "needs_you.changed": "today",
+    "provider.health.changed": "providers",
     "models.changed": "models",
     "model.job.progress": "models",
     "speech.state.changed": "speech",
@@ -367,7 +371,7 @@ class NamedPipeEventServer(NamedPipeServer):
                                 response_message(request_id, ok=True, result={"authenticated": True}),
                             )
                         self._publisher.publish("core.connected", coalesce=False)
-                    except (EOFError, OSError):
+                    except (EOFError, OSError, RuntimeError):
                         return
                     continue
                 # Authenticated: the events pipe never serves requests.

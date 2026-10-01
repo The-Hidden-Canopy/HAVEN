@@ -269,8 +269,8 @@ def test_backup_lifecycle_create_list_restore_delete() -> None:
             first_id = body["backup"]["id"]
             # Every file that actually exists at backup time, not a
             # hardcoded five: the real director's history.db and the
-            # server's resources.db/ontology.db/action_ledger.db exist from
-            # boot onward too.
+            # server's resources.db/ontology.db/action_ledger.db and the
+            # durable resource-automation sidecar exist from boot onward too.
             assert set(body["backup"]["files"]) == {
                 "haven.json",
                 "household.json",
@@ -281,6 +281,7 @@ def test_backup_lifecycle_create_list_restore_delete() -> None:
                 "ontology.db",
                 "claims.db",
                 "action_ledger.db",
+                "resource_automations.json",
                 "scopes.db",
                 "identity.json",
                 "projects.db",

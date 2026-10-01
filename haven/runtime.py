@@ -705,6 +705,7 @@ class HavenRuntime:
             decision=decision,
             device_result=None,
             event_ids=(event.event_id,),
+            correlation_id=correlation_id,
         )
 
     def _record_executed(
@@ -774,6 +775,7 @@ class HavenRuntime:
             decision=decision,
             device_result=result,
             event_ids=(authorized_event.event_id, executed_event.event_id),
+            correlation_id=correlation_id,
         )
 
     def _execution_adapter_for(self, target_device_id: str) -> ExecutionAdapter:

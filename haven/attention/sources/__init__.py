@@ -10,6 +10,7 @@ from .authority import AuthoritySource
 from .knowledge import KnowledgeSource
 from .models import ModelSource
 from .projects import ProjectSource
+from .providers import ProviderSource
 from .tasks import TaskSource
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "KnowledgeSource",
     "ModelSource",
     "ProjectSource",
+    "ProviderSource",
     "TaskSource",
 ]

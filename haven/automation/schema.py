@@ -5,16 +5,14 @@ agree on, instead of each domain (home, computer, tasks, comms) inventing
 its own recurring-rule shape the way `haven.core.domain.RuleDraft` currently
 does for devices alone.
 
-**Contract only, this pass.** Nothing in this repo constructs an
-`AutomationSpec` and runs it yet -- that is the separate, larger
-"resource-action scheduler entry point" backlog item, which reuses the
-existing draft -> edit-while-proposed -> approve -> enable/disable -> revoke
-lifecycle (plan §6.1: "reuse it rather than introducing another scheduler")
-against `haven.core.domain.Rule`'s own state machine. `RuleDraft` itself is
-untouched: rewriting the live, heavily-tested home-automation rule engine to
-speak this schema is exactly the kind of large, safety-critical migration
-this pass deliberately does not attempt in the same breath as defining the
-vocabulary that migration would target.
+**Shared vocabulary, now consumed by the resource-automation path.** The
+schema remains deliberately separate from the live home-device
+`RuleDraft`/`Rule` engine, but `ResourceAutomationService` now constructs,
+persists, approves, enables, and schedules these values through the
+resource-action lifecycle. Keeping the home vertical's mature state machine
+separate avoids a large safety-critical migration while allowing computer,
+task, communications, and future domains to share one trigger/selector/action
+shape.
 
 Each `Trigger`/`Selector`/`ActionTarget` carries a `parameters` bag (a
 `tuple[tuple[str, Any], ...]`, the same parameter-bag shape

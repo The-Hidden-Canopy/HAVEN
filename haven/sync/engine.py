@@ -24,6 +24,7 @@ from uuid import uuid4
 from ..credentials import CredentialKind, CredentialStore, UnknownCredentialError
 from .events import SyncEvent, device_id_for, is_syncable
 from .store import SyncEventStore
+from .transport import EncryptedFolderSyncTransport, FolderSyncTransport
 
 _DEFAULT_CLOCK = lambda: datetime.now(timezone.utc)  # noqa: E731
 _SYNC_CREDENTIAL_ID = "sync:folder-transport"
@@ -74,12 +75,25 @@ class LocalSyncEngine:
             self._save_state()
         self._transport: Any = None
         if self._state.get("transport"):
-            from .transport import FolderSyncTransport
-
-            self._transport = FolderSyncTransport(
-                export_dir=self._state["transport"]["export_dir"],
-                import_dir=self._state["transport"]["import_dir"],
-            )
+            transport_state = self._state["transport"]
+            if transport_state.get("kind", "folder") == "encrypted_folder":
+                if self._sync_key is not None:
+                    try:
+                        self._transport = EncryptedFolderSyncTransport(
+                            export_dir=transport_state["export_dir"],
+                            import_dir=transport_state["import_dir"],
+                            key=self._sync_key,
+                        )
+                    except (KeyError, RuntimeError, ValueError):
+                        # A missing optional crypto runtime must not make the
+                        # installation unbootable; the transport stays absent
+                        # and the owner receives a truthful status/error.
+                        self._transport = None
+            else:
+                self._transport = FolderSyncTransport(
+                    export_dir=transport_state["export_dir"],
+                    import_dir=transport_state["import_dir"],
+                )
         self._appliers: dict[str, Callable[[dict[str, Any], SyncEvent], dict]] = {}
         # Explicit foreign->local scope aliases (a same-user device pair maps
         # the origin's personal scope onto this installation's). Without an
@@ -130,7 +144,7 @@ class LocalSyncEngine:
         return {"ok": True, "enabled": self._enabled}
 
     def set_transport(self, transport, *, auth_key: str | None = None) -> dict:
-        """The transport seam: FolderSyncTransport today, P2P/relay later."""
+        """Configure a folder transport while keeping the seam transport-agnostic."""
 
         if auth_key is not None:
             if not isinstance(auth_key, str) or not auth_key.strip():
@@ -163,6 +177,7 @@ class LocalSyncEngine:
         self._transport = transport
         self._state["transport"] = (
             {
+                "kind": getattr(transport, "kind", "folder"),
                 "export_dir": str(transport.export_dir),
                 "import_dir": str(transport.import_dir),
             }

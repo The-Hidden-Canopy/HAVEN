@@ -27,7 +27,7 @@ function pushAll() {
       type: "snapshot",
       tabs: tabs.filter((tab) => !tab.incognito).map(snapshot),
     };
-    chrome.nativeMessaging.sendNativeMessage(HOST, message, () => {
+    chrome.runtime.sendNativeMessage(HOST, message, () => {
       void chrome.runtime.lastError; // host absent: the Core stays disconnected
     });
   });
