@@ -634,6 +634,9 @@ class HavenWebServer(ThreadingHTTPServer):
             path=Path(resolved_data_dir) / "resource_automations.json",
             household_id=self.director.household_id,
             feed=self.automation_events,
+            deadline_provider=lambda: self.tasks_service.automation_deadlines(
+                self.identity.visible_scope_ids(), household_id=self.director.household_id
+            ),
             dispatch={
                 "computer": self.computer_actions.request_action,
                 "email": _resource_email_dispatch,

@@ -18,8 +18,8 @@ so a `CONFIRMATION_REQUIRED` resource action can only ever come back
 blocked here -- an unattended schedule cannot consent to a destructive
 action on a household member's behalf.
 
-**`TriggerKind.TIME` and `TriggerKind.EVENT` this pass; evidence/deadline/
-external-condition still not built.** `tick()` handles TIME triggers (a
+**`TriggerKind.TIME`, `TriggerKind.EVENT`, and `TriggerKind.DEADLINE` are
+handled here; evidence/external-condition remain fail-closed.** `tick()` handles TIME triggers (a
 time-window check); `handle_events()` handles EVENT triggers (new file, new
 message, provider state change, task status change -- plan §6.2's own list)
 by matching a caller-supplied batch of `AutomationEvent`s against each
@@ -27,14 +27,15 @@ EVENT-triggered rule's `Trigger`/`Selector` parameters. Both paths dispatch
 through the exact same per-domain callable and the exact same outcome
 mapping, so an EVENT-triggered filesystem move is exactly as governed as a
 TIME-triggered one. Production adapters in `haven/automation/emitters.py`
-now publish those four event families through the server's bounded feed.
+now publish those four event families through the server's bounded feed, and
+the task service supplies deadline observations through the same composition
+boundary.
 `ResourceAutomationService` supplies explicit boot/restart wiring: it persists
 pending deliveries and processed-event dedup state, consumes the feed in a
 daemon worker, and ticks time rules on the same worker. Raw events and
 stale/fallback/unavailable evidence are rejected before matching.
-Evidence/deadline/
-external-condition triggers remain unhandled by either method; a rule using
-one of those kinds is simply never due and never event-matched here.
+Evidence and external-condition triggers remain unhandled by either method; a
+rule using one of those kinds is simply never due and never event-matched here.
 
 **Household scope.** A scheduler is constructed for exactly one
 `household_id`; foreign rules are ignored before due computation, status
@@ -65,10 +66,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections import deque
 from datetime import date, datetime, time, timedelta
+import math
 from typing import Any, Callable, Iterable, Mapping
 
 from ..core.domain import RuleStatus
 from ..core.time import require_aware_utc
+from .deadlines import AutomationDeadline
 from .events import AutomationEvent
 from .lifecycle import AutomationRule
 from .schema import ActionTarget, Trigger, TriggerKind
@@ -178,6 +181,59 @@ def _event_trigger_matches(rule: AutomationRule, event: AutomationEvent) -> bool
     return _matches_filters(rule.spec.selector.as_dict(), payload)
 
 
+def _deadline_trigger_config(trigger: Trigger) -> tuple[str | None, str | None, float]:
+    """Read the small, domain-independent deadline trigger shape.
+
+    ``source_kind`` and ``source_id`` narrow the producer (for example,
+    ``task`` and ``task:123``); either may be omitted. ``offset_minutes`` is
+    relative to the observed due time: ``-15`` fires fifteen minutes before,
+    ``0`` at the deadline, and ``15`` after it. Invalid configuration is
+    skipped by the caller rather than disabling unrelated rules.
+    """
+
+    params = trigger.as_dict()
+    source_kind = params.get("source_kind")
+    if source_kind is not None:
+        if not isinstance(source_kind, str) or not source_kind.strip():
+            raise ValueError("deadline source_kind must be a non-empty string")
+        source_kind = source_kind.strip()
+    source_id = params.get("source_id")
+    if source_id is not None:
+        if not isinstance(source_id, str) or not source_id.strip():
+            raise ValueError("deadline source_id must be a non-empty string")
+        source_id = source_id.strip()
+    raw_offset = params.get("offset_minutes", 0.0)
+    if isinstance(raw_offset, bool):
+        raise ValueError("deadline offset_minutes must be a finite number")
+    try:
+        offset = float(raw_offset)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("deadline offset_minutes must be a finite number") from exc
+    if not math.isfinite(offset):
+        raise ValueError("deadline offset_minutes must be a finite number")
+    return source_kind, source_id, offset
+
+
+def _deadline_trigger_matches(rule: AutomationRule, deadline: AutomationDeadline) -> tuple[bool, float]:
+    if not deadline.is_eligible_for_automation:
+        return False, 0.0
+    if rule.spec.trigger.kind != TriggerKind.DEADLINE:
+        return False, 0.0
+    if rule.spec.household_id != deadline.household_id:
+        return False, 0.0
+    try:
+        source_kind, source_id, offset = _deadline_trigger_config(rule.spec.trigger)
+    except ValueError:
+        return False, 0.0
+    if source_kind is not None and source_kind != deadline.source_kind:
+        return False, offset
+    if source_id is not None and source_id != deadline.source_id:
+        return False, offset
+    if not _matches_filters(rule.spec.selector.as_dict(), deadline.as_dict()):
+        return False, offset
+    return True, offset
+
+
 def _dispatch_args(action: ActionTarget) -> tuple[str | None, dict[str, Any]]:
     params = dict(action.parameters)
     resource_id = params.pop("resource_id", None)
@@ -228,21 +284,18 @@ class ResourceScheduleStatus:
 
 
 class ResourceActionScheduler:
-    """Decides which approved, enabled `AutomationRule`s are due (TIME) or
-    matched (EVENT), and dispatches each through its domain's own governed
+    """Decides which approved, enabled `AutomationRule`s are due (TIME or
+    DEADLINE) or matched (EVENT), and dispatches each through its domain's own governed
     entry point. It is bound to one household; callers must create one
     scheduler per household rather than relying on pre-filtered input.
 
-    Single-threaded by design, matching `SchedulerEngine`: `_last_fired`/
-    `_last_outcome`/`_processed_events` are plain in-memory state needing no
-    locking for one caller driving it from one place. All of it is
-    operational, in-memory-only state -- a restarted process may ask again
-    for a TIME automation that fired just before restart, or re-evaluate an
-    EVENT it already dedup'd, the same honest boundary `SchedulerEngine`
-    accepts. `AutomationRule.enabled` (not a scheduler-side set) is the
-    persistence seam for pause/resume, since unlike a device `Rule` it
-    already carries that field -- whatever store holds the rule collection
-    this engine is handed is responsible for persisting it.
+    Single-threaded by design, matching `SchedulerEngine`: `_last_fired`,
+    `_last_outcome`, `_processed_events`, and `_processed_deadlines` are plain
+    state needing no locking for one caller driving it from one place. The
+    service persists the latter two collections across restart so a redelivered
+    event or re-polled deadline cannot silently fire twice. `AutomationRule.enabled`
+    (not a scheduler-side set) is the persistence seam for pause/resume, since
+    unlike a device `Rule` it already carries that field.
     """
 
     def __init__(
@@ -269,6 +322,11 @@ class ResourceActionScheduler:
         # operational-not-durable state this engine already accepts.
         self._processed_events: set[tuple[str, str]] = set()
         self._processed_event_order: deque[tuple[str, str]] = deque()
+        # (rule_id, deadline_id, due_at, offset_minutes) is the durable
+        # occurrence identity. A rescheduled source deadline therefore gets a
+        # new occurrence while repeated polling of the same deadline does not.
+        self._processed_deadlines: set[tuple[str, str, str, float]] = set()
+        self._processed_deadline_order: deque[tuple[str, str, str, float]] = deque()
 
     @property
     def cooldown(self) -> timedelta:
@@ -314,6 +372,56 @@ class ResourceActionScheduler:
             due.append(rule)
         return due
 
+    def due_deadlines(
+        self,
+        *,
+        rules: Iterable[AutomationRule],
+        deadlines: Iterable[AutomationDeadline],
+        now: datetime,
+    ) -> list[tuple[AutomationRule, AutomationDeadline, float]]:
+        """Return due deadline occurrences not already delivered.
+
+        A deadline is an occurrence, not a repeating poll result. The due
+        time, source identity, and configured offset form its dedup key so a
+        source that moves a deadline forward can legitimately create a new
+        occurrence while an unchanged overdue item cannot refire on every
+        worker tick.
+        """
+
+        now = require_aware_utc(now, name="deadline check time")
+        matches: list[tuple[AutomationRule, AutomationDeadline, float]] = []
+        rules = list(rules)
+        for deadline in deadlines:
+            if not isinstance(deadline, AutomationDeadline):
+                continue
+            for rule in rules:
+                if not self._rule_is_in_scope(rule):
+                    continue
+                if rule.status != RuleStatus.APPROVED or not rule.enabled:
+                    continue
+                matched, offset = _deadline_trigger_matches(rule, deadline)
+                if not matched or deadline.fire_at(offset) > now:
+                    continue
+                key = self._deadline_key(rule, deadline, offset)
+                if key in self._processed_deadlines:
+                    continue
+                matches.append((rule, deadline, offset))
+        return matches
+
+    @staticmethod
+    def _deadline_key(
+        rule: AutomationRule, deadline: AutomationDeadline, offset: float
+    ) -> tuple[str, str, str, float]:
+        return (rule.rule_id, deadline.deadline_id, deadline.due_at.isoformat(), offset)
+
+    def _remember_deadline(self, key: tuple[str, str, str, float]) -> None:
+        if key in self._processed_deadlines:
+            return
+        self._processed_deadlines.add(key)
+        self._processed_deadline_order.append(key)
+        while len(self._processed_deadline_order) > self._processed_event_limit:
+            self._processed_deadlines.discard(self._processed_deadline_order.popleft())
+
     def _fired_recently(self, rule: AutomationRule, window: _ScheduleWindow, *, now: datetime) -> bool:
         last = self._last_fired.get(rule.rule_id)
         if last is None:
@@ -351,6 +459,10 @@ class ResourceActionScheduler:
             "last_fired": {rule_id: value.isoformat() for rule_id, value in self._last_fired.items()},
             "last_outcome": dict(self._last_outcome),
             "processed_events": [[rule_id, event_id] for rule_id, event_id in self._processed_event_order],
+            "processed_deadlines": [
+                [rule_id, deadline_id, due_at, offset]
+                for rule_id, deadline_id, due_at, offset in self._processed_deadline_order
+            ],
         }
 
     def restore_state(self, payload: Mapping[str, object] | None) -> None:
@@ -388,16 +500,41 @@ class ResourceActionScheduler:
                 self._processed_event_order.append(key)
                 while len(self._processed_event_order) > self._processed_event_limit:
                     self._processed_events.discard(self._processed_event_order.popleft())
+        raw_deadlines = payload.get("processed_deadlines", ())
+        if isinstance(raw_deadlines, (list, tuple)):
+            for item in raw_deadlines:
+                if not isinstance(item, (list, tuple)) or len(item) != 4:
+                    continue
+                rule_id, deadline_id, due_at, offset = item
+                if not all(isinstance(value, str) for value in (rule_id, deadline_id, due_at)):
+                    continue
+                if isinstance(offset, bool) or not isinstance(offset, (int, float)) or not math.isfinite(float(offset)):
+                    continue
+                key = (rule_id, deadline_id, due_at, float(offset))
+                if key in self._processed_deadlines:
+                    continue
+                self._processed_deadlines.add(key)
+                self._processed_deadline_order.append(key)
+                while len(self._processed_deadline_order) > self._processed_event_limit:
+                    self._processed_deadlines.discard(self._processed_deadline_order.popleft())
 
-    def tick(self, *, rules: Iterable[AutomationRule], now: datetime) -> list[ResourceScheduleOutcome]:
-        """Dispatch every due (`TriggerKind.TIME`) automation through its
-        domain's real governed entry point."""
+    def tick(
+        self,
+        *,
+        rules: Iterable[AutomationRule],
+        now: datetime,
+        deadlines: Iterable[AutomationDeadline] = (),
+    ) -> list[ResourceScheduleOutcome]:
+        """Dispatch due TIME and DEADLINE automations through governed paths."""
 
         now = require_aware_utc(now, name="scheduler tick time")
-        return [
+        rules = list(rules)
+        outcomes = [
             self._dispatch_rule(rule, justification=f"schedule due at {now.isoformat()}", fired_at=now)
             for rule in self.due_rules(rules, now=now)
         ]
+        outcomes.extend(self.handle_deadlines(rules=rules, deadlines=deadlines, now=now))
+        return outcomes
 
     def handle_events(
         self, *, rules: Iterable[AutomationRule], events: Iterable[AutomationEvent], now: datetime
@@ -437,6 +574,38 @@ class ResourceActionScheduler:
                 )
         return outcomes
 
+    def handle_deadlines(
+        self,
+        *,
+        rules: Iterable[AutomationRule],
+        deadlines: Iterable[AutomationDeadline],
+        now: datetime,
+    ) -> list[ResourceScheduleOutcome]:
+        """Dispatch each due deadline occurrence at most once.
+
+        The occurrence is recorded before dispatch, matching the existing
+        scheduler rule that a dispatcher exception cannot cause an unbounded
+        retry storm. A failed or confirmation-required action remains visible
+        in the ordinary outcome/ledger path; this method never manufactures a
+        confirmation or treats a blocked result as success.
+        """
+
+        now = require_aware_utc(now, name="deadline handling time")
+        outcomes: list[ResourceScheduleOutcome] = []
+        for rule, deadline, offset in self.due_deadlines(rules=rules, deadlines=deadlines, now=now):
+            self._remember_deadline(self._deadline_key(rule, deadline, offset))
+            outcomes.append(
+                self._dispatch_rule(
+                    rule,
+                    justification=(
+                        f"deadline {deadline.source_kind}:{deadline.source_id} due at "
+                        f"{deadline.due_at.isoformat()} (offset {offset:g} minutes)"
+                    ),
+                    fired_at=now,
+                )
+            )
+        return outcomes
+
     # -- projections --------------------------------------------------------
 
     def next_run(self, rule: AutomationRule, *, after: datetime) -> datetime | None:
@@ -461,28 +630,50 @@ class ResourceActionScheduler:
             return candidate
         return None
 
-    def status(self, rules: Iterable[AutomationRule], *, now: datetime) -> list[ResourceScheduleStatus]:
-        """Operational rows for every TIME- or EVENT-triggered automation --
+    def status(
+        self,
+        rules: Iterable[AutomationRule],
+        *,
+        now: datetime,
+        deadlines: Iterable[AutomationDeadline] = (),
+    ) -> list[ResourceScheduleStatus]:
+        """Operational rows for every TIME-, EVENT-, or DEADLINE-triggered automation --
         not only TIME ones, so a future automations panel can show all of
         what this engine actually handles in one list. An EVENT rule's
-        `due_now` is always `False` and `next_run_at` always `None`: it
-        fires reactively, there is no time-window sense of "due" to report.
-        Evidence/deadline/external-condition rules are omitted entirely --
-        reporting a due/next-run projection for a trigger kind this engine
-        cannot evaluate would be exactly the false capability this repo's
-        own discipline forbids."""
+        `due_now` is always `False` and `next_run_at` always `None`: it fires
+        reactively, there is no time-window sense of "due" to report. A
+        DEADLINE rule projects the earliest eligible source deadline, while
+        evidence/external-condition rules remain omitted because this engine
+        cannot evaluate them."""
 
         now = require_aware_utc(now, name="scheduler status time")
         rules = list(rules)
         due_ids = {rule.rule_id for rule in self.due_rules(rules, now=now)}
+        deadlines = tuple(deadlines)
+        due_deadline_matches = self.due_deadlines(rules=rules, deadlines=deadlines, now=now)
+        due_ids.update(rule.rule_id for rule, _deadline, _offset in due_deadline_matches)
         rows: list[ResourceScheduleStatus] = []
         for rule in rules:
             if not self._rule_is_in_scope(rule):
                 continue
             kind = rule.spec.trigger.kind
-            if kind not in (TriggerKind.TIME, TriggerKind.EVENT):
+            if kind not in (TriggerKind.TIME, TriggerKind.EVENT, TriggerKind.DEADLINE):
                 continue
-            nxt = self.next_run(rule, after=now) if kind == TriggerKind.TIME else None
+            if kind == TriggerKind.TIME:
+                nxt = self.next_run(rule, after=now)
+            elif kind == TriggerKind.DEADLINE:
+                future: list[datetime] = []
+                for deadline in deadlines:
+                    matched, offset = _deadline_trigger_matches(rule, deadline)
+                    if not matched:
+                        continue
+                    key = self._deadline_key(rule, deadline, offset)
+                    fire_at = deadline.fire_at(offset)
+                    if key not in self._processed_deadlines and fire_at > now:
+                        future.append(fire_at)
+                nxt = min(future) if future else None
+            else:
+                nxt = None
             last = self._last_fired.get(rule.rule_id)
             rows.append(
                 ResourceScheduleStatus(

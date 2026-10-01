@@ -2,13 +2,12 @@
 `lifecycle.py`'s propose/approve/enable/revoke state machine for it,
 `events.py`'s `AutomationEvent` vocabulary, `emitters.py`' production
 observation adapters, and `resource_scheduler.py`'s
-entry point that dispatches a due (TIME) or matched (EVENT) automation
-through its domain's own existing governed path. See each module's own
-docstring for exact scope -- in particular, evidence/deadline/
-external-condition triggers, and scheduler boot/restart durability, remain
-separate follow-on boundaries.
+entry point that dispatches a due (TIME or DEADLINE) or matched (EVENT)
+automation through its domain's own existing governed path. Evidence and
+external-condition triggers remain separate fail-closed boundaries.
 """
 
+from .deadlines import AutomationDeadline
 from .events import AutomationEvent, AutomationEventFeed, AutomationEventPublisher
 from .persistence import ResourceAutomationSnapshot, ResourceAutomationStore
 from .service import ResourceAutomationService
@@ -39,6 +38,7 @@ from .schema import ActionTarget, AutomationSpec, Selector, Trigger, TriggerKind
 
 __all__ = [
     "ActionTarget",
+    "AutomationDeadline",
     "AutomationEvent",
     "AutomationEventFeed",
     "AutomationEventPublisher",
