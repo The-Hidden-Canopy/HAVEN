@@ -55,7 +55,7 @@ from .folder_picker import choose_folder
 from .setup_config import SetupConfigStore, default_data_dir
 from .setup_service import SetupService
 from .computer_actions import ComputerActionService
-from .discovery_service import DiscoveryService, default_discovery_providers
+from .discovery_service import DiscoveryService, default_discovery_bundle
 from ..external_agents import (
     ExternalAgentGateway,
     ExternalAgentService,
@@ -578,13 +578,15 @@ class HavenWebServer(ThreadingHTTPServer):
         )
         # Everyday (post-setup) discovery: real transports only, no demo
         # fixtures -- distinct from `self.setup`'s one-time onboarding scan.
+        discovery_providers, discovery_transport_status = default_discovery_bundle()
         self.discovery = DiscoveryService(
             director=self.director,
-            providers=default_discovery_providers(),
+            providers=discovery_providers,
             persist_enrollment=self.setup.persist_discovery_enrollment,
             clock=scope_clock,
             verification_reader=self.setup.get_discovery_verification,
             record_verification=self.setup.record_discovery_verification,
+            transport_status=discovery_transport_status,
         )
         # External Agent Gateway (Build/Ship/Shape): admission boundary for
         # outside assistants (Alexa+ MCP first). `self.external_agents` is
@@ -2626,6 +2628,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 "setup.discovery.scan": lambda _params: self.setup.run_discovery(),
                 "discovery.scan": lambda _params: self.discovery.scan(),
                 "discovery.candidates": lambda _params: self.discovery.candidates(),
+                "discovery.transports": lambda _params: self.discovery.transports(),
                 "discovery.enroll": _discovery_enroll,
                 "discovery.verify": _discovery_verify,
                 "external_agents.tools.call": _external_agents_tools_call,

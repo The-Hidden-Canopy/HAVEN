@@ -74,6 +74,16 @@ def test_connection_center_reports_rpc_and_event_health_as_separate_channels():
     assert '"Reconnecting (attempt ' in connection
 
 
+def test_discover_surfaces_transport_readiness_instead_of_claiming_bluetooth_scan():
+    client = (NATIVE / "Services" / "HavenCoreClient.cs").read_text(encoding="utf-8")
+    discover = (NATIVE / "MainWindow.Discover.cs").read_text(encoding="utf-8")
+    assert 'RequestResultAsync("discovery.scan"' in client
+    assert '"transports"' in discover
+    assert "Scanning configured discovery transports" in discover
+    assert "Transport readiness is unavailable from this Core version." in discover
+    assert "Scanning nearby WiFi (SSDP + mDNS) and Bluetooth" not in discover
+
+
 def test_native_settings_projects_the_support_safe_unified_receipt_export():
     system = (NATIVE / "MainWindow.System.cs").read_text(encoding="utf-8")
     xaml = (NATIVE / "MainWindow.xaml").read_text(encoding="utf-8")
