@@ -107,6 +107,17 @@ attempt; the disposable process was stopped after observation. A manual run on
 a host with a targetable WinUI surface is still required for the interactive
 steps and artifact checklist below.
 
+### Repeated targetability check — 2026-10-01
+
+The current native build was launched again against the disposable
+`data/native-proof-20261001` directory with no `--web` fallback. Process-level
+inspection confirmed a responsive `HAVEN` window, while the available Windows
+computer-use surface again returned `apps: []` and no targetable window. No
+click, typing, screenshot, or proof-loop step was claimed; the explicitly
+identified disposable core/native processes were stopped after observation.
+This repeats the host/tooling limitation above and does not constitute a
+product acceptance result.
+
 The evidence above was captured as live UI-automation observations; no
 screenshots or diagnostic exports were produced by this run. The full artifact
 checklist below remains required before a release tag.
@@ -118,8 +129,7 @@ For each run, record:
 - [ ] Build identity: git commit, `dotnet build` output (0 warnings/errors).
 - [ ] A screenshot or screen recording per step above.
 - [ ] The native diagnostic export (Settings → System → Export diagnostics,
-      once the diagnostic-export backlog item lands) taken after step 9 and
-      again after step 10.
+      now implemented) taken after step 9 and again after step 10.
 - [ ] Any defect found, filed with: which step, expected vs. actual, and
       whether a WebUI fallback was needed (a hard fail on its own).
 
