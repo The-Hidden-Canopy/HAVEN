@@ -471,6 +471,47 @@ public sealed class HavenCoreClient : IAsyncDisposable
             new { rule_id = ruleId, justification },
             cancellationToken);
 
+    public Task<JsonElement> GetResourceAutomationOptionsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("resource_automations.options", new { }, cancellationToken);
+
+    public Task<JsonElement> CreateResourceAutomationAsync(
+        string ruleId,
+        string specId,
+        string householdId,
+        string createdBy,
+        string sourceText,
+        string triggerKind,
+        object triggerParameters,
+        object selectorParameters,
+        string domain,
+        string action,
+        string consequenceClass,
+        object actionParameters,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "resource_automations.create",
+            new
+            {
+                rule_id = ruleId,
+                spec = new
+                {
+                    spec_id = specId,
+                    household_id = householdId,
+                    trigger = new { kind = triggerKind, parameters = triggerParameters },
+                    selector = new { parameters = selectorParameters },
+                    action = new
+                    {
+                        domain,
+                        action,
+                        consequence_class = consequenceClass,
+                        parameters = actionParameters,
+                    },
+                    source_text = sourceText,
+                    created_by = createdBy,
+                },
+            },
+            cancellationToken);
+
     public Task<JsonElement> GetResourceAutomationsAsync(CancellationToken cancellationToken = default) =>
         RequestResultAsync("resource_automations.list", new { }, cancellationToken);
 

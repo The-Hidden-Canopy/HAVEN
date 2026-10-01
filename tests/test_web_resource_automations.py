@@ -99,6 +99,19 @@ def test_resource_automation_http_lifecycle_round_trip() -> None:
         assert body["automation"]["enabled"] is False
 
 
+def test_resource_automation_options_are_authoritative_and_scheduler_scoped() -> None:
+    with _boot() as (port, _server, director):
+        status, body = _request(port, "GET", "/api/resource-automations/options")
+        assert status == 200
+        assert body["ok"] is True
+        options = body["options"]
+        assert options["household_id"] == director.household_id
+        assert options["created_by"]
+        assert options["trigger_kinds"] == ["time", "event", "deadline"]
+        assert "reversible_local" in options["consequence_classes"]
+        assert {item["domain"] for item in options["actions"]} == {"computer", "email"}
+
+
 def test_resource_automation_http_rejects_foreign_household() -> None:
     with _boot() as (port, _server, director):
         status, body = _request(
@@ -119,16 +132,25 @@ def test_web_panel_projects_resource_automation_lifecycle() -> None:
     for element_id in (
         "resource-automations-list",
         "resource-automations-count",
+        "resource-automations-add",
         "resource-automations-refresh",
         "resource-automations-error",
     ):
         assert f'id="{element_id}"' in index
     for route in (
         "/api/resource-automations",
+        "/api/resource-automations/options",
         "'/api/resource-automations/' + encodeURIComponent(ruleId) + '/approve'",
         "'/api/resource-automations/' + encodeURIComponent(ruleId) + '/enable'",
         "'/api/resource-automations/' + encodeURIComponent(ruleId) + '/revoke'",
     ):
         assert route in app
-    for marker in ("renderResourceAutomations", "resource_automations.changed", "resource-automation-row"):
+    for marker in (
+        "openAuthoringDialog('resource-automation')",
+        "resource-automation-trigger",
+        "resource-automation-parameters",
+        "renderResourceAutomations",
+        "resource_automations.changed",
+        "resource-automation-row",
+    ):
         assert marker in app or marker in styles

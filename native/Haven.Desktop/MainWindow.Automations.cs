@@ -19,6 +19,7 @@ public sealed partial class MainWindow
     private JsonElement _automationOptions = default;
     private JsonElement _resourceAutomations = default;
     private JsonElement _resourceScheduler = default;
+    private JsonElement _resourceAutomationOptions = default;
 
     private async void OnAutomationsRefreshClicked(object sender, RoutedEventArgs args)
     {
@@ -40,10 +41,12 @@ public sealed partial class MainWindow
         {
             var result = await _client.GetAutomationsAsync();
             var options = await _client.GetAutomationOptionsAsync();
+            var resourceOptions = await _client.GetResourceAutomationOptionsAsync();
             var resourceResult = await _client.GetResourceAutomationsAsync();
             _automations = result.GetProperty("automations").Clone();
             _scheduler = result.GetProperty("scheduler").Clone();
             _automationOptions = options.GetProperty("options").Clone();
+            _resourceAutomationOptions = resourceOptions.GetProperty("options").Clone();
             _resourceAutomations = resourceResult.GetProperty("automations").Clone();
             _resourceScheduler = resourceResult.GetProperty("scheduler").Clone();
             AutomationsErrorText.Text = "";
@@ -101,6 +104,228 @@ public sealed partial class MainWindow
         }
         ResourceAutomationsStatusText.Text = $"{ResourceAutomationsList.Children.Count} durable resource automation(s)";
     }
+
+    private async void OnResourceAutomationAddClicked(object sender, RoutedEventArgs args)
+    {
+        if (_client is null || _resourceAutomationOptions.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        var fields = new StackPanel { Spacing = 8, MinWidth = 420 };
+        var source = new TextBox
+        {
+            PlaceholderText = "e.g. When the project deadline arrives, open the brief",
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        fields.Children.Add(new TextBlock { Text = "What should this rule mean?" });
+        fields.Children.Add(source);
+
+        var triggerKinds = Enumerate(_resourceAutomationOptions, "trigger_kinds")
+            .Select(value => value.ValueKind == JsonValueKind.String ? value.GetString() : null)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Cast<string>()
+            .ToList();
+        var trigger = new ComboBox { ItemsSource = triggerKinds };
+        trigger.SelectedItem = triggerKinds.Contains("time") ? "time" : triggerKinds.FirstOrDefault();
+        fields.Children.Add(new TextBlock { Text = "Trigger family" });
+        fields.Children.Add(trigger);
+
+        var time = new TextBox { Text = "09:00", PlaceholderText = "HH:MM" };
+        var weekdays = new TextBox { PlaceholderText = "0,1,2,3,4 (blank = every day)" };
+        var eventName = new TextBox { PlaceholderText = "e.g. task.status_changed" };
+        var deadlineKind = new TextBox { PlaceholderText = "e.g. task or calendar" };
+        var deadlineId = new TextBox { PlaceholderText = "optional exact source id" };
+        var deadlineOffset = new TextBox { Text = "0", PlaceholderText = "minutes" };
+        fields.Children.Add(new TextBlock { Text = "Time (HH:MM)" });
+        fields.Children.Add(time);
+        fields.Children.Add(new TextBlock { Text = "Weekdays (0=Mon, comma-separated; blank = every day)" });
+        fields.Children.Add(weekdays);
+        fields.Children.Add(new TextBlock { Text = "Event name (for event triggers)" });
+        fields.Children.Add(eventName);
+        fields.Children.Add(new TextBlock { Text = "Deadline source kind / id / offset minutes" });
+        fields.Children.Add(deadlineKind);
+        fields.Children.Add(deadlineId);
+        fields.Children.Add(deadlineOffset);
+
+        var selector = new TextBox
+        {
+            Text = "{}",
+            AcceptsReturn = true,
+            PlaceholderText = "Optional selector JSON object",
+        };
+        fields.Children.Add(new TextBlock { Text = "Selector filters (JSON object, optional)" });
+        fields.Children.Add(selector);
+
+        var actionOptions = Enumerate(_resourceAutomationOptions, "actions").ToList();
+        var domains = actionOptions.Select(item => GetString(item, "domain"))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Cast<string>()
+            .ToList();
+        var domain = new ComboBox { ItemsSource = domains };
+        domain.SelectedIndex = 0;
+        var action = new ComboBox();
+        void RefreshActionChoices()
+        {
+            var chosenDomain = domain.SelectedItem as string;
+            var chosen = actionOptions.FirstOrDefault(item => GetString(item, "domain") == chosenDomain);
+            var actions = Enumerate(chosen, "actions")
+                .Select(value => value.ValueKind == JsonValueKind.String ? value.GetString() : null)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Cast<string>()
+                .ToList();
+            action.ItemsSource = actions;
+            action.SelectedIndex = actions.Count > 0 ? 0 : -1;
+        }
+        domain.SelectionChanged += (_, _) => RefreshActionChoices();
+        RefreshActionChoices();
+        fields.Children.Add(new TextBlock { Text = "Action domain / action" });
+        fields.Children.Add(domain);
+        fields.Children.Add(action);
+
+        var consequences = Enumerate(_resourceAutomationOptions, "consequence_classes")
+            .Select(value => value.ValueKind == JsonValueKind.String ? value.GetString() : null)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Cast<string>()
+            .ToList();
+        var consequence = new ComboBox { ItemsSource = consequences };
+        consequence.SelectedItem = consequences.Contains("reversible_local")
+            ? "reversible_local" : consequences.FirstOrDefault();
+        fields.Children.Add(new TextBlock { Text = "Consequence class" });
+        fields.Children.Add(consequence);
+
+        var resourceId = new TextBox { PlaceholderText = "optional current resource id" };
+        var parameters = new TextBox
+        {
+            Text = "{}",
+            AcceptsReturn = true,
+            PlaceholderText = "Optional action parameters JSON object",
+        };
+        fields.Children.Add(new TextBlock { Text = "Resource id (optional)" });
+        fields.Children.Add(resourceId);
+        fields.Children.Add(new TextBlock { Text = "Action parameters (JSON object, optional)" });
+        fields.Children.Add(parameters);
+        fields.Children.Add(new TextBlock
+        {
+            Text = "Creation only proposes the rule. An owner must approve it before the scheduler can act; confirmation-required actions remain blocked when unattended.",
+            TextWrapping = TextWrapping.Wrap,
+            Opacity = 0.72,
+        });
+
+        var dialog = new ContentDialog
+        {
+            Title = "Propose resource automation",
+            Content = fields,
+            PrimaryButtonText = "Propose",
+            CloseButtonText = "Cancel",
+            XamlRoot = RootGrid().XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary || string.IsNullOrWhiteSpace(source.Text))
+        {
+            return;
+        }
+
+        try
+        {
+            var triggerKind = trigger.SelectedItem as string;
+            var chosenDomain = domain.SelectedItem as string;
+            var chosenAction = action.SelectedItem as string;
+            var chosenConsequence = consequence.SelectedItem as string;
+            if (string.IsNullOrWhiteSpace(triggerKind) || string.IsNullOrWhiteSpace(chosenDomain)
+                || string.IsNullOrWhiteSpace(chosenAction) || string.IsNullOrWhiteSpace(chosenConsequence))
+            {
+                throw new InvalidOperationException("Choose a trigger, action, and consequence class.");
+            }
+
+            var triggerParameters = new List<object[]>();
+            if (triggerKind == "time")
+            {
+                var selectedDays = ParseResourceAutomationWeekdays(weekdays.Text);
+                triggerParameters.Add(new object[] { "time_of_day", time.Text.Trim() });
+                triggerParameters.Add(new object[] { "weekdays", selectedDays });
+                triggerParameters.Add(new object[] { "window_minutes", 5 });
+            }
+            else if (triggerKind == "event")
+            {
+                if (string.IsNullOrWhiteSpace(eventName.Text))
+                {
+                    throw new InvalidOperationException("An event name is required for an event trigger.");
+                }
+                triggerParameters.Add(new object[] { "event_name", eventName.Text.Trim() });
+            }
+            else if (triggerKind == "deadline")
+            {
+                if (!string.IsNullOrWhiteSpace(deadlineKind.Text))
+                {
+                    triggerParameters.Add(new object[] { "source_kind", deadlineKind.Text.Trim() });
+                }
+                if (!string.IsNullOrWhiteSpace(deadlineId.Text))
+                {
+                    triggerParameters.Add(new object[] { "source_id", deadlineId.Text.Trim() });
+                }
+                if (!double.TryParse(deadlineOffset.Text.Trim(), out var offset))
+                {
+                    throw new InvalidOperationException("Deadline offset must be a number of minutes.");
+                }
+                triggerParameters.Add(new object[] { "offset_minutes", offset });
+            }
+
+            var selectorParameters = ParseResourceAutomationObject(selector.Text, "Selector");
+            var actionParameters = ParseResourceAutomationObject(parameters.Text, "Action parameters");
+            if (!string.IsNullOrWhiteSpace(resourceId.Text))
+            {
+                actionParameters["resource_id"] = JsonSerializer.SerializeToElement(resourceId.Text.Trim());
+            }
+            var specId = $"native-{Guid.NewGuid():N}";
+            await RunResourceAutomationMutationAsync(() => _client.CreateResourceAutomationAsync(
+                $"resource-{specId}",
+                specId,
+                GetString(_resourceAutomationOptions, "household_id") ?? "",
+                GetString(_resourceAutomationOptions, "created_by") ?? "",
+                source.Text.Trim(),
+                triggerKind,
+                triggerParameters,
+                ToParameterPairs(selectorParameters),
+                chosenDomain,
+                chosenAction,
+                chosenConsequence,
+                ToParameterPairs(actionParameters)));
+        }
+        catch (Exception ex)
+        {
+            ResourceAutomationsErrorText.Text = ex.Message;
+        }
+    }
+
+    private static List<int> ParseResourceAutomationWeekdays(string text)
+    {
+        var values = text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var days = new List<int>();
+        foreach (var value in values)
+        {
+            if (!int.TryParse(value, out var day) || day < 0 || day > 6)
+            {
+                throw new InvalidOperationException("Weekdays must be integers from 0 through 6.");
+            }
+            days.Add(day);
+        }
+        return days;
+    }
+
+    private static Dictionary<string, JsonElement> ParseResourceAutomationObject(string text, string label)
+    {
+        using var document = JsonDocument.Parse(string.IsNullOrWhiteSpace(text) ? "{}" : text);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException($"{label} must be a JSON object.");
+        }
+        return document.RootElement.EnumerateObject()
+            .ToDictionary(item => item.Name, item => item.Value.Clone());
+    }
+
+    private static object[] ToParameterPairs(Dictionary<string, JsonElement> values) =>
+        values.Select(item => (object)new object[] { item.Key, item.Value }).ToArray();
 
     private Border MakeResourceAutomationCard(JsonElement rule)
     {
