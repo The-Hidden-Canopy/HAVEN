@@ -3145,6 +3145,19 @@ function makeDiagnosticsSection() {
   providerRow.appendChild(probeBtn);
   sec.appendChild(providerRow);
 
+  const operational = providerOperationalSummary(provider.operational);
+  if (operational) {
+    sec.appendChild(makeCtxRow('Provider capabilities', operational));
+  }
+  if (provider.operational && typeof provider.operational === 'object') {
+    if (typeof provider.operational.offline_behavior === 'string' && provider.operational.offline_behavior) {
+      sec.appendChild(makeCtxRow('Provider offline behavior', provider.operational.offline_behavior));
+    }
+    if (typeof provider.operational.refresh_strategy === 'string' && provider.operational.refresh_strategy) {
+      sec.appendChild(makeCtxRow('Provider refresh', provider.operational.refresh_strategy));
+    }
+  }
+
   if (diagState.probe) {
     sec.appendChild(makeDiagNote(diagState.probe.tone, diagState.probe.text));
   }
@@ -3480,6 +3493,26 @@ function providerConfigDraft(entryPointName) {
   return diagState.providerDrafts[entryPointName];
 }
 
+function providerOperationalSummary(profile) {
+  if (!profile || typeof profile !== 'object') return null;
+  const capabilities = [
+    ['discovery', 'discovery'],
+    ['observation', 'observation'],
+    ['read', 'read'],
+    ['mutation', 'mutation'],
+    ['webhook_push', 'webhook push'],
+  ].filter(([key]) => profile[key] === true).map(([, label]) => label);
+  const parts = capabilities.length ? [capabilities.join(', ')] : ['no declared capabilities'];
+  const consequences = Array.isArray(profile.destructive_action_classes)
+    ? profile.destructive_action_classes.filter((value) => typeof value === 'string' && value)
+    : [];
+  if (consequences.length) parts.push('outcomes: ' + consequences.join(', '));
+  if (Array.isArray(profile.required_credential_scopes) && profile.required_credential_scopes.length) {
+    parts.push('scopes: ' + profile.required_credential_scopes.join(', '));
+  }
+  return parts.join(' · ');
+}
+
 function makeProviderPackageRow(row) {
   const wrap = document.createElement('div');
   wrap.className = 'provider-pkg';
@@ -3539,6 +3572,23 @@ function makeProviderPackageRow(row) {
     permsEl.className = 'muted';
     permsEl.textContent = 'Needs: ' + perms.join('; ');
     wrap.appendChild(permsEl);
+  }
+
+  const operational = providerOperationalSummary(manifest.operational);
+  if (operational) {
+    const operationalEl = document.createElement('p');
+    operationalEl.className = 'muted';
+    operationalEl.textContent = 'Operational: ' + operational;
+    wrap.appendChild(operationalEl);
+  }
+  if (manifest.operational && typeof manifest.operational === 'object') {
+    for (const key of ['offline_behavior', 'refresh_strategy']) {
+      if (typeof manifest.operational[key] !== 'string' || !manifest.operational[key]) continue;
+      const detail = document.createElement('p');
+      detail.className = 'diag-note';
+      detail.textContent = (key === 'offline_behavior' ? 'Offline: ' : 'Refresh: ') + manifest.operational[key];
+      wrap.appendChild(detail);
+    }
   }
 
   const note = diagState.providerNotes[entryPointName];
