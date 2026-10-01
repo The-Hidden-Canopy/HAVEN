@@ -413,9 +413,25 @@ Source: `HAVEN_Amazon_Build_Ship_Shape_Engineering_Spec.pdf` (25 Sep 2026), a 50
 - [x] **Automated end-to-end verification:** an official .NET MCP client now drives the actual native `McpHostService` over loopback HTTP, discovers the five tools, invokes `haven_world_get`, proves the bearer gate, and asserts the exact credential/subject/tool envelope received by the Core bridge.
 - [ ] **Still external:** a real third-party/Alexa+ client driving the running packaged app, account-linking/simulator work, and any remaining §9.x envelope shaping remain deployment/partner gates rather than local test claims.
 
-## WP5 — Ring evidence provider — not started
+## WP5 — Ring evidence provider — simulator slice complete, live transport external
 
-`haven/integrations/ring/` does not exist. Needs a decision: real Ring developer credentials, or build against the official simulator only for now (spec §9.1/§13.2 explicitly permits this for the hackathon).
+- [x] **Deterministic evidence path:** `haven/integrations/ring/` now defines
+  bounded `RingEvent` records, explicit event kinds, provenance/confidence,
+  unavailable evidence, a duplicate-rejecting `RingSimulator`, and an
+  observation adapter that emits HAVEN `ContextState` values. The provider is
+  observation-only: it has no media bytes, credential material, discovery,
+  or actuation path.
+- [x] **Provider contract:** the built-in `haven_ring_simulator` entry point
+  publishes a conservative `ProviderManifest` with read-only operational
+  metadata. It builds only `mode=simulator` and refuses a live mode rather
+  than accepting credentials without a reviewed transport.
+- [x] **Tests:** `tests/test_ring_provider.py` covers validation, deterministic
+  ordering, duplicate rejection, provenance, unavailable-state preservation,
+  manifest metadata, and the simulator-only build boundary.
+- [ ] **Still external:** a real Ring developer account, live event transport,
+  credential enrollment, network acceptance, and any camera/media retention
+  workflow remain deployment/provider gates. The repository does not claim
+  those are implemented by the simulator.
 
 ## WP6 — External Agents UI — native, web REST twin, and web panel complete
 
@@ -425,7 +441,9 @@ Source: `HAVEN_Amazon_Build_Ship_Shape_Engineering_Spec.pdf` (25 Sep 2026), a 50
 
 ## WP7/WP8 — AWS Bedrock provider / Governed MCP OSS package — not started
 
-Both need a team decision (AWS credentials + spending guard for WP7; whether to actually pursue the Open Source mini challenge for WP8) before any code is worth writing.
+WP7 still needs AWS credentials plus an explicit spending guard. WP8 still
+needs a decision about pursuing the Open Source mini challenge. Neither is
+silently represented by the Ring simulator slice.
 
 **Next decision point for whoever picks this up:** the MCP transport decision is made (native-hosted, official C# SDK — see WP2/WP3). Ring credentials-vs-simulator-only (WP5) and the WP7/WP8 choices remain blocked on information only the team has.
 
