@@ -9,7 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from haven.integrations.comms import LocalIcsCalendarProvider, LocalMaildirProvider, parse_ics
+from haven.integrations.comms import (
+    CredentialEmailProvider,
+    LocalIcsCalendarProvider,
+    LocalMaildirProvider,
+    parse_ics,
+)
 from haven.integrations.comms.calendar import CalendarEvent
 
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
@@ -124,3 +129,87 @@ def test_unconfigured_and_missing_folder_states_are_explicit() -> None:
         missing = LocalMaildirProvider(Path(tmp) / "nope").capabilities()
         assert missing.read is False
         assert "does not exist" in missing.detail
+
+
+def test_credential_email_provider_reads_imap_and_sends_smtp_without_exposing_secret() -> None:
+    raw = (
+        b"Message-ID: <remote-1@example.org>\r\n"
+        b"From: ada@example.org\r\n"
+        b"To: bryan@example.org\r\n"
+        b"Subject: Remote update\r\n"
+        b"Date: Wed, 24 Sep 2026 08:30:00 +0000\r\n\r\n"
+        b"The remote mailbox body.\r\n"
+    )
+
+    class FakeImap:
+        def __init__(self, host, port):
+            self.host = host
+            self.port = port
+            self.secret = None
+
+        def login(self, username, secret):
+            self.username = username
+            self.secret = secret
+            return "OK", [b"logged in"]
+
+        def select(self, mailbox, readonly=True):
+            assert mailbox == "INBOX"
+            assert readonly is True
+            return "OK", [b"1"]
+
+        def search(self, _charset, _query):
+            return "OK", [b"1"]
+
+        def fetch(self, _message_id, _query):
+            return "OK", [(b"header", raw)]
+
+        def close(self):
+            pass
+
+        def logout(self):
+            pass
+
+    sent = []
+
+    class FakeSmtp:
+        def __init__(self, host, port):
+            self.host = host
+            self.port = port
+
+        def login(self, username, secret):
+            assert username == "bryan@example.org"
+            assert secret == "mail-secret"
+            return 235, b"accepted"
+
+        def send_message(self, message):
+            sent.append(message)
+
+        def quit(self):
+            pass
+
+    provider = CredentialEmailProvider(
+        imap_host="imap.example.org",
+        imap_port=993,
+        smtp_host="smtp.example.org",
+        smtp_port=465,
+        username="bryan@example.org",
+        secret_loader=lambda: "mail-secret",
+        imap_factory=FakeImap,
+        smtp_factory=FakeSmtp,
+    )
+
+    assert provider.capabilities().read is True
+    assert provider.capabilities().send is True
+    (message,) = provider.messages()
+    assert message.subject == "Remote update"
+    assert message.snippet == "The remote mailbox body."
+
+    message_id = provider.send(
+        recipients=("ada@example.org",),
+        subject="Follow-up",
+        body="A governed outbound message.",
+    )
+    assert message_id.startswith("<")
+    assert sent[0]["To"] == "ada@example.org"
+    assert sent[0]["Subject"] == "Follow-up"
+    assert sent[0].get_payload(decode=True) is not None

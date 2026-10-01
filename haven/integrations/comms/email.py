@@ -1,22 +1,29 @@
-"""Email provider contracts + a stdlib local-mail adapter (spec page 32).
+"""Email provider contracts and stdlib local/credentialed adapters (spec page 32).
 
 Read access and send/mutate access are separate capabilities (spec page 32
 decision): a connected mailbox is not permission for an agent to send mail.
 The local adapter reads `.eml` files from an explicit user-configured
-folder -- bounded snippet only, no full-body indexing by default. Send and
-mutate stay unavailable until a credentialed provider and credential
-storage exist; the capability state is explicit, never fabricated.
+folder -- bounded snippet only, no full-body indexing by default. The
+credentialed adapter uses IMAP over TLS for bounded reads and SMTP over TLS
+for sends; the secret is supplied by the credential store only at connection
+time and is never part of the provider configuration.
 """
 
 from __future__ import annotations
 
 import email
+import imaplib
+import smtplib
 from dataclasses import dataclass
+from email.message import EmailMessage as MimeEmailMessage
 from email import policy
 from email.parser import BytesParser
+from email.utils import make_msgid
 from pathlib import Path
+from typing import Callable
 
 EMAIL_PROVIDER_ID = "haven.email.local"
+IMAP_SMTP_PROVIDER_ID = "haven.email.imap_smtp"
 SNIPPET_LENGTH = 240
 
 
@@ -38,6 +45,151 @@ class EmailMessage:
     thread_id: str = ""
     labels: tuple[str, ...] = ()
     snippet: str = ""
+
+
+class EmailProviderError(RuntimeError):
+    """A provider could not complete an operation; no result is fabricated."""
+
+
+class CredentialEmailProvider:
+    """Read through IMAP and send through SMTP using a stored secret.
+
+    Factories are injectable so the protocol contract can be tested without
+    contacting a real mailbox. Production defaults are the stdlib TLS
+    clients; callers provide only a secret loader, never a secret field.
+    """
+
+    provider_id = IMAP_SMTP_PROVIDER_ID
+
+    def __init__(
+        self,
+        *,
+        imap_host: str,
+        imap_port: int,
+        smtp_host: str,
+        smtp_port: int,
+        username: str,
+        secret_loader: Callable[[], str],
+        mailbox: str = "INBOX",
+        imap_factory=imaplib.IMAP4_SSL,
+        smtp_factory=smtplib.SMTP_SSL,
+    ) -> None:
+        self._imap_host = imap_host
+        self._imap_port = imap_port
+        self._smtp_host = smtp_host
+        self._smtp_port = smtp_port
+        self._username = username
+        self._secret_loader = secret_loader
+        self._mailbox = mailbox
+        self._imap_factory = imap_factory
+        self._smtp_factory = smtp_factory
+
+    def capabilities(self) -> EmailCapabilities:
+        return EmailCapabilities(
+            read=True,
+            send=True,
+            mutate=True,
+            detail="credentialed IMAP read + SMTP send over TLS; network reachability is checked per operation",
+        )
+
+    def messages(self, *, limit: int = 100) -> tuple[EmailMessage, ...]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        client = None
+        try:
+            client = self._imap_factory(self._imap_host, self._imap_port)
+            status, _ = client.login(self._username, self._secret_loader())
+            if status != "OK":
+                raise EmailProviderError("IMAP login was rejected")
+            status, _ = client.select(self._mailbox, readonly=True)
+            if status != "OK":
+                raise EmailProviderError(f"IMAP mailbox is unavailable: {self._mailbox}")
+            status, data = client.search(None, "ALL")
+            if status != "OK":
+                raise EmailProviderError("IMAP search failed")
+            message_ids = (data[0] if data else b"").split()[-limit:]
+            rows: list[EmailMessage] = []
+            for message_id in reversed(message_ids):
+                status, fetched = client.fetch(message_id, "(RFC822)")
+                if status != "OK":
+                    continue
+                raw = b"".join(part[1] for part in fetched if isinstance(part, tuple) and len(part) > 1)
+                if raw:
+                    rows.append(_parsed_email_message(BytesParser(policy=policy.default).parsebytes(raw)))
+            return tuple(rows)
+        except EmailProviderError:
+            raise
+        except (OSError, imaplib.IMAP4.error, email.errors.MessageError) as exc:
+            raise EmailProviderError(f"IMAP read failed: {exc}") from exc
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except (OSError, imaplib.IMAP4.error):
+                    pass
+                try:
+                    client.logout()
+                except (OSError, imaplib.IMAP4.error):
+                    pass
+
+    def send(
+        self,
+        *,
+        recipients: tuple[str, ...],
+        subject: str,
+        body: str,
+        cc: tuple[str, ...] = (),
+    ) -> str:
+        message = MimeEmailMessage()
+        message["From"] = self._username
+        message["To"] = ", ".join(recipients)
+        if cc:
+            message["Cc"] = ", ".join(cc)
+        message["Subject"] = subject
+        message["Message-ID"] = make_msgid()
+        message.set_content(body)
+        try:
+            client = self._smtp_factory(self._smtp_host, self._smtp_port)
+            try:
+                status, _ = client.login(self._username, self._secret_loader())
+                if status != 235:
+                    raise EmailProviderError("SMTP login was rejected")
+                client.send_message(message)
+            finally:
+                try:
+                    client.quit()
+                except (OSError, smtplib.SMTPException):
+                    pass
+        except EmailProviderError:
+            raise
+        except (OSError, smtplib.SMTPException) as exc:
+            raise EmailProviderError(f"SMTP send failed: {exc}") from exc
+        return str(message["Message-ID"] or "")
+
+
+def _parsed_email_message(parsed) -> EmailMessage:
+    body = ""
+    if parsed.is_multipart():
+        for part in parsed.walk():
+            if part.get_content_type() == "text/plain":
+                body = part.get_content()
+                break
+    else:
+        try:
+            body = parsed.get_content()
+        except Exception:
+            body = ""
+    message_id = str(parsed.get("Message-ID") or "")
+    return EmailMessage(
+        message_id=message_id,
+        sender=str(parsed.get("From") or ""),
+        subject=str(parsed.get("Subject") or "(no subject)"),
+        at=str(parsed.get("Date") or ""),
+        recipients=tuple(item.strip() for item in str(parsed.get("To") or "").split(",") if item.strip()),
+        thread_id=str(parsed.get("References") or "").split()[-1] if parsed.get("References") else message_id,
+        labels=tuple(item.strip() for item in str(parsed.get("Keywords") or "").split(",") if item.strip()),
+        snippet=" ".join(str(body).split())[:SNIPPET_LENGTH],
+    )
 
 
 class LocalMaildirProvider:
@@ -127,8 +279,11 @@ class UnconfiguredEmailProvider:
 
 __all__ = [
     "EMAIL_PROVIDER_ID",
+    "IMAP_SMTP_PROVIDER_ID",
+    "CredentialEmailProvider",
     "EmailCapabilities",
     "EmailMessage",
+    "EmailProviderError",
     "LocalMaildirProvider",
     "SNIPPET_LENGTH",
     "UnconfiguredEmailProvider",

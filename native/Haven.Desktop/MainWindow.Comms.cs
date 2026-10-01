@@ -222,8 +222,15 @@ public sealed partial class MainWindow
         {
             var status = await _client.GetEmailStatusAsync();
             var configured = status.TryGetProperty("configured", out var c) && c.GetBoolean();
+            var capabilities = status.TryGetProperty("capabilities", out var capabilityValue)
+                && capabilityValue.ValueKind == JsonValueKind.Object
+                ? capabilityValue
+                : default;
+            var canSend = capabilities.ValueKind == JsonValueKind.Object
+                && capabilities.TryGetProperty("send", out var send)
+                && send.ValueKind == JsonValueKind.True;
             EmailConnectionText.Text = configured
-                ? $"Connected: {GetString(status, "provider")} (read-only — sending needs a credentialed provider)"
+                ? $"Connected: {GetString(status, "provider")} ({(canSend ? "read + send" : "read-only")})"
                 : $"Not connected: {GetString(status, "detail") ?? "no email provider configured"}";
             EmailFolderButton.Content = configured ? "Change mail folder…" : "Connect a mail folder…";
 

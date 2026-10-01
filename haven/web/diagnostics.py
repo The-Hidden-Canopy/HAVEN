@@ -28,6 +28,7 @@ from importlib.metadata import PackageNotFoundError, version as _package_version
 from pathlib import Path
 
 from ..core.domain import RuleStatus
+from ..audit.unified_receipt import from_action_receipt, from_ledger_entry
 from ..ipc.named_pipe import installation_id_for_data_dir
 from ..models import ModelState
 from .installation_files import installation_file_names
@@ -67,8 +68,9 @@ def _git_commit(repo_root: Path) -> str | None:
 class SystemDiagnostics:
     """Collects the diagnostics payload for one ``HavenWebServer``."""
 
-    def __init__(self, *, server) -> None:
+    def __init__(self, *, server, provider_health_listener=None) -> None:
         self._server = server
+        self._provider_health_listener = provider_health_listener
 
     def collect(self) -> dict:
         server = self._server
@@ -174,6 +176,25 @@ class SystemDiagnostics:
         except Exception:
             recent_receipts = []
 
+        try:
+            home_receipts = [
+                from_action_receipt(receipt).to_dict()
+                for receipt in list(getattr(server.director, "receipts", ()))
+            ]
+            resource_receipts = [
+                from_ledger_entry(entry, domain="resource").to_dict()
+                for entry in server.action_ledger.list_by_household(
+                    server.director.household_id, limit=_RECEIPT_EXPORT_LIMIT
+                )
+            ]
+            unified_receipts = sorted(
+                home_receipts + resource_receipts,
+                key=lambda item: item.get("recorded_at", ""),
+                reverse=True,
+            )[:_RECEIPT_EXPORT_LIMIT]
+        except Exception:
+            unified_receipts = []
+
         return {
             "ok": True,
             "export": {
@@ -190,6 +211,7 @@ class SystemDiagnostics:
                 # this export deliberately does not fabricate one.
                 "event_channel": "reported client-side only; see Settings > channel health",
                 "recent_receipts": recent_receipts,
+                "unified_receipts": unified_receipts,
             },
         }
 
@@ -200,11 +222,31 @@ class SystemDiagnostics:
         try:
             states = source.fetch_states()
         except Exception as exc:
+            if self._provider_health_listener is not None:
+                try:
+                    self._provider_health_listener(
+                        provider_id="home_assistant",
+                        reachable=False,
+                        detail=f"{type(exc).__name__}: {exc}",
+                        occurred_at=datetime.now(timezone.utc),
+                    )
+                except Exception:
+                    pass
             return {
                 "ok": True,
                 "reachable": False,
                 "detail": f"{type(exc).__name__}: {exc}",
             }
+        if self._provider_health_listener is not None:
+            try:
+                self._provider_health_listener(
+                    provider_id="home_assistant",
+                    reachable=True,
+                    detail=f"{len(states)} states fetched",
+                    occurred_at=datetime.now(timezone.utc),
+                )
+            except Exception:
+                pass
         return {"ok": True, "reachable": True, "detail": f"{len(states)} states fetched"}
 
 

@@ -18,17 +18,10 @@ combined receipts page, a support bundle) is the "one shape" itself: every
 receipt, regardless of which store it came from, converts into one
 `UnifiedReceipt` with the same field names.
 
-**Not done this pass:** `ActionReceipt` does not yet carry
-`haven.core.correlation`'s request-scoped id (the IPC/HTTP correlation id
-added for resource actions in the Runtime "Correlation ID" backlog item).
-`ActionReceipt` sits behind `haven.runtime`'s rule-execution engine, which
-already has its own, differently-scoped `correlation_id` concept (grouping
-the `DomainEvent`s one rule execution produces) passed through several
-layers of `HavenRuntime`'s call chain -- reusing the same field name there
-for a different scope would be a real footgun, and threading a second id
-through that safety-critical authority engine is exactly the kind of change
-this pass does not attempt casually. `UnifiedReceipt.correlation_id` is
-`None` for every device-action row until that follow-up lands.
+`ActionReceipt` now retains the same request-scoped correlation value used
+by the runtime's transition events. Direct actions use their request id;
+rule actions use their rule correlation, so the projection does not invent a
+second correlation scope or overwrite the event timeline's value.
 """
 
 from __future__ import annotations
@@ -95,7 +88,7 @@ def from_action_receipt(receipt: ActionReceipt) -> UnifiedReceipt:
         execution_attempted=execution is not None,
         execution_success=execution.success if execution is not None else None,
         execution_detail=execution.detail if execution is not None else None,
-        correlation_id=None,  # see module docstring: not wired yet, distinct scope from HavenRuntime's own concept
+        correlation_id=receipt.correlation_id,
         recorded_at=request.requested_at,
     )
 

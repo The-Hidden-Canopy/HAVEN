@@ -17,12 +17,22 @@ unavailability.
   small Python host that bridges framed native-messaging messages to
   `BrowserHub` (in-process embedding) or to a future loopback transport.
 
-## Install (manual, per-browser)
+## Install (registered, per-browser)
 
-1. Copy `native-host/haven-browser-host.json` into the browser's native-messaging
-   hosts directory, editing `path` to point at `haven-browser-host.py`.
-2. Load `extension/` as an unpacked extension.
-3. Restart HAVEN Core; the extension connects on browser start.
+Load `extension/` as an unpacked extension first and copy its generated
+extension id. Then preview the registration plan (the default is read-only):
+
+```powershell
+python browser/native-host/install.py --extension-id <extension-id> --host-path <installed-host>
+```
+
+To write the host manifests and current-user registrations for Chrome, Edge,
+and Firefox, add `--install`. Use `--browser chrome`, `--browser edge`, or
+`--browser firefox` to limit the targets; repeat the option for multiple
+browsers. `--uninstall` removes only HAVEN's current-user registration keys.
+The installer generates Chromium and Firefox manifests separately because
+their allow-list fields differ. It never needs administrator rights and never
+writes a browser profile or extension setting.
 
 ## Explicitly not built (future high-authority provider)
 

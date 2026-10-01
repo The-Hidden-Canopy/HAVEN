@@ -418,11 +418,15 @@
                         <ListView x:Name="SearchResults" SelectionChanged="OnSearchResultSelectionChanged" MaxHeight="560"
                                   ItemContainerStyle="{StaticResource HavenListItemStyle}" />
                         <Border x:Name="SearchInspector" Grid.Column="1" Style="{StaticResource HavenCardStyle}" Padding="18">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="560">
-                                <StackPanel x:Name="SearchDetail" Spacing="10">
-                                    <TextBlock Text="Search, then select a result to see why it matched." TextWrapping="Wrap" />
-                                </StackPanel>
-                            </ScrollViewer>
+                            <StackPanel Spacing="10">
+                                <Button x:Name="SearchBackButton" Content="Back to results" Click="OnSearchBackClicked"
+                                        Visibility="Collapsed" Style="{StaticResource HavenSecondaryButtonStyle}" />
+                                <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="560">
+                                    <StackPanel x:Name="SearchDetail" Spacing="10">
+                                        <TextBlock Text="Search, then select a result to see why it matched." TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </StackPanel>
                         </Border>
                     </Grid>
                 </StackPanel>
@@ -626,6 +630,8 @@
                                   ItemContainerStyle="{StaticResource HavenListItemStyle}" />
                         <Border x:Name="MemoryInspector" Grid.Column="1" Style="{StaticResource HavenCardStyle}" Padding="18">
                             <StackPanel Spacing="12">
+                                <Button x:Name="MemoryBackButton" Content="Back to memories" Click="OnMemoryBackClicked"
+                                        Visibility="Collapsed" Style="{StaticResource HavenSecondaryButtonStyle}" />
                                 <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="470">
                                     <TextBlock x:Name="MemoryDetailText" Text="Select a memory to inspect its evidence." TextWrapping="Wrap" />
                                 </ScrollViewer>
@@ -660,11 +666,15 @@
                         <ListView x:Name="PeopleDirectory" SelectionChanged="OnPersonSelectionChanged" MaxHeight="560"
                                   ItemContainerStyle="{StaticResource HavenListItemStyle}" />
                         <Border x:Name="PersonInspector" Grid.Column="1" Style="{StaticResource HavenCardStyle}" Padding="18">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="560">
-                                <StackPanel x:Name="PersonDetail" Spacing="10">
-                                    <TextBlock Text="Select a person to see their relationship context." TextWrapping="Wrap" />
-                                </StackPanel>
-                            </ScrollViewer>
+                            <StackPanel Spacing="10">
+                                <Button x:Name="PersonBackButton" Content="Back to people" Click="OnPersonBackClicked"
+                                        Visibility="Collapsed" Style="{StaticResource HavenSecondaryButtonStyle}" />
+                                <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="560">
+                                    <StackPanel x:Name="PersonDetail" Spacing="10">
+                                        <TextBlock Text="Select a person to see their relationship context." TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </StackPanel>
                         </Border>
                     </Grid>
                 </StackPanel>

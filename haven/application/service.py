@@ -298,6 +298,7 @@ class TaskService:
         ontology: OntologyStore,
         clock=_DEFAULT_CLOCK,
         mutation_listener=None,
+        event_listener=None,
     ) -> None:
         self._store = store
         self._projects = projects
@@ -305,9 +306,18 @@ class TaskService:
         self._ontology = ontology
         self._clock = clock
         self._mutation_listener = mutation_listener
+        self._event_listener = event_listener
 
     def set_mutation_listener(self, listener) -> None:
         self._mutation_listener = listener
+
+    def set_event_listener(self, listener) -> None:
+        self._event_listener = listener
+
+    def _emit_task_event(self, before, after) -> None:
+        listener = self._event_listener
+        if listener is not None:
+            listener(before, after)
 
     def _emit(self, kind: str, record) -> None:
         listener = self._mutation_listener
@@ -417,6 +427,7 @@ class TaskService:
         self._store.save(record)
         self._project(record)
         self._record_dependency_edges(record)
+        self._emit_task_event(None, record)
         self._emit("task", record)
         return {"ok": True, "task": self._wire(record, visible)}
 
@@ -470,6 +481,7 @@ class TaskService:
             return _fail(str(exc))
         self._store.save(updated)
         self._project(updated)
+        self._emit_task_event(record, updated)
         self._emit("task", updated)
         woken = self._recompute_dependents(visible, updated.task_id)
         payload = {"ok": True, "task": self._wire(updated, visible)}
@@ -513,6 +525,7 @@ class TaskService:
         )
         self._store.save(completed)
         self._project(completed)
+        self._emit_task_event(record, completed)
         self._emit("task", completed)
         payload: dict = {"ok": True, "task": self._wire(completed, visible)}
         next_occurrence = self._spawn_next_occurrence(visible, completed)
@@ -548,6 +561,7 @@ class TaskService:
         self._store.save(updated)
         self._project(updated)
         self._record_dependency_edges(updated)
+        self._emit_task_event(record, updated)
         return {"ok": True, "task": self._wire(updated, visible)}
 
     def remove_dependency(
@@ -573,6 +587,7 @@ class TaskService:
         self._ontology.remove(
             f"assert:task-dep:{updated.task_id}:{depends_on_task_id}"
         )
+        self._emit_task_event(record, updated)
         woken = self._recompute_dependents(visible, updated.task_id, include_self=True)
         payload = {"ok": True, "task": self._wire(updated, visible)}
         if woken:
@@ -627,6 +642,7 @@ class TaskService:
             )
             self._store.save(updated)
             self._project(updated)
+            self._emit_task_event(record, updated)
             woken.append(updated.task_id)
 
     def _reaches(self, visible: tuple[str, ...], start: str, target: str) -> bool:

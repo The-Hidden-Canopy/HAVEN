@@ -254,6 +254,7 @@ a {
 .center[data-view="automations"] .view-automations,
 .center[data-view="system"] .view-system,
 .center[data-view="models"] .view-models,
+.center[data-view="external-agents"] .view-external-agents,
 .center[data-view="placeholder"] .view-placeholder {
   display: block;
 }
@@ -794,6 +795,163 @@ a {
 }
 
 .model-badge.state-dim { opacity: 0.6; }
+
+.model-badge.state-danger {
+  color: var(--red);
+  border-color: var(--red-dim);
+  background: rgba(239, 100, 97, 0.07);
+}
+
+/* ---------- external agents view ---------- */
+
+.external-agents-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.external-agent-card {
+  padding: 14px 16px;
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.external-agent-head,
+.external-agent-actions,
+.external-agents-audit-head,
+.external-agent-binding {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.external-agent-head { justify-content: space-between; }
+
+.external-agent-actions {
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.external-agent-actions .btn,
+.external-agent-binding > .btn {
+  padding: 3px 10px;
+  font-size: 10.5px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.external-agent-actions .btn:hover,
+.external-agent-binding > .btn:hover { color: var(--text); border-color: var(--border-strong); }
+
+.external-agent-actions .btn-danger:hover { color: var(--red); border-color: var(--red-dim); }
+
+.external-agent-detail {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.external-agent-detail[hidden] { display: none; }
+
+.external-agent-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.external-agent-subject,
+.external-agent-binding {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.external-agent-binding-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.external-agent-binding-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.external-agent-binding-form input,
+.external-agent-binding-form select,
+.external-agents-form input,
+.external-agents-form select {
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 11px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.external-agent-binding-form button,
+.external-agents-form button {
+  align-self: flex-start;
+  background: var(--bg-raise-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.external-agent-binding-form button:hover,
+.external-agents-form button:hover { color: var(--teal); border-color: var(--teal-dim); }
+
+.external-agent-scopes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 5px 10px;
+  padding: 5px 0;
+}
+
+.external-agent-scope {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.external-agent-scope input { accent-color: var(--teal); }
+
+.external-agents-audit {
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.external-agents-audit summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.external-agents-audit-head { justify-content: space-between; margin: 12px 0 4px; }
+
+.external-agents-audit-head .btn {
+  padding: 3px 10px;
+  font-size: 10.5px;
+}
 
 /* runtime availability strip: quiet chips, informational — never alarm */
 .runtimes-strip {

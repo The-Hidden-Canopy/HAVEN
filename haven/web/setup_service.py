@@ -506,6 +506,7 @@ class SetupService:
         include_demo_candidates: bool = False,
         resource_store=None,
         knowledge_service=None,
+        resource_event_listener=None,
     ) -> None:
         self._store = store
         self._director = director
@@ -518,6 +519,10 @@ class SetupService:
         # exercise the parts of setup that have nothing to do with it.
         self._resource_store = resource_store
         self._knowledge_service = knowledge_service
+        # Optional production automation seam. The callback receives the
+        # just-observed records and an `is_new(resource_id)` predicate; it
+        # must remain advisory and never be able to block the scan.
+        self._resource_event_listener = resource_event_listener
         # Called after a step changes provider connection, so the composition
         # root can rebuild the live household from the config this step just
         # saved instead of leaving the running app on whatever it built at
@@ -577,6 +582,9 @@ class SetupService:
         """Rebind knowledge to stores rebuilt after a data-dir move."""
 
         self._knowledge_service = knowledge_service
+
+    def set_resource_event_listener(self, listener) -> None:
+        self._resource_event_listener = listener
 
     def _trigger_rebuild(self) -> None:
         if self._on_rebuild is not None:
@@ -1088,6 +1096,16 @@ class SetupService:
         if self._resource_store is None:
             return {"ok": False, "error": "no resource store is attached to this installation"}
         records = provider.observe()
+        if self._resource_event_listener is not None:
+            try:
+                self._resource_event_listener(
+                    records,
+                    is_new=lambda resource_id: self._resource_store.get(resource_id) is None,
+                )
+            except Exception:
+                # A scheduler/event consumer cannot make a successful
+                # provider observation look like a failed scan.
+                pass
         for record in records:
             if self._knowledge_service is not None:
                 # The knowledge service compares against the previous

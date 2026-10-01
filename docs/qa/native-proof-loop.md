@@ -81,6 +81,7 @@ For each run, record:
   elsewhere in `TASKS.md`); if the window renders black, that is an
   environment issue to route around (different machine/session), not a
   product defect to file here.
-- Conversation providers (Slack/Teams-style), the encrypted/P2P sync
-  transport, and full tablet touch QA are explicitly out of scope for this
-  loop — they have their own backlog items.
+- Conversation providers (Slack/Teams-style), hosted/P2P sync relay, and full
+  tablet touch QA are explicitly out of scope for this loop — the encrypted
+  folder transport has its own automated coverage, and the remaining items
+  have their own backlog entries.

@@ -377,6 +377,7 @@ def receipt_to_dict(receipt: ActionReceipt) -> dict:
         "decision": authority_decision_to_dict(receipt.decision),
         "device_result": device_result_to_dict(receipt.device_result),
         "event_ids": list(receipt.event_ids),
+        "correlation_id": receipt.correlation_id,
     }
     if receipt.external_source is not None:
         payload["external_source"] = dict(receipt.external_source)
@@ -395,6 +396,7 @@ def receipt_from_dict(payload: object) -> ActionReceipt:
         decision=authority_decision_from_dict(payload["decision"]),
         device_result=device_result_from_dict(payload.get("device_result")),
         event_ids=tuple(payload.get("event_ids", [])),
+        correlation_id=payload.get("correlation_id"),
         external_source=_external_source_from(payload.get("external_source")),
     )
 
