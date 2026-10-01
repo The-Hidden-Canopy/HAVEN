@@ -218,6 +218,33 @@ def test_email_delete_http_surface_preserves_confirmation_boundary(server, monke
     assert deleted["detail"] == "deleted and verified by IMAP provider"
 
 
+def test_email_full_body_http_surface_is_explicit_and_scope_aware(server, tmp_path) -> None:
+    instance, _director, port = server
+    (tmp_path / "message.eml").write_text(
+        "Message-ID: <http-body@example.org>\nFrom: ada@example.org\n"
+        "To: gerron@example.org\nSubject: HTTP body\n"
+        "Date: Wed, 16 Sep 2026 08:30:00 +0000\n\nFull body through HTTP.\n",
+        encoding="utf-8",
+    )
+    instance.comms.set_maildir(str(tmp_path))
+
+    status, bounded = _get_json(port, "/api/email/messages")
+    assert status == 200
+    assert bounded["messages"][0].get("body") is None
+    assert bounded["body_indexed"] is False
+
+    status, full = _get_json(port, "/api/email/messages?include_body=true")
+    assert status == 200
+    assert full["body_indexed"] is True
+    assert full["messages"][0]["body"].strip() == "Full body through HTTP."
+
+    instance.comms._scope_id = instance.identity.personal_scope_id + ":shared"  # noqa: SLF001
+    status, refused = _get_json(port, "/api/email/messages?include_body=true")
+    assert status == 400
+    assert refused["ok"] is False
+    assert "personal scope" in refused["error"]
+
+
 def test_static_root_is_served_or_404s_gracefully(server) -> None:
     import tempfile
 

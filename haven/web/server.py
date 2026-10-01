@@ -2138,8 +2138,10 @@ class HavenWebServer(ThreadingHTTPServer):
         def _email_status(_params: dict) -> dict:
             return self.comms.email_status()
 
-        def _email_messages(_params: dict) -> dict:
-            return self.comms.list_messages()
+        def _email_messages(params: dict) -> dict:
+            limit = params.get("limit", 100)
+            include_body = params.get("include_body", False)
+            return self.comms.list_messages(limit=limit, include_body=include_body)
 
         def _email_maildir_set(params: dict) -> dict:
             return self.comms.set_maildir(
@@ -3232,7 +3234,15 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/api/email/status":
             self._send_json(200, self.comms.email_status())
         elif path == "/api/email/messages":
-            result = self.comms.list_messages()
+            query = parse_qs(urlsplit(self.path).query)
+            raw_limit = query.get("limit", ["100"])[0]
+            try:
+                limit = int(raw_limit)
+            except ValueError:
+                limit = 0
+            raw_include_body = query.get("include_body", ["false"])[0].strip().lower()
+            include_body = raw_include_body in {"1", "true", "yes"}
+            result = self.server.comms.list_messages(limit=limit, include_body=include_body)
             self._send_json(200 if result.get("ok") else 400, result)
         elif path == "/api/resource-automations":
             self._call_resource_automations("resource_automations.list", {})

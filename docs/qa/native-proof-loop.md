@@ -146,7 +146,7 @@ checklist below remains required before a release tag.
 
 The current local continuation was verified in two bounded environments:
 
-- The current full Python suite collected **1840 tests** and completed
+- The current full Python suite collected **1842 tests** and completed
   successfully when run with a writable external temp root. A run that placed
   pytest's temp root inside the OneDrive checkout hit the known filesystem ACL
   boundary during atomic replacement; the isolated rerun passed the affected
@@ -194,6 +194,16 @@ maildirs continue to report read-only capabilities. The focused provider/IPC/
 automation/native-contract selection passed, and the HTTP contract preserves
 the `confirmation_required` boundary. Live mailbox credentials and network
 acceptance remain external gates.
+
+### Email full-body indexing verification refresh — 2026-10-01
+
+Email reads remain bounded snippets by default. An explicit `include_body=true`
+request now fetches plain-text bodies only for the personal scope, returns them
+for that request, and writes the requested body into the local ResourceStore
+search metadata; non-personal requests fail closed. The native Email surface
+shows a confirmation dialog before the opt-in request. Provider, IPC, HTTP,
+native-contract, and full-suite verification passed; attachments and other MIME
+parts remain outside this indexing slice.
 
 ## Artifact checklist
 

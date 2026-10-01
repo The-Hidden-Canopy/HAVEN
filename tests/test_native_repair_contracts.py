@@ -95,6 +95,16 @@ def test_native_email_delete_stays_confirmation_gated_and_provider_scoped():
     assert "_emailCanMutate" in comms
 
 
+def test_native_email_full_body_indexing_is_explicit_and_personal_scope_only():
+    client = (NATIVE / "Services" / "HavenCoreClient.cs").read_text(encoding="utf-8")
+    comms = (NATIVE / "MainWindow.Comms.cs").read_text(encoding="utf-8")
+    xaml = (NATIVE / "MainWindow.xaml").read_text(encoding="utf-8")
+    assert "include_body" in client
+    assert "Index full email bodies?" in comms
+    assert "full_body_indexing" in comms
+    assert "EmailFullBodyButton" in xaml
+
+
 def test_native_activity_renders_recent_work_evidence():
     activity = (NATIVE / "MainWindow.Computer.cs").read_text(encoding="utf-8")
     client = (NATIVE / "Services" / "HavenCoreClient.cs").read_text(encoding="utf-8")
