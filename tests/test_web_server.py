@@ -185,6 +185,39 @@ def test_mutating_post_bumps_system_revision_on_the_next_get(server) -> None:
     assert after["system"]["revision"] > before["system"]["revision"]
 
 
+def test_email_delete_http_surface_preserves_confirmation_boundary(server, monkeypatch) -> None:
+    instance, _director, port = server
+
+    class FakeProvider:
+        provider_id = "haven.email.imap_smtp"
+
+        def capabilities(self):
+            from haven.integrations.comms import EmailCapabilities
+
+            return EmailCapabilities(True, True, True, "fake transport")
+
+        def delete(self, _message_id):
+            return True
+
+    monkeypatch.setattr(instance.comms, "email_provider", lambda: FakeProvider())
+    status, pending = _post(
+        port,
+        "/api/email/delete",
+        {"message_id": "<remote@example.org>", "justification": "remove a duplicate"},
+    )
+    assert status == 200
+    assert pending["status"] == "confirmation_required"
+
+    status, deleted = _post(
+        port,
+        "/api/email/confirm",
+        {"request_id": pending["request_id"]},
+    )
+    assert status == 200
+    assert deleted["success"] is True
+    assert deleted["detail"] == "deleted and verified by IMAP provider"
+
+
 def test_static_root_is_served_or_404s_gracefully(server) -> None:
     import tempfile
 
