@@ -16,6 +16,7 @@ from .calendar import (
     RemoteIcsCalendarProvider,
     parse_ics,
     render_ics,
+    validate_remote_calendar_url,
 )
 from .conversations import (
     CONVERSATION_PROVIDER_ID,
@@ -59,4 +60,5 @@ __all__ = [
     "UnconfiguredEmailProvider",
     "parse_ics",
     "render_ics",
+    "validate_remote_calendar_url",
 ]

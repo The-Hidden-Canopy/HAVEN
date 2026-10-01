@@ -292,6 +292,16 @@ def test_credentialed_remote_calendar_configuration_is_metadata_only(server, mon
     # IPC test independent of the host's DPAPI profile while the credential
     # store's dedicated test covers the real Windows mechanism.
     monkeypatch.setattr(instance.credentials, "_protect", lambda value: b"protected:" + value)
+    rejected = _dispatch(
+        instance,
+        "calendar.remote.configure",
+        {
+            "url": "https://calendar.example.org/private.ics?access_token=embedded-secret",
+            "secret": "calendar-token",
+        },
+    )["result"]
+    assert rejected["ok"] is False
+    assert "embedded-secret" not in str(rejected)
     configured = _dispatch(
         instance,
         "calendar.remote.configure",
