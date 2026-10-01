@@ -118,6 +118,9 @@ def test_local_eml_provider_reads_bounded_snippet() -> None:
         assert message.labels == ("work", "unlv")
         assert "draft reads well" in message.snippet
         assert len(message.snippet) <= 240
+        assert message.body == ""
+        (full_message,) = provider.messages(include_body=True)
+        assert "Second line of the message body here." in full_message.body
 
 
 def test_unconfigured_and_missing_folder_states_are_explicit() -> None:
@@ -205,6 +208,9 @@ def test_credential_email_provider_reads_imap_and_sends_smtp_without_exposing_se
     (message,) = provider.messages()
     assert message.subject == "Remote update"
     assert message.snippet == "The remote mailbox body."
+    assert message.body == ""
+    (full_message,) = provider.messages(include_body=True)
+    assert full_message.body == "The remote mailbox body.\r\n"
 
     message_id = provider.send(
         recipients=("ada@example.org",),

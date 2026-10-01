@@ -213,7 +213,7 @@ public sealed partial class MainWindow
 
     // -- email: list + detail (spec 29) ------------------------------------------
 
-    private async Task LoadEmailAsync()
+    private async Task LoadEmailAsync(bool includeBody = false)
     {
         if (_client is null)
         {
@@ -230,6 +230,10 @@ public sealed partial class MainWindow
             var canSend = capabilities.ValueKind == JsonValueKind.Object
                 && capabilities.TryGetProperty("send", out var send)
                 && send.ValueKind == JsonValueKind.True;
+            var bodyIndexingAvailable = status.TryGetProperty("full_body_indexing", out var bodyIndexing)
+                && bodyIndexing.ValueKind == JsonValueKind.Object
+                && bodyIndexing.TryGetProperty("available", out var bodyAvailable)
+                && bodyAvailable.ValueKind == JsonValueKind.True;
             _emailCanMutate = capabilities.ValueKind == JsonValueKind.Object
                 && capabilities.TryGetProperty("mutate", out var mutate)
                 && mutate.ValueKind == JsonValueKind.True;
@@ -237,6 +241,9 @@ public sealed partial class MainWindow
                 ? $"Connected: {GetString(status, "provider")} ({(canSend ? "read + send" : "read-only")}{(_emailCanMutate ? " + delete" : "")})"
                 : $"Not connected: {GetString(status, "detail") ?? "no email provider configured"}";
             EmailFolderButton.Content = configured ? "Change mail folder…" : "Connect a mail folder…";
+            EmailFullBodyButton.Visibility = configured && bodyIndexingAvailable
+                ? Visibility.Visible
+                : Visibility.Collapsed;
 
             EmailMessages.Items.Clear();
             _emailMessagesById.Clear();
@@ -247,7 +254,7 @@ public sealed partial class MainWindow
                 return;
             }
             CommsEmailGrid.Visibility = Visibility.Visible;
-            var messages = Enumerate(await _client.GetEmailMessagesAsync(), "messages").ToList();
+            var messages = Enumerate(await _client.GetEmailMessagesAsync(includeBody), "messages").ToList();
             foreach (var message in messages)
             {
                 var messageId = GetString(message, "message_id") ?? "";
@@ -319,15 +326,23 @@ public sealed partial class MainWindow
             }
             EmailDetail.Children.Add(chips);
         }
-        // The read-side snippet is deliberately bounded (spec 29: full-body
-        // indexing is opt-in and scope-aware) - this is the whole message
-        // HAVEN has, not a truncated preview of more it's hiding.
+        var hasIndexedBody = m.TryGetProperty("body", out var bodyValue)
+            && bodyValue.ValueKind == JsonValueKind.String;
         EmailDetail.Children.Add(new TextBlock
         {
-            Text = GetString(m, "snippet") ?? "",
+            Text = hasIndexedBody ? bodyValue.GetString() ?? "" : GetString(m, "snippet") ?? "",
             Style = (Style)Application.Current.Resources["HavenBodyTextStyle"],
             TextWrapping = TextWrapping.Wrap,
         });
+        if (hasIndexedBody)
+        {
+            EmailDetail.Children.Add(new TextBlock
+            {
+                Text = "Full body indexed by explicit request in the personal scope.",
+                Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
         if (_emailCanMutate)
         {
             var messageId = GetString(m, "message_id") ?? "";
@@ -415,6 +430,44 @@ public sealed partial class MainWindow
     private async void OnEmailFolderClicked(object sender, RoutedEventArgs args)
     {
         await PickMaildirAsync();
+    }
+
+    private async void OnEmailFullBodyClicked(object sender, RoutedEventArgs args)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        var dialog = new ContentDialog
+        {
+            Title = "Index full email bodies?",
+            Content = "This explicitly requests full plain-text bodies from the connected personal mailbox and adds them to HAVEN's local search index. Attachments and other MIME parts are not indexed.",
+            PrimaryButtonText = "Index full bodies",
+            CloseButtonText = "Cancel",
+            XamlRoot = RootGrid().XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+        try
+        {
+            CommsStatusText.Text = "Indexing full bodies…";
+            var result = await _client.GetEmailMessagesAsync(includeBody: true);
+            if (result.ValueKind == JsonValueKind.Object
+                && result.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                CommsErrorText.Text = GetString(result, "error") ?? "HAVEN Core refused full-body indexing.";
+                return;
+            }
+            await LoadEmailAsync(includeBody: true);
+            CommsStatusText.Text = "Full email bodies indexed for this view.";
+        }
+        catch (Exception ex)
+        {
+            CommsErrorText.Text = ex.Message;
+        }
     }
 
     private async Task PickMaildirAsync()

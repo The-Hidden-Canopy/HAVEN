@@ -569,6 +569,7 @@
                         <StackPanel Orientation="Horizontal" Spacing="10">
                             <TextBlock x:Name="EmailConnectionText" VerticalAlignment="Center" Style="{StaticResource HavenMetadataTextStyle}" />
                             <Button x:Name="EmailFolderButton" Content="Change mail folder…" Click="OnEmailFolderClicked" Style="{StaticResource HavenSecondaryButtonStyle}" />
+                            <Button x:Name="EmailFullBodyButton" Content="Index full bodies…" Click="OnEmailFullBodyClicked" Visibility="Collapsed" Style="{StaticResource HavenSecondaryButtonStyle}" />
                         </StackPanel>
                         <Grid x:Name="CommsEmailGrid" ColumnSpacing="18">
                             <Grid.ColumnDefinitions>

@@ -45,6 +45,7 @@ class EmailMessage:
     thread_id: str = ""
     labels: tuple[str, ...] = ()
     snippet: str = ""
+    body: str = ""
 
 
 class EmailProviderError(RuntimeError):
@@ -92,9 +93,11 @@ class CredentialEmailProvider:
             detail="credentialed IMAP read + SMTP send over TLS; network reachability is checked per operation",
         )
 
-    def messages(self, *, limit: int = 100) -> tuple[EmailMessage, ...]:
+    def messages(self, *, limit: int = 100, include_body: bool = False) -> tuple[EmailMessage, ...]:
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError("limit must be a positive integer")
+        if not isinstance(include_body, bool):
+            raise ValueError("include_body must be a boolean")
         client = None
         try:
             client = self._imap_factory(self._imap_host, self._imap_port)
@@ -115,7 +118,12 @@ class CredentialEmailProvider:
                     continue
                 raw = b"".join(part[1] for part in fetched if isinstance(part, tuple) and len(part) > 1)
                 if raw:
-                    rows.append(_parsed_email_message(BytesParser(policy=policy.default).parsebytes(raw)))
+                    rows.append(
+                        _parsed_email_message(
+                            BytesParser(policy=policy.default).parsebytes(raw),
+                            include_body=include_body,
+                        )
+                    )
             return tuple(rows)
         except EmailProviderError:
             raise
@@ -225,7 +233,7 @@ class CredentialEmailProvider:
                     pass
 
 
-def _parsed_email_message(parsed) -> EmailMessage:
+def _plain_body(parsed) -> str:
     body = ""
     if parsed.is_multipart():
         for part in parsed.walk():
@@ -237,6 +245,11 @@ def _parsed_email_message(parsed) -> EmailMessage:
             body = parsed.get_content()
         except Exception:
             body = ""
+    return str(body)
+
+
+def _parsed_email_message(parsed, *, include_body: bool = False) -> EmailMessage:
+    body = _plain_body(parsed)
     message_id = str(parsed.get("Message-ID") or "")
     return EmailMessage(
         message_id=message_id,
@@ -247,6 +260,7 @@ def _parsed_email_message(parsed) -> EmailMessage:
         thread_id=str(parsed.get("References") or "").split()[-1] if parsed.get("References") else message_id,
         labels=tuple(item.strip() for item in str(parsed.get("Keywords") or "").split(",") if item.strip()),
         snippet=" ".join(str(body).split())[:SNIPPET_LENGTH],
+        body=body if include_body else "",
     )
 
 
@@ -273,7 +287,11 @@ class LocalMaildirProvider:
             detail="read-only local .eml adapter; send/mutate need a credentialed provider",
         )
 
-    def messages(self, *, limit: int = 100) -> tuple[EmailMessage, ...]:
+    def messages(self, *, limit: int = 100, include_body: bool = False) -> tuple[EmailMessage, ...]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        if not isinstance(include_body, bool):
+            raise ValueError("include_body must be a boolean")
         if not self._folder.is_dir():
             return ()
         rows: list[EmailMessage] = []
@@ -282,17 +300,7 @@ class LocalMaildirProvider:
                 parsed = BytesParser(policy=policy.default).parsebytes(path.read_bytes())
             except (OSError, email.errors.MessageError):
                 continue
-            body = ""
-            if parsed.is_multipart():
-                for part in parsed.walk():
-                    if part.get_content_type() == "text/plain":
-                        body = part.get_content()
-                        break
-            else:
-                try:
-                    body = parsed.get_content()
-                except Exception:
-                    body = ""
+            body = _plain_body(parsed)
             snippet = " ".join(str(body).split())[:SNIPPET_LENGTH]
             at = parsed.get("Date")
             rows.append(
@@ -315,6 +323,7 @@ class LocalMaildirProvider:
                         if label.strip()
                     ),
                     snippet=snippet,
+                    body=body if include_body else "",
                 )
             )
         return tuple(rows)
@@ -331,7 +340,7 @@ class UnconfiguredEmailProvider:
     def capabilities(self) -> EmailCapabilities:
         return EmailCapabilities(read=False, send=False, mutate=False, detail=self._detail)
 
-    def messages(self, *, limit: int = 100) -> tuple[EmailMessage, ...]:
+    def messages(self, *, limit: int = 100, include_body: bool = False) -> tuple[EmailMessage, ...]:
         return ()
 
 
