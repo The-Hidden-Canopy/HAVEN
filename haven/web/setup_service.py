@@ -1014,6 +1014,39 @@ class SetupService:
             return {"ok": False, "error": error}
         return self.status()
 
+    def persist_discovery_enrollment(self, manifest: DeviceManifest) -> str | None:
+        """Persist an everyday Discover enrollment beside setup enrollments.
+
+        The post-setup Discover surface owns candidate aggregation, but the
+        enrolled-manifest sidecar is still the installation's one durable
+        source for rebuilding the device registry.  Keep this adapter narrow:
+        ``DiscoveryService`` has already performed the owner/capability
+        checks and supplies the resulting manifest; this method only writes
+        that governed decision into the same sidecar the setup wizard uses.
+        """
+
+        if not isinstance(manifest, DeviceManifest):
+            return "discovery enrollment must provide a DeviceManifest"
+        if manifest.device_id in self._enrolled:
+            return f"device is already enrolled: {manifest.device_id}"
+
+        manifests: list[dict] = []
+        for row in self._enrolled.values():
+            device_id = row.get("device_id")
+            if isinstance(device_id, str) and self._director.registry.is_registered(device_id):
+                manifests.append(self._director.registry.get(device_id).to_dict())
+        manifests.append(manifest.to_dict())
+        try:
+            _write_json_atomic(
+                self._enrolled_path(),
+                {"version": _ENROLLED_VERSION, "manifests": manifests},
+            )
+        except SetupConfigError as exc:
+            return str(exc)
+
+        self._enrolled[manifest.device_id] = _enrolled_row(manifest.device_id, manifest)
+        return None
+
     def set_preferences(self, *, voice: bool, intelligence: bool) -> dict:
         if not isinstance(voice, bool) or not isinstance(intelligence, bool):
             return {"ok": False, "error": "'voice' and 'intelligence' must be booleans"}

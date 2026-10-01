@@ -577,7 +577,11 @@ class HavenWebServer(ThreadingHTTPServer):
         )
         # Everyday (post-setup) discovery: real transports only, no demo
         # fixtures -- distinct from `self.setup`'s one-time onboarding scan.
-        self.discovery = DiscoveryService(director=self.director, providers=default_discovery_providers())
+        self.discovery = DiscoveryService(
+            director=self.director,
+            providers=default_discovery_providers(),
+            persist_enrollment=self.setup.persist_discovery_enrollment,
+        )
         # External Agent Gateway (Build/Ship/Shape): admission boundary for
         # outside assistants (Alexa+ MCP first). `self.external_agents` is
         # the owner-facing connection/binding surface; `self.external_agent_gateway`
