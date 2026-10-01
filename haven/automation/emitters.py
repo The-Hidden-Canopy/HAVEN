@@ -9,9 +9,10 @@ can ask a domain's governed action service to run a matching rule.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from copy import deepcopy
 from typing import Any
 
-from ..core.domain import EvidenceStatus
+from ..core.domain import ContextState, DeviceState, EvidenceStatus, PresenceState
 from ..domains.tasks.models import TaskRecord
 from ..integrations.comms.email import EmailMessage
 from ..resources.models import ResourceRecord
@@ -166,9 +167,144 @@ class ProviderHealthAutomationEmitter:
         )
 
 
+class EvidenceAutomationEmitter:
+    """Publish fused presence/context/device evidence for automation.
+
+    The emitter accepts only HAVEN's typed evidence values, keeps the
+    observation payload bounded, and leaves freshness/confidence decisions to
+    the scheduler's trigger matcher. It does not read a store or execute an
+    action; a real observation provider can call it after its normal fusion
+    and evidence validation step.
+    """
+
+    def __init__(self, feed: AutomationEventFeed) -> None:
+        self._feed = feed
+
+    @staticmethod
+    def _payload(state: PresenceState | ContextState | DeviceState) -> tuple[str, str, dict[str, Any]]:
+        if isinstance(state, PresenceState):
+            return (
+                "presence",
+                state.person_id,
+                {
+                    "person_id": state.person_id,
+                    "room_id": state.room_id,
+                    "present": state.present,
+                    "value": state.present,
+                    "confidence": state.confidence,
+                    "source": state.source,
+                },
+            )
+        if isinstance(state, ContextState):
+            return (
+                "context",
+                state.context_id,
+                {
+                    "context_id": state.context_id,
+                    "active": state.active,
+                    "value": state.active,
+                    "confidence": state.confidence,
+                    "source": state.source,
+                },
+            )
+        if isinstance(state, DeviceState):
+            return (
+                "device",
+                state.device_id,
+                {
+                    "device_id": state.device_id,
+                    "kind": state.kind,
+                    "room_id": state.room_id,
+                    "is_on": state.is_on,
+                    "brightness_pct": state.brightness_pct,
+                    "cover_state": state.cover_state.value if state.cover_state is not None else None,
+                    "lock_state": state.lock_state.value if state.lock_state is not None else None,
+                    "climate_mode": state.climate_mode,
+                    "current_temperature": state.current_temperature,
+                    "target_temperature": state.target_temperature,
+                    "camera_available": state.camera_available,
+                    "motion_detected": state.motion_detected,
+                    "value": state.raw_state if state.raw_state is not None else state.is_on,
+                    "confidence": state.confidence,
+                    "source": state.source,
+                },
+            )
+        raise TypeError("state must be PresenceState, ContextState, or DeviceState")
+
+    def changed(
+        self,
+        state: PresenceState | ContextState | DeviceState,
+        *,
+        occurred_at=None,
+    ) -> AutomationEvent:
+        kind, subject_id, payload = self._payload(state)
+        payload.update({"evidence_kind": kind, "subject_id": subject_id})
+        return self._feed.publish(
+            event_id=f"evidence:{kind}:{subject_id}:{state.observed_at.isoformat()}:{state.source}",
+            event_name="evidence.changed",
+            occurred_at=occurred_at if occurred_at is not None else state.observed_at,
+            payload=payload,
+            evidence_status=state.status,
+        )
+
+
+_MISSING = object()
+
+
+class ExternalConditionAutomationEmitter:
+    """Publish provider-reported condition transitions.
+
+    Repeated observations with the same provider, condition, and value are
+    coalesced. The first observation is still published so a newly-started
+    process can establish the current condition; degraded evidence is carried
+    through and rejected by the scheduler rather than treated as a false
+    condition.
+    """
+
+    def __init__(self, feed: AutomationEventFeed) -> None:
+        self._feed = feed
+        self._last: dict[tuple[str, str], tuple[Any, EvidenceStatus]] = {}
+        self._sequence = 0
+
+    def changed(
+        self,
+        *,
+        provider_id: str,
+        condition: str,
+        value: Any,
+        evidence_status: EvidenceStatus = EvidenceStatus.OBSERVED,
+        occurred_at=None,
+    ) -> AutomationEvent | None:
+        if not isinstance(provider_id, str) or not provider_id.strip():
+            raise ValueError("provider_id must be a non-empty string")
+        if not isinstance(condition, str) or not condition.strip():
+            raise ValueError("condition must be a non-empty string")
+        if not isinstance(evidence_status, EvidenceStatus):
+            raise ValueError("evidence_status must be an EvidenceStatus")
+        key = (provider_id.strip(), condition.strip())
+        previous = self._last.get(key, _MISSING)
+        if previous is not _MISSING and previous[0] == value and previous[1] is evidence_status:
+            return None
+        previous_value = previous[0] if previous is not _MISSING else _MISSING
+        self._last[key] = (deepcopy(value), evidence_status)
+        self._sequence += 1
+        payload: dict[str, Any] = {"provider_id": key[0], "condition": key[1], "value": deepcopy(value)}
+        if previous_value is not _MISSING:
+            payload["previous_value"] = deepcopy(previous_value)
+        return self._feed.publish(
+            event_id=f"external:{key[0]}:{key[1]}:{self._sequence}",
+            event_name="external.condition.changed",
+            occurred_at=occurred_at,
+            payload=payload,
+            evidence_status=evidence_status,
+        )
+
+
 __all__ = [
     "ComputerResourceAutomationEmitter",
+    "EvidenceAutomationEmitter",
     "EmailAutomationEmitter",
+    "ExternalConditionAutomationEmitter",
     "ProviderHealthAutomationEmitter",
     "TaskAutomationEmitter",
 ]

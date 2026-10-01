@@ -5,11 +5,13 @@ from datetime import datetime, timezone
 from haven.automation import (
     AutomationEventFeed,
     ComputerResourceAutomationEmitter,
+    EvidenceAutomationEmitter,
     EmailAutomationEmitter,
+    ExternalConditionAutomationEmitter,
     ProviderHealthAutomationEmitter,
     TaskAutomationEmitter,
 )
-from haven.core.domain import EvidenceStatus
+from haven.core.domain import EvidenceStatus, PresenceState
 from haven.domains.tasks.models import OPEN, TaskRecord
 from haven.integrations.comms.email import EmailMessage
 from haven.resources.models import ResourceRecord
@@ -100,6 +102,43 @@ def test_provider_health_emitter_only_publishes_transitions():
     assert second is not None
     assert second.as_dict()["from_state"] == "reachable"
     assert second.as_dict()["to_state"] == "unavailable"
+
+
+def test_evidence_emitter_preserves_typed_state_and_status():
+    feed = _feed()
+    state = PresenceState(
+        person_id="person:1", room_id="office", present=True, observed_at=NOW,
+        source="ble", status=EvidenceStatus.OBSERVED, confidence=0.85,
+    )
+    event = EvidenceAutomationEmitter(feed).changed(state)
+    assert event.event_name == "evidence.changed"
+    assert event.as_dict()["evidence_kind"] == "presence"
+    assert event.as_dict()["present"] is True
+    assert event.as_dict()["confidence"] == 0.85
+
+
+def test_external_condition_emitter_coalesces_same_value_and_keeps_degraded_status():
+    feed = _feed()
+    emitter = ExternalConditionAutomationEmitter(feed)
+    first = emitter.changed(provider_id="calendar", condition="reachable", value=True, occurred_at=NOW)
+    assert first is not None
+    assert emitter.changed(provider_id="calendar", condition="reachable", value=True, occurred_at=NOW) is None
+    second = emitter.changed(
+        provider_id="calendar", condition="reachable", value=False,
+        evidence_status=EvidenceStatus.UNAVAILABLE, occurred_at=NOW,
+    )
+    assert second is not None
+    assert second.evidence_status is EvidenceStatus.UNAVAILABLE
+    assert second.as_dict()["previous_value"] is True
+    assert emitter.changed(
+        provider_id="calendar", condition="reachable", value=False,
+        evidence_status=EvidenceStatus.UNAVAILABLE, occurred_at=NOW,
+    ) is None
+    recovered = emitter.changed(
+        provider_id="calendar", condition="reachable", value=False,
+        evidence_status=EvidenceStatus.OBSERVED, occurred_at=NOW,
+    )
+    assert recovered is not None
 
 
 def test_feed_is_bounded_and_failing_consumers_do_not_break_publish():
