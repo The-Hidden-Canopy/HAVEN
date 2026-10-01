@@ -151,6 +151,20 @@ limitations into product acceptance claims. The interactive proof loop and
 target-hardware/provider gates remain open until they can be run on a suitable
 Windows session.
 
+### Discovery verification refresh — 2026-10-01
+
+The continued build-spec slice added a durable harmless-read boundary to the
+everyday Discover flow. The focused discovery, IPC, and sidecar-migration
+selection passed **38 tests**. It covers an observed provider state becoming
+`verified`, an empty/provider-failure result remaining `unavailable`, unknown
+device refusal, sidecar persistence, and reload. The related automation and
+External Agent/MCP regression selection also passed. A disposable writable
+native clone built the changed client and ran `Haven.Desktop.Tests` **6/6
+passed**; only the known offline NuGet vulnerability-feed and missing
+publish-profile warnings were emitted. This is code/test evidence, not a
+claim that real target hardware or the interactive native proof loop has been
+completed.
+
 ## Artifact checklist
 
 For each run, record:
