@@ -73,7 +73,7 @@ Not tasks — standing constraints to hold future work against: native is produc
 - [ ] RPC failure and event failure have distinct, truthful UI states.
 - [ ] Event channel reconnects after forced stall/disconnect.
 - [ ] Backup creation, restore and restart boundary are understood and tested.
-- [~] Secret boundary is verified for diagnostics, unified receipts, ordinary backup bytes, and remote-calendar URL/provider error redaction (configured Home Assistant regression coverage in `tests/test_diagnostics_export.py`; remote-calendar coverage in `tests/test_comms_providers.py`); a dedicated whole-release log-redaction proof remains open.
+- [~] Secret boundary is verified for diagnostics, unified receipts, ordinary backup bytes, and remote-calendar URL/provider error redaction (configured Home Assistant regression coverage in `tests/test_diagnostics_export.py`; remote-calendar coverage in `tests/test_comms_providers.py`). The detached desktop sink now redacts recognized credential fields in both `haven.log` and console-less capture, covered by `tests/test_desktop_shell.py`; live third-party/provider logging remains an external packaging gate.
 - [ ] Native UI passes desktop and tablet minimum layout matrix.
 - [ ] Documentation matches current product behavior.
 

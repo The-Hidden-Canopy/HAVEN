@@ -17,9 +17,11 @@ from __future__ import annotations
 import argparse
 import base64
 import http.client
+import io
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -50,6 +52,57 @@ class DesktopShellAlreadyRunning(DesktopShellError):
 
 
 _ACTIVATION_FILE = ".haven-desktop-control.json"
+
+
+_SENSITIVE_ASSIGNMENT = re.compile(
+    r"(?i)(?P<prefix>[\"']?(?:authorization|proxy-authorization|access[_-]?token|refresh[_-]?token|api[_-]?key|apikey|password|passwd|secret|credential|token)[\"']?\s*[:=]\s*[\"']?(?:bearer\s+|basic\s+)?)(?P<value>[^\s,;\"']+)"
+)
+_AUTH_SCHEME = re.compile(r"(?i)(?P<scheme>\b(?:bearer|basic)\s+)(?P<value>[^\s,;\"']+)")
+
+
+def _redact_secret_text(value: str) -> str:
+    """Remove credential values from diagnostic text at the log boundary.
+
+    Providers are expected to redact their own errors, but the detached
+    desktop host is the last durable sink for uncaught exceptions and legacy
+    ``print`` calls. Keep this boundary conservative: redact values only
+    when they are attached to a recognized secret-bearing field or auth
+    scheme, while leaving ordinary diagnostic text readable.
+    """
+
+    if not isinstance(value, str) or not value:
+        return value
+    redacted = _SENSITIVE_ASSIGNMENT.sub(lambda match: f"{match.group('prefix')}[REDACTED]", value)
+    return _AUTH_SCHEME.sub(lambda match: f"{match.group('scheme')}[REDACTED]", redacted)
+
+
+class _SecretRedactingFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return _redact_secret_text(super().format(record))
+
+
+class _SecretRedactingTextIO(io.TextIOBase):
+    """Text stream wrapper used for console-less durable capture."""
+
+    def __init__(self, raw) -> None:
+        self._raw = raw
+
+    @property
+    def encoding(self):
+        return getattr(self._raw, "encoding", "utf-8")
+
+    def write(self, value: str) -> int:
+        return self._raw.write(_redact_secret_text(value))
+
+    def flush(self) -> None:
+        self._raw.flush()
+
+    def close(self) -> None:
+        self._raw.close()
+
+    @property
+    def closed(self) -> bool:
+        return self._raw.closed
 
 
 def _activation_path(data_dir: Path) -> Path:
@@ -429,7 +482,7 @@ def _configure_logging(data_dir: Path) -> None:
     handler = RotatingFileHandler(
         data_dir / "haven.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8"
     )
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    handler.setFormatter(_SecretRedactingFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root.setLevel(logging.INFO)
     root.addHandler(handler)
     _log_handler = handler
@@ -448,7 +501,9 @@ def _configure_logging(data_dir: Path) -> None:
         # stdout/stderr is missing at it, so old-style print() calls
         # elsewhere in this codebase still land somewhere durable instead
         # of raising.
-        _console_log_file = open(data_dir / "haven-console.log", "a", encoding="utf-8", buffering=1)
+        _console_log_file = _SecretRedactingTextIO(
+            open(data_dir / "haven-console.log", "a", encoding="utf-8", buffering=1)
+        )
         if sys.stdout is None:
             sys.stdout = _console_log_file
         if sys.stderr is None:
