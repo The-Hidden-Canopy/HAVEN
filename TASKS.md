@@ -72,7 +72,7 @@ Not tasks — standing constraints to hold future work against: native is produc
 - [ ] RPC failure and event failure have distinct, truthful UI states.
 - [ ] Event channel reconnects after forced stall/disconnect.
 - [ ] Backup creation, restore and restart boundary are understood and tested.
-- [ ] No secrets in diagnostics, receipts, logs or ordinary backups.
+- [~] Secret boundary is verified for diagnostics, unified receipts, and ordinary backup bytes (configured Home Assistant regression coverage in `tests/test_diagnostics_export.py`); a dedicated log-redaction/release proof remains open.
 - [ ] Native UI passes desktop and tablet minimum layout matrix.
 - [ ] Documentation matches current product behavior.
 
