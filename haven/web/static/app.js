@@ -2529,6 +2529,21 @@ async function openAuthoringDialog(kind, record) {
     const deadlineOffset = authoringField(form, 'Deadline offset (minutes)', authoringInput(
       'resource-authoring-deadline-offset', 'number', '0'
     ));
+    const evidenceKind = authoringField(form, 'Evidence kind (for evidence trigger)', authoringInput(
+      'resource-authoring-evidence-kind', 'text', '', 'presence, context, or device'
+    ));
+    const evidenceConfidence = authoringField(form, 'Minimum evidence confidence', authoringInput(
+      'resource-authoring-evidence-confidence', 'number', '0', '0 through 1'
+    ));
+    const externalProvider = authoringField(form, 'Provider id (for external condition)', authoringInput(
+      'resource-authoring-external-provider', 'text', '', 'e.g. home_assistant'
+    ));
+    const externalCondition = authoringField(form, 'Condition name', authoringInput(
+      'resource-authoring-external-condition', 'text', '', 'e.g. reachable'
+    ));
+    const externalValue = authoringField(form, 'Condition value (JSON)', authoringInput(
+      'resource-authoring-external-value', 'text', 'true', 'true, false, a number, or a quoted string'
+    ));
     const selector = authoringField(form, 'Selector filters (JSON object, optional)', authoringTextarea(
       'resource-authoring-selector', '{}', '{"project_id":"project-1"}'
     ));
@@ -2585,15 +2600,34 @@ async function openAuthoringDialog(kind, record) {
         if (weekdayNumbers.some((value) => !Number.isInteger(value) || value < 0 || value > 6)) {
           throw new Error('Weekdays must be integers from 0 through 6.');
         }
-        const triggerParameters = triggerKind.value === 'time'
-          ? [['time_of_day', timeOfDay.value.trim()], ['weekdays', weekdayNumbers], ['window_minutes', 5]]
-          : triggerKind.value === 'event'
-            ? [['event_name', eventName.value.trim()]]
-            : [
-              ...(deadlineSourceKind.value.trim() ? [['source_kind', deadlineSourceKind.value.trim()]] : []),
-              ...(deadlineSourceId.value.trim() ? [['source_id', deadlineSourceId.value.trim()]] : []),
-              ['offset_minutes', Number(deadlineOffset.value || 0)],
-            ];
+        let triggerParameters;
+        if (triggerKind.value === 'time') {
+          triggerParameters = [['time_of_day', timeOfDay.value.trim()], ['weekdays', weekdayNumbers], ['window_minutes', 5]];
+        } else if (triggerKind.value === 'event') {
+          triggerParameters = [['event_name', eventName.value.trim()]];
+        } else if (triggerKind.value === 'evidence') {
+          const confidence = Number(evidenceConfidence.value || 0);
+          if (!evidenceKind.value.trim()) throw new Error('An evidence kind is required for an evidence trigger.');
+          if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+            throw new Error('Minimum evidence confidence must be between 0 and 1.');
+          }
+          triggerParameters = [['evidence_kind', evidenceKind.value.trim()], ['min_confidence', confidence]];
+        } else if (triggerKind.value === 'deadline') {
+          triggerParameters = [
+            ...(deadlineSourceKind.value.trim() ? [['source_kind', deadlineSourceKind.value.trim()]] : []),
+            ...(deadlineSourceId.value.trim() ? [['source_id', deadlineSourceId.value.trim()]] : []),
+            ['offset_minutes', Number(deadlineOffset.value || 0)],
+          ];
+        } else {
+          if (!externalProvider.value.trim() || !externalCondition.value.trim()) {
+            throw new Error('Provider id and condition are required for an external-condition trigger.');
+          }
+          triggerParameters = [
+            ['provider_id', externalProvider.value.trim()],
+            ['condition', externalCondition.value.trim()],
+            ['value', JSON.parse(externalValue.value || 'null')],
+          ];
+        }
         if (triggerKind.value === 'event' && !eventName.value.trim()) {
           throw new Error('An event name is required for an event trigger.');
         }

@@ -95,8 +95,31 @@ def test_resource_automation_ipc_options_are_authoritative(tmp_path: Path):
         options = response["result"]["options"]
         assert options["household_id"] == server.director.household_id
         assert options["created_by"] == server.identity.principal_id
-        assert options["trigger_kinds"] == ["time", "event", "deadline"]
+        assert options["trigger_kinds"] == ["time", "event", "evidence", "deadline", "external_condition"]
         assert {item["domain"] for item in options["actions"]} == {"computer", "email"}
+    finally:
+        server.server_close()
+
+
+def test_resource_automation_ipc_accepts_evidence_and_external_condition_specs(tmp_path: Path):
+    server, _ = make_server(0, data_dir=tmp_path / "data", clock=lambda: NOW)
+    try:
+        evidence = _spec(household_id=server.director.household_id)
+        evidence["spec_id"] = "evidence-spec"
+        evidence["trigger"] = {
+            "kind": "evidence",
+            "parameters": [["evidence_kind", "presence"], ["min_confidence", 0.8]],
+        }
+        external = _spec(household_id=server.director.household_id)
+        external["spec_id"] = "external-spec"
+        external["trigger"] = {
+            "kind": "external_condition",
+            "parameters": [["provider_id", "calendar"], ["condition", "reachable"], ["value", True]],
+        }
+        for rule_id, spec in (("evidence-rule", evidence), ("external-rule", external)):
+            result = _dispatch(server, "resource_automations.create", {"rule_id": rule_id, "spec": spec})
+            assert result["ok"] is True
+            assert result["result"]["automation"]["spec"]["trigger"]["kind"] == spec["trigger"]["kind"]
     finally:
         server.server_close()
 

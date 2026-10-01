@@ -107,7 +107,7 @@ def test_resource_automation_options_are_authoritative_and_scheduler_scoped() ->
         options = body["options"]
         assert options["household_id"] == director.household_id
         assert options["created_by"]
-        assert options["trigger_kinds"] == ["time", "event", "deadline"]
+        assert options["trigger_kinds"] == ["time", "event", "evidence", "deadline", "external_condition"]
         assert "reversible_local" in options["consequence_classes"]
         assert {item["domain"] for item in options["actions"]} == {"computer", "email"}
 
@@ -148,6 +148,8 @@ def test_web_panel_projects_resource_automation_lifecycle() -> None:
     for marker in (
         "openAuthoringDialog('resource-automation')",
         "resource-automation-trigger",
+        "resource-authoring-evidence-kind",
+        "resource-authoring-external-provider",
         "resource-automation-parameters",
         "renderResourceAutomations",
         "resource_automations.changed",
