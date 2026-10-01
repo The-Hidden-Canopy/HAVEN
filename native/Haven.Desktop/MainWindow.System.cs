@@ -58,6 +58,23 @@ public sealed partial class MainWindow
 
         try
         {
+            var export = await _client.ExportDiagnosticsAsync();
+            RenderUnifiedReceipts(export);
+        }
+        catch (Exception ex)
+        {
+            ReceiptsList.Children.Clear();
+            ReceiptsErrorText.Text = $"Could not load recent governed actions: {ex.Message}";
+            ReceiptsList.Children.Add(new TextBlock
+            {
+                Text = "Recent governed actions are unavailable until HAVEN Core reconnects.",
+                Opacity = 0.72,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
+        try
+        {
             await RenderExtensionsAsync();
         }
         catch (Exception ex)
@@ -88,6 +105,103 @@ public sealed partial class MainWindow
         if (service is not null)
         {
             RenderService(service.Value.GetProperty("service"));
+        }
+    }
+
+    private void RenderUnifiedReceipts(JsonElement response)
+    {
+        ReceiptsList.Children.Clear();
+        ReceiptsErrorText.Text = "";
+        if (response.ValueKind != JsonValueKind.Object
+            || !response.TryGetProperty("export", out var export)
+            || export.ValueKind != JsonValueKind.Object
+            || !export.TryGetProperty("unified_receipts", out var receipts)
+            || receipts.ValueKind != JsonValueKind.Array)
+        {
+            ReceiptsList.Children.Add(new TextBlock
+            {
+                Text = "Recent governed actions are unavailable from this Core version.",
+                Opacity = 0.72,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            return;
+        }
+
+        foreach (var receipt in Enumerate(receipts))
+        {
+            var authorityStatus = GetString(receipt, "authority_status") ?? "unknown";
+            var outcome = authorityStatus;
+            if (receipt.TryGetProperty("execution_success", out var execution)
+                && execution.ValueKind == JsonValueKind.True)
+            {
+                outcome = "executed";
+            }
+            else if (receipt.TryGetProperty("execution_success", out var failedExecution)
+                && failedExecution.ValueKind == JsonValueKind.False)
+            {
+                outcome = "execution failed";
+            }
+
+            var tint = outcome is "executed" or "allow"
+                ? (Tint: "HavenSuccessTintBrush", Foreground: "HavenSuccessBrush")
+                : outcome.Contains("deny", StringComparison.OrdinalIgnoreCase)
+                    ? (Tint: "HavenDangerTintBrush", Foreground: "HavenDangerBrush")
+                    : (Tint: "HavenWarningTintBrush", Foreground: "HavenWarningBrush");
+            var card = new StackPanel { Spacing = 4 };
+            var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            head.Children.Add(new TextBlock
+            {
+                Text = $"{Sentence(GetString(receipt, "domain") ?? "action")} · {GetString(receipt, "action") ?? "unknown"}",
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            head.Children.Add(MakeChip(Sentence(outcome), tint.Tint, tint.Foreground));
+            card.Children.Add(head);
+
+            var target = GetString(receipt, "target");
+            if (target is { Length: > 0 })
+            {
+                card.Children.Add(new TextBlock
+                {
+                    Text = $"Target: {target}",
+                    TextWrapping = TextWrapping.Wrap,
+                    Opacity = 0.82,
+                });
+            }
+            var explanation = GetString(receipt, "execution_detail") ?? GetString(receipt, "authority_explanation");
+            if (explanation is { Length: > 0 })
+            {
+                card.Children.Add(new TextBlock
+                {
+                    Text = explanation,
+                    TextWrapping = TextWrapping.Wrap,
+                    Opacity = 0.72,
+                });
+            }
+            var recorded = GetString(receipt, "recorded_at");
+            var correlation = GetString(receipt, "correlation_id");
+            var metadata = new List<string>();
+            if (recorded is { Length: > 0 }) metadata.Add(recorded);
+            if (correlation is { Length: > 0 }) metadata.Add($"correlation {correlation}");
+            if (metadata.Count > 0)
+            {
+                card.Children.Add(new TextBlock
+                {
+                    Text = string.Join(" · ", metadata),
+                    Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                    TextWrapping = TextWrapping.Wrap,
+                });
+            }
+            ReceiptsList.Children.Add(WrapCard(card));
+        }
+
+        if (ReceiptsList.Children.Count == 0)
+        {
+            ReceiptsList.Children.Add(new TextBlock
+            {
+                Text = "No governed actions recorded yet.",
+                Opacity = 0.72,
+            });
         }
     }
 
