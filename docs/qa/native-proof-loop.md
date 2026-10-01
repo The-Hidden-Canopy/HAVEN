@@ -63,6 +63,43 @@ diagnostic export, or log excerpt) when filing a defect against it.
     a clean data directory, and verify the restart-required boundary is
     honest (the app tells you to restart, not silently half-applies state).
 
+## Latest local validation record
+
+This record is a disposable Windows run against a fresh `HAVEN_DATA_DIR`.
+It is evidence for the items below, not a claim that the complete twelve-step
+acceptance loop is closed.
+
+- **Steps 1–2 — pass.** The built native client launched as `HAVEN` and the
+  seven-step setup wizard was completed entirely through the native UI. The
+  run used the default storage location, skipped optional provider setup, and
+  invoked the real local discovery scan; no WebUI fallback was used.
+- **Step 3 — partial.** An owner was declared and persisted. No additional
+  person or context was added in this run.
+- **Step 4 — pass.** Two rooms were added manually from Home → Rooms and
+  remained present after a supported core-plus-native restart.
+- **Step 5 — partial.** The native discovery scan completed with no candidates
+  in the disposable environment, so no device was enrolled.
+- **Step 6 — blocked by an explicit product precondition.** Propose
+  automation surfaced the native `Connect a device first` result because the
+  run had no writable device capability. No automation lifecycle claim is
+  made.
+- **Step 7 — not exercised.** There was no enrolled device or enabled
+  computer root available for a governed confirmation.
+- **Step 8 — pass.** A project and dated task were created natively. The task
+  appeared in Today, and native Search returned the task and project by title.
+- **Step 9 — pass for the supported launcher path.** After an abrupt native
+  close, restarting the core plus native shell restored Connected state, setup
+  completion, rooms, the Today task, and Search results. Restarting only the
+  native shell correctly showed the core as unavailable and is not counted as
+  the supported restart path.
+- **Steps 10–12 — not exercised.** Event-channel stall/recovery, an
+  unavailable configured provider, and backup/restore still require separate
+  hands-on runs.
+
+The evidence above was captured as live UI-automation observations; no
+screenshots or diagnostic exports were produced by this run. The full artifact
+checklist below remains required before a release tag.
+
 ## Artifact checklist
 
 For each run, record:
