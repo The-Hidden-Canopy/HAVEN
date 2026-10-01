@@ -18,6 +18,7 @@ from typing import Callable, Iterable, Mapping
 
 from ..core.domain import DecisionStatus, Principal, RuleStatus
 from .events import AutomationEvent, AutomationEventFeed
+from .deadlines import AutomationDeadline
 from .lifecycle import (
     AutomationLifecycleEvent,
     AutomationRule,
@@ -44,6 +45,7 @@ class ResourceAutomationService:
         household_id: str,
         feed: AutomationEventFeed,
         dispatch: Mapping[str, Callable[..., dict]],
+        deadline_provider: Callable[[], Iterable[AutomationDeadline]] | None = None,
         clock=_DEFAULT_CLOCK,
         tick_interval: float = 20.0,
     ) -> None:
@@ -57,6 +59,7 @@ class ResourceAutomationService:
         self._clock = clock
         self._tick_interval = float(tick_interval)
         self._feed = feed
+        self._deadline_provider = deadline_provider
         self._store = ResourceAutomationStore(path)
         loaded = self._store.load()
         self._lock = threading.RLock()
@@ -107,7 +110,8 @@ class ResourceAutomationService:
     def scheduler_status(self, *, now: datetime | None = None) -> list[ResourceScheduleStatus]:
         at = now or self._clock()
         with self._lock:
-            return self._scheduler.status(tuple(self._rules.values()), now=at)
+            rules = tuple(self._rules.values())
+        return self._scheduler.status(rules, now=at, deadlines=self._deadline_snapshot())
 
     def propose(self, spec: AutomationSpec, *, rule_id: str) -> AutomationRule:
         if spec.household_id != self._household_id:
@@ -187,7 +191,7 @@ class ResourceAutomationService:
         at = now or self._clock()
         with self._lock:
             rules = tuple(self._rules.values())
-        outcomes = self._scheduler.tick(rules=rules, now=at)
+        outcomes = self._scheduler.tick(rules=rules, now=at, deadlines=self._deadline_snapshot())
         with self._lock:
             self._save_locked()
         return outcomes
@@ -229,6 +233,18 @@ class ResourceAutomationService:
             self._pending.pop(event.event_id, None)
             self._save_locked()
         return outcomes
+
+    def _deadline_snapshot(self) -> tuple[AutomationDeadline, ...]:
+        provider = self._deadline_provider
+        if provider is None:
+            return ()
+        try:
+            values = provider()
+        except Exception:
+            # A failed/degraded deadline source must not disable unrelated
+            # time/event automations or turn absence into a runnable signal.
+            return ()
+        return tuple(item for item in values if isinstance(item, AutomationDeadline))
 
     def start(self) -> None:
         with self._lock:

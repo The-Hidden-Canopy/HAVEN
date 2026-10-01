@@ -19,6 +19,7 @@ import pytest
 from haven.actions import ActionLedgerStore
 from haven.automation import (
     ActionTarget,
+    AutomationDeadline,
     AutomationEvent,
     AutomationEventPublisher,
     AutomationSpec,
@@ -367,9 +368,9 @@ def test_status_includes_event_triggered_rules_with_no_time_projection():
     assert rows[0].next_run_at is None
 
 
-def test_status_omits_evidence_deadline_and_external_condition_triggers():
+def test_status_omits_evidence_and_external_condition_but_projects_deadline_trigger():
     scheduler = ResourceActionScheduler(household_id="household-a", dispatch={})
-    for kind in (TriggerKind.EVIDENCE, TriggerKind.DEADLINE, TriggerKind.EXTERNAL_CONDITION):
+    for kind in (TriggerKind.EVIDENCE, TriggerKind.EXTERNAL_CONDITION):
         spec = AutomationSpec(
             spec_id="spec-1",
             household_id="household-a",
@@ -381,6 +382,123 @@ def test_status_omits_evidence_deadline_and_external_condition_triggers():
         )
         rule = _approved_rule(spec)
         assert scheduler.status([rule], now=NOW) == []
+    deadline_spec = AutomationSpec(
+        spec_id="spec-deadline",
+        household_id="household-a",
+        trigger=Trigger(kind=TriggerKind.DEADLINE, parameters={"source_kind": "task"}),
+        selector=Selector(),
+        action=ActionTarget(domain="tasks", action="task.escalate", consequence_class=ConsequenceClass.REVERSIBLE_LOCAL),
+        source_text="escalate the task at its deadline",
+        created_by="owner-1",
+    )
+    deadline_rule = _approved_rule(deadline_spec, rule_id="deadline-rule")
+    rows = scheduler.status([deadline_rule], now=NOW)
+    assert len(rows) == 1
+    assert rows[0].due_now is False
+    assert rows[0].next_run_at is None
+
+
+def _deadline(
+    *,
+    deadline_id: str = "task:1",
+    due_at: datetime = NOW,
+    source_kind: str = "task",
+    source_id: str = "task-1",
+    active: bool = True,
+    evidence_status: EvidenceStatus = EvidenceStatus.DECLARED,
+    payload: dict | None = None,
+) -> AutomationDeadline:
+    return AutomationDeadline(
+        deadline_id=deadline_id,
+        household_id="household-a",
+        source_kind=source_kind,
+        source_id=source_id,
+        due_at=due_at,
+        active=active,
+        evidence_status=evidence_status,
+        payload=payload or {"task_id": source_id, "state": "open"},
+    )
+
+
+def _deadline_spec(*, offset_minutes: float = 0.0, selector: dict | None = None) -> AutomationSpec:
+    return AutomationSpec(
+        spec_id="deadline-spec",
+        household_id="household-a",
+        trigger=Trigger(
+            kind=TriggerKind.DEADLINE,
+            parameters={"source_kind": "task", "offset_minutes": offset_minutes},
+        ),
+        selector=Selector(parameters=selector or {}),
+        action=ActionTarget(
+            domain="computer",
+            action="computer.noop",
+            consequence_class=ConsequenceClass.REVERSIBLE_LOCAL,
+            parameters={"resource_id": "file:1"},
+        ),
+        source_text="act on a task deadline",
+        created_by="owner-1",
+    )
+
+
+def test_due_deadline_dispatches_once_and_rejects_degraded_evidence():
+    calls: list[dict] = []
+    scheduler = ResourceActionScheduler(
+        household_id="household-a",
+        dispatch={"computer": _recording_dispatch(calls, respond={"ok": True, "success": True})},
+    )
+    rule = _approved_rule(_deadline_spec())
+    item = _deadline()
+
+    first = scheduler.tick(rules=[rule], deadlines=[item], now=NOW)
+    second = scheduler.tick(rules=[rule], deadlines=[item], now=NOW + timedelta(minutes=5))
+    stale = _deadline(deadline_id="task:stale", evidence_status=EvidenceStatus.STALE)
+    unavailable = _deadline(deadline_id="task:unavailable", evidence_status=EvidenceStatus.UNAVAILABLE)
+    ignored = scheduler.tick(rules=[rule], deadlines=[stale, unavailable], now=NOW + timedelta(minutes=5))
+
+    assert [outcome.outcome for outcome in first] == ["executed"]
+    assert second == []
+    assert ignored == []
+    assert len(calls) == 1
+    assert "deadline task:task-1" in calls[0]["justification"]
+
+
+def test_deadline_offset_and_selector_project_future_then_due():
+    scheduler = ResourceActionScheduler(
+        household_id="household-a",
+        dispatch={"computer": lambda **_: {"ok": True, "success": True}},
+    )
+    rule = _approved_rule(_deadline_spec(offset_minutes=-15, selector={"priority": "high"}))
+    item = _deadline(
+        due_at=NOW + timedelta(minutes=30),
+        payload={"task_id": "task-1", "state": "open", "priority": "high"},
+    )
+    other = _deadline(
+        deadline_id="task:2",
+        source_id="task-2",
+        due_at=NOW + timedelta(minutes=30),
+        payload={"task_id": "task-2", "state": "open", "priority": "low"},
+    )
+
+    before = scheduler.status([rule], now=NOW, deadlines=[item, other])
+    due = scheduler.tick(rules=[rule], deadlines=[item, other], now=NOW + timedelta(minutes=15))
+
+    assert before[0].due_now is False
+    assert before[0].next_run_at == (NOW + timedelta(minutes=15)).isoformat()
+    assert len(due) == 1
+
+
+def test_deadline_occurrence_dedup_survives_scheduler_restore():
+    calls: list[dict] = []
+    dispatch = {"computer": _recording_dispatch(calls, respond={"ok": True, "success": True})}
+    rule = _approved_rule(_deadline_spec())
+    item = _deadline()
+    first = ResourceActionScheduler(household_id="household-a", dispatch=dispatch)
+    assert len(first.handle_deadlines(rules=[rule], deadlines=[item], now=NOW)) == 1
+
+    restored = ResourceActionScheduler(household_id="household-a", dispatch=dispatch)
+    restored.restore_state(first.snapshot_state())
+    assert restored.handle_deadlines(rules=[rule], deadlines=[item], now=NOW + timedelta(hours=1)) == []
+    assert len(calls) == 1
 
 
 # -- event-triggered dispatch (handle_events) -----------------------------------
