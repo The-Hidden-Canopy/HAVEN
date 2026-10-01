@@ -26,6 +26,6 @@ No Alexa+ simulator, no live Ring transport, no Bedrock provider, no Governed MC
 
 ## Verification as of this file
 
-- Full existing HAVEN test suite: green (155 test files; the one documented pre-existing flake is `tests/test_web_plugins.py`'s live-network catalog test, which fails only in full-suite runs and passes in isolation — unrelated to this window's changes).
+- Current full-suite refresh (2026-10-01): pytest collected 1829 tests and completed successfully with a writable external temp root. The OneDrive checkout's pytest temp root can fail with filesystem ACL errors during atomic replacement; that host boundary is not a product failure and is recorded in `docs/qa/native-proof-loop.md`.
 - `dotnet build -p:Platform=x64` for `native/Haven.Desktop`: 0 warnings, 0 errors.
 - No secrets, credentials, or `.env` files are present in this window's diff.
