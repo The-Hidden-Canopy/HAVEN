@@ -138,6 +138,11 @@ public sealed partial class MainWindow
         var deadlineKind = new TextBox { PlaceholderText = "e.g. task or calendar" };
         var deadlineId = new TextBox { PlaceholderText = "optional exact source id" };
         var deadlineOffset = new TextBox { Text = "0", PlaceholderText = "minutes" };
+        var evidenceKind = new TextBox { PlaceholderText = "presence, context, or device" };
+        var evidenceConfidence = new TextBox { Text = "0", PlaceholderText = "0 through 1" };
+        var externalProvider = new TextBox { PlaceholderText = "e.g. home_assistant" };
+        var externalCondition = new TextBox { PlaceholderText = "e.g. reachable" };
+        var externalValue = new TextBox { Text = "true", PlaceholderText = "JSON value" };
         fields.Children.Add(new TextBlock { Text = "Time (HH:MM)" });
         fields.Children.Add(time);
         fields.Children.Add(new TextBlock { Text = "Weekdays (0=Mon, comma-separated; blank = every day)" });
@@ -148,6 +153,13 @@ public sealed partial class MainWindow
         fields.Children.Add(deadlineKind);
         fields.Children.Add(deadlineId);
         fields.Children.Add(deadlineOffset);
+        fields.Children.Add(new TextBlock { Text = "Evidence kind / minimum confidence (for evidence triggers)" });
+        fields.Children.Add(evidenceKind);
+        fields.Children.Add(evidenceConfidence);
+        fields.Children.Add(new TextBlock { Text = "Provider id / condition / value (for external-condition triggers)" });
+        fields.Children.Add(externalProvider);
+        fields.Children.Add(externalCondition);
+        fields.Children.Add(externalValue);
 
         var selector = new TextBox
         {
@@ -269,6 +281,33 @@ public sealed partial class MainWindow
                     throw new InvalidOperationException("Deadline offset must be a number of minutes.");
                 }
                 triggerParameters.Add(new object[] { "offset_minutes", offset });
+            }
+            else if (triggerKind == "evidence")
+            {
+                if (string.IsNullOrWhiteSpace(evidenceKind.Text))
+                {
+                    throw new InvalidOperationException("An evidence kind is required for an evidence trigger.");
+                }
+                if (!double.TryParse(evidenceConfidence.Text.Trim(), out var confidence)
+                    || confidence < 0 || confidence > 1)
+                {
+                    throw new InvalidOperationException("Minimum evidence confidence must be between 0 and 1.");
+                }
+                triggerParameters.Add(new object[] { "evidence_kind", evidenceKind.Text.Trim() });
+                triggerParameters.Add(new object[] { "min_confidence", confidence });
+            }
+            else if (triggerKind == "external_condition")
+            {
+                if (string.IsNullOrWhiteSpace(externalProvider.Text)
+                    || string.IsNullOrWhiteSpace(externalCondition.Text))
+                {
+                    throw new InvalidOperationException("Provider id and condition are required for an external-condition trigger.");
+                }
+                using var valueDocument = JsonDocument.Parse(
+                    string.IsNullOrWhiteSpace(externalValue.Text) ? "null" : externalValue.Text.Trim());
+                triggerParameters.Add(new object[] { "provider_id", externalProvider.Text.Trim() });
+                triggerParameters.Add(new object[] { "condition", externalCondition.Text.Trim() });
+                triggerParameters.Add(new object[] { "value", valueDocument.RootElement.Clone() });
             }
 
             var selectorParameters = ParseResourceAutomationObject(selector.Text, "Selector");
