@@ -16,7 +16,7 @@ import sys
 import time
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from threading import Lock
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -1948,11 +1948,27 @@ class HavenWebServer(ThreadingHTTPServer):
                 justification=params.get("justification"),
             )
 
-        def _computer_activity(_params: dict) -> dict:
+        def _computer_activity(params: dict) -> dict:
+            raw_day = params.get("date")
+            if raw_day is None:
+                target_day = None
+            elif isinstance(raw_day, str) and raw_day.strip():
+                try:
+                    target_day = date.fromisoformat(raw_day.strip())
+                except ValueError as exc:
+                    raise ValueError("date must be an ISO calendar date") from exc
+            else:
+                raise ValueError("date must be an ISO calendar date")
+            limit = params.get("limit", 50)
+            if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 200:
+                raise ValueError("limit must be an integer from 1 to 200")
             return {
                 "ok": True,
                 "observation": self.windows_provider.status(),
-                "events": list(self.windows_provider.activity()),
+                "events": list(self.windows_provider.activity(limit=limit)),
+                "recent_work": self.windows_provider.recent_work(
+                    day=target_day, limit=min(limit, 50)
+                ),
             }
 
         def _computer_observation_set(params: dict) -> dict:
