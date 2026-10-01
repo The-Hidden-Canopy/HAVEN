@@ -13,6 +13,9 @@ dependencies = []
 [project.scripts]
 haven-desktop = "haven.desktop.shell:main"
 
+[project.entry-points."haven.providers"]
+haven_ring_simulator = "haven.integrations.ring.plugin:PLUGIN"
+
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 crypto = ["cryptography>=42"]
