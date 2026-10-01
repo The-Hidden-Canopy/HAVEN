@@ -10,6 +10,7 @@ public sealed partial class MainWindow
         { "light", "thermostat", "switch", "fan", "cover", "camera", "zoneplayer" };
 
     private JsonElement _discoveryCandidates;
+    private JsonElement _discoveryTransports;
 
     private async Task LoadDiscoveryCandidatesAsync()
     {
@@ -21,6 +22,7 @@ public sealed partial class MainWindow
         {
             var result = await _client.GetDiscoveryCandidatesAsync();
             _discoveryCandidates = result.GetProperty("candidates").Clone();
+            UpdateDiscoveryTransportStatus(result);
             DiscoveryErrorText.Text = "";
             RenderDiscoveryCandidates();
         }
@@ -37,12 +39,13 @@ public sealed partial class MainWindow
             return;
         }
         DiscoveryScanButton.IsEnabled = false;
-        DiscoveryStatusText.Text = "Scanning nearby WiFi (SSDP + mDNS) and Bluetooth…";
+        DiscoveryStatusText.Text = "Scanning configured discovery transports…";
         DiscoveryErrorText.Text = "";
         try
         {
             var result = await _client.ScanDiscoveryAsync();
             _discoveryCandidates = result.GetProperty("candidates").Clone();
+            UpdateDiscoveryTransportStatus(result);
             RenderDiscoveryCandidates();
         }
         catch (Exception ex)
@@ -51,9 +54,37 @@ public sealed partial class MainWindow
         }
         finally
         {
-            DiscoveryStatusText.Text = "";
+            RenderDiscoveryTransportStatus();
             DiscoveryScanButton.IsEnabled = true;
         }
+    }
+
+    private void UpdateDiscoveryTransportStatus(JsonElement result)
+    {
+        _discoveryTransports = result.ValueKind == JsonValueKind.Object
+            && result.TryGetProperty("transports", out var transports)
+            && transports.ValueKind == JsonValueKind.Array
+            ? transports.Clone()
+            : default;
+        RenderDiscoveryTransportStatus();
+    }
+
+    private void RenderDiscoveryTransportStatus()
+    {
+        var rows = Enumerate(_discoveryTransports).ToList();
+        if (rows.Count == 0)
+        {
+            DiscoveryStatusText.Text = "Transport readiness is unavailable from this Core version.";
+            return;
+        }
+        var summary = rows.Select(row =>
+        {
+            var label = GetString(row, "label") ?? GetString(row, "provider_id") ?? "unknown";
+            var available = row.TryGetProperty("available", out var value)
+                && value.ValueKind == JsonValueKind.True;
+            return $"{label}: {(available ? "ready" : "unavailable")}";
+        });
+        DiscoveryStatusText.Text = "Transports · " + string.Join(" · ", summary);
     }
 
     private void RenderDiscoveryCandidates()
@@ -64,7 +95,7 @@ public sealed partial class MainWindow
         {
             DiscoveryCandidatesList.Children.Add(new TextBlock
             {
-                Text = "Nothing found yet. Press Scan to look for nearby WiFi (SSDP + mDNS) and Bluetooth devices.",
+                Text = "Nothing found yet. Review transport readiness above, then press Scan to look for nearby devices.",
                 Opacity = 0.72,
             });
             return;
@@ -75,7 +106,7 @@ public sealed partial class MainWindow
         }
     }
 
-    /// <summary>Small status pill for one of the four independent discovery
+    /// <summary>Small status pill for one of the independent discovery
     /// statuses (native product-consolidation plan, P1 "Discovery UI" —
     /// "each result should expose independent statuses: Seen, Identified,
     /// Provider available, Enrolled, and Verified" instead of

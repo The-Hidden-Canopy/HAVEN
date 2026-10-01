@@ -83,6 +83,18 @@ def test_discovery_candidates_reflects_the_last_scan_without_rescanning(server) 
     assert [row["candidate_id"] for row in response["result"]["candidates"]] == ["a"]
 
 
+def test_discovery_transports_reports_readiness_separately_from_candidates(server) -> None:
+    instance, _ = server
+
+    response = _dispatch(instance, "discovery.transports", {})
+
+    assert response["ok"] is True
+    by_id = {row["provider_id"]: row for row in response["result"]["transports"]}
+    assert by_id["wifi-ssdp"]["available"] is True
+    assert by_id["wifi-mdns"]["available"] is True
+    assert by_id["bluetooth.native"]["available"] is False
+
+
 def test_discovery_enroll_end_to_end_marks_the_candidate_enrolled(server) -> None:
     instance, director = server
     _use_fixture_transport(instance, _candidate("a", suggested_room="office"))

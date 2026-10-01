@@ -29,12 +29,27 @@ from haven.core.domain import EvidenceStatus
 from haven.devices import DeviceManifest
 from haven.discovery import DiscoveredDevice, DiscoveryProvider, correlate, enroll_device
 from haven.discovery.capability_presets import CAPABILITY_PRESETS
-from haven.integrations.wifi import MdnsDiscoveryProvider, SsdpDiscoveryProvider
+from haven.integrations.bluetooth import BLUETOOTH_NATIVE_PROVIDER_ID, BluetoothProvider, CtypesBluetoothLibrary
+from haven.integrations.wifi import (
+    MdnsDiscoveryProvider,
+    SsdpDiscoveryProvider,
+    WIFI_MDNS_PROVIDER_ID,
+    WIFI_SSDP_PROVIDER_ID,
+)
 
 _ENROLL_JUSTIFICATION = "enrolled from the Discover scan"
 
 
-def default_discovery_providers() -> tuple[DiscoveryProvider, ...]:
+def _transport_status(provider_id: str, label: str, *, available: bool, detail: str) -> dict:
+    return {
+        "provider_id": provider_id,
+        "label": label,
+        "available": available,
+        "detail": detail,
+    }
+
+
+def default_discovery_bundle() -> tuple[tuple[DiscoveryProvider, ...], tuple[dict, ...]]:
     """The real transports this installation can actually scan with.
 
     SSDP and mDNS/DNS-SD are both stdlib-only and always available. Bluetooth is included only
@@ -50,15 +65,46 @@ def default_discovery_providers() -> tuple[DiscoveryProvider, ...]:
     """
 
     providers: list[DiscoveryProvider] = [SsdpDiscoveryProvider(), MdnsDiscoveryProvider()]
+    status = [
+        _transport_status(
+            WIFI_SSDP_PROVIDER_ID,
+            "Wi-Fi / SSDP",
+            available=True,
+            detail="The standard-library SSDP transport is available; a scan may still return no candidates.",
+        ),
+        _transport_status(
+            WIFI_MDNS_PROVIDER_ID,
+            "Wi-Fi / mDNS",
+            available=True,
+            detail="The standard-library mDNS/DNS-SD transport is available; a scan may still return no candidates.",
+        ),
+    ]
     try:
-        from haven.integrations.bluetooth import BluetoothProvider, CtypesBluetoothLibrary
-
         library = CtypesBluetoothLibrary.load()
-    except OSError:
-        pass
+    except OSError as exc:
+        status.append(
+            _transport_status(
+                BLUETOOTH_NATIVE_PROVIDER_ID,
+                "Bluetooth / WinRT",
+                available=False,
+                detail=f"The native Bluetooth backend is unavailable: {exc}",
+            )
+        )
     else:
         providers.append(BluetoothProvider(library))
-    return tuple(providers)
+        status.append(
+            _transport_status(
+                BLUETOOTH_NATIVE_PROVIDER_ID,
+                "Bluetooth / WinRT",
+                available=True,
+                detail="The native Bluetooth backend is loaded and ready to scan.",
+            )
+        )
+    return tuple(providers), tuple(status)
+
+
+def default_discovery_providers() -> tuple[DiscoveryProvider, ...]:
+    return default_discovery_bundle()[0]
 
 
 class DiscoveryService:
@@ -73,6 +119,7 @@ class DiscoveryService:
         clock: Callable[[], datetime] | None = None,
         verification_reader: Callable[[str], dict] | None = None,
         record_verification: Callable[[str, dict], str | None] | None = None,
+        transport_status: tuple[dict, ...] | None = None,
     ) -> None:
         self._director = director
         self._providers = providers
@@ -82,6 +129,18 @@ class DiscoveryService:
         self._verification_reader = verification_reader
         self._record_verification = record_verification
         self._verification: dict[str, dict] = {}
+        if transport_status is not None:
+            self._transport_status = tuple(dict(row) for row in transport_status)
+        else:
+            self._transport_status = tuple(
+                _transport_status(
+                    getattr(provider, "provider_id", type(provider).__name__),
+                    getattr(provider, "provider_id", type(provider).__name__),
+                    available=True,
+                    detail="The discovery provider is configured.",
+                )
+                for provider in providers
+            )
         self._last_scan: tuple[DiscoveredDevice, ...] = ()
 
     def set_director(self, director) -> None:
@@ -113,7 +172,16 @@ class DiscoveryService:
         """The most recent scan's results, without re-scanning."""
 
         groups = correlate(self._last_scan)
-        return {"ok": True, "candidates": [self._view(candidate, groups) for candidate in self._last_scan]}
+        return {
+            "ok": True,
+            "candidates": [self._view(candidate, groups) for candidate in self._last_scan],
+            "transports": [dict(row) for row in self._transport_status],
+        }
+
+    def transports(self) -> dict:
+        """Report transport readiness separately from scan results."""
+
+        return {"ok": True, "transports": [dict(row) for row in self._transport_status]}
 
     def enroll(self, candidate_id: str, *, device_type: str, room: str | None = None) -> dict:
         if not self._director.has_declared_owner:
@@ -260,4 +328,4 @@ class DiscoveryService:
         }
 
 
-__all__ = ["DiscoveryService", "default_discovery_providers"]
+__all__ = ["DiscoveryService", "default_discovery_bundle", "default_discovery_providers"]

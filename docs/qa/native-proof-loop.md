@@ -175,6 +175,13 @@ publish-profile warnings were emitted. This is code/test evidence, not a
 claim that real target hardware or the interactive native proof loop has been
 completed.
 
+The same refresh now exposes discovery transport readiness in the scan envelope
+and native Discover surface: Wi-Fi/SSDP and Wi-Fi/mDNS are reported as
+standard-library transports, while an unavailable native Bluetooth library is
+reported with an explicit unavailable state rather than being described as a
+successful Bluetooth scan. This is a truthful transport boundary, not evidence
+of a nearby device or of WinRT DLL installation; those remain external gates.
+
 ## Artifact checklist
 
 For each run, record:
