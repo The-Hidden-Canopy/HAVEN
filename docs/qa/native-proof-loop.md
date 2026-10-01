@@ -184,6 +184,17 @@ of a nearby device or of WinRT DLL installation; those remain external gates.
 The transport-readiness follow-up expanded the focused discovery/IPC/native
 contract selection to **42 tests**, all passing.
 
+### Email mutation verification refresh — 2026-10-01
+
+The remaining credentialed-email mutate gap is now closed locally: the IMAP
+provider resolves one stable `Message-ID`, marks it `\\Deleted`, expunges it,
+and searches again to verify absence. Core, IPC, HTTP, native UI, and resource
+automation options all expose the same confirmation-gated action; local `.eml`
+maildirs continue to report read-only capabilities. The focused provider/IPC/
+automation/native-contract selection passed, and the HTTP contract preserves
+the `confirmation_required` boundary. Live mailbox credentials and network
+acceptance remain external gates.
+
 ## Artifact checklist
 
 For each run, record:

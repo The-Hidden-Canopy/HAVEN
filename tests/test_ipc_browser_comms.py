@@ -212,6 +212,13 @@ def test_email_unconfigured_then_local_maildir(server, tmp_path) -> None:
     assert message["subject"] == "Model results"
     assert message["sender"] == "ada@example.org"
     assert "Body text here" in message["snippet"]
+    refused_delete = _dispatch(
+        instance,
+        "email.message.delete",
+        {"message_id": "<m1@example.org>", "justification": "remove the local fixture"},
+    )["result"]
+    assert refused_delete["ok"] is False
+    assert "read-only" in refused_delete["error"]
     # Restart durability: the config sidecar persists.
     instance.server_close()
     instance2, _ = make_server(0, data_dir=instance.setup_store.path.parent, clock=lambda: NOW)
@@ -258,6 +265,9 @@ def test_credentialed_email_configuration_uses_store_and_governed_send(server, m
         def send(self, **_kwargs):
             return "<sent@example.org>"
 
+        def delete(self, _message_id):
+            return True
+
         def messages(self, *, limit=100):
             return ()
 
@@ -283,6 +293,26 @@ def test_credentialed_email_configuration_uses_store_and_governed_send(server, m
         "success": True,
         "detail": "accepted by SMTP provider",
         "message_id": "<sent@example.org>",
+    }
+    delete_pending = _dispatch(
+        instance,
+        "email.message.delete",
+        {
+            "message_id": "<remote@example.org>",
+            "justification": "remove the duplicate remote message",
+        },
+    )["result"]
+    assert delete_pending["status"] == "confirmation_required"
+    deleted = _dispatch(
+        instance,
+        "email.message.confirm",
+        {"request_id": delete_pending["request_id"]},
+    )["result"]
+    assert deleted == {
+        "ok": True,
+        "success": True,
+        "detail": "deleted and verified by IMAP provider",
+        "message_id": "<remote@example.org>",
     }
 
 

@@ -910,6 +910,22 @@ public sealed class HavenCoreClient : IAsyncDisposable
     public Task<JsonElement> GetEmailMessagesAsync(CancellationToken cancellationToken = default) =>
         RequestResultAsync("email.messages.list", new { }, cancellationToken);
 
+    public Task<JsonElement> DeleteEmailMessageAsync(
+        string messageId,
+        string justification,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("email.message.delete", new { message_id = messageId, justification }, cancellationToken);
+
+    public Task<JsonElement> ConfirmEmailMessageAsync(
+        string requestId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("email.message.confirm", new { request_id = requestId }, cancellationToken);
+
+    public Task<JsonElement> DenyEmailMessageAsync(
+        string requestId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("email.message.deny", new { request_id = requestId }, cancellationToken);
+
     public Task<JsonElement> SetEmailMaildirAsync(
         string path,
         CancellationToken cancellationToken = default) =>
