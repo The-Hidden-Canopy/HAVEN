@@ -243,6 +243,14 @@ public sealed class HavenCoreClient : IAsyncDisposable
             new { candidate_id = candidateId, device_type = deviceType, room },
             cancellationToken);
 
+    public Task<JsonElement> VerifyDiscoveryCandidateAsync(
+        string candidateId,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync(
+            "discovery.verify",
+            new { candidate_id = candidateId },
+            cancellationToken);
+
     // External Agent Gateway (Build/Ship/Shape): owner-facing connection/
     // binding management. No MCP transport calls the gateway itself yet --
     // this is the same CRUD surface the "External Agents" settings section

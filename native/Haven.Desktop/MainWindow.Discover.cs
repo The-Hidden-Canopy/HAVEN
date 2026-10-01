@@ -77,8 +77,8 @@ public sealed partial class MainWindow
 
     /// <summary>Small status pill for one of the four independent discovery
     /// statuses (native product-consolidation plan, P1 "Discovery UI" —
-    /// "each result should expose four independent statuses: Seen,
-    /// Identified, Provider available, and Enrolled/verified" instead of
+    /// "each result should expose independent statuses: Seen, Identified,
+    /// Provider available, Enrolled, and Verified" instead of
     /// flattening every result to "device found").</summary>
     private static Border MakeStatusPill(string label, bool met)
     {
@@ -109,6 +109,15 @@ public sealed partial class MainWindow
             && enrolledValue.ValueKind == JsonValueKind.True;
         var supported = candidate.TryGetProperty("supported", out var supportedValue)
             && supportedValue.ValueKind == JsonValueKind.True;
+        var verification = candidate.TryGetProperty("verification", out var verificationValue)
+            && verificationValue.ValueKind == JsonValueKind.Object
+            ? verificationValue
+            : default;
+        var verificationStatus = GetString(verification, "status") ?? "unverified";
+        var verified = verificationStatus == "verified"
+            && verification.TryGetProperty("verified", out var verifiedValue)
+            && verifiedValue.ValueKind == JsonValueKind.True;
+        var verificationDetail = GetString(verification, "detail");
         var correlatedWith = Enumerate(candidate, "correlated_with")
             .Select(v => v.GetString())
             .Where(v => !string.IsNullOrEmpty(v))
@@ -140,6 +149,7 @@ public sealed partial class MainWindow
         statusRow.Children.Add(MakeStatusPill("Identified", suggestedType is not null));
         statusRow.Children.Add(MakeStatusPill("Provider available", supported));
         statusRow.Children.Add(MakeStatusPill("Enrolled", enrolled));
+        statusRow.Children.Add(MakeStatusPill("Verified", verified));
         head.Children.Add(statusRow);
         if (correlatedWith.Count > 0)
         {
@@ -157,6 +167,12 @@ public sealed partial class MainWindow
 
         if (enrolled)
         {
+            var controls = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 8,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
             var badge = new TextBlock
             {
                 Text = "Enrolled",
@@ -164,8 +180,16 @@ public sealed partial class MainWindow
                 Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["HavenSuccessBrush"],
                 VerticalAlignment = VerticalAlignment.Center,
             };
-            Grid.SetColumn(badge, 1);
-            grid.Children.Add(badge);
+            controls.Children.Add(badge);
+            var verifyButton = new Button { Content = verified ? "Verify again" : "Verify" };
+            if (!string.IsNullOrWhiteSpace(verificationDetail))
+            {
+                ToolTipService.SetToolTip(verifyButton, verificationDetail);
+            }
+            verifyButton.Click += async (_, _) => await VerifyDiscoveryCandidateAsync(candidateId);
+            controls.Children.Add(verifyButton);
+            Grid.SetColumn(controls, 1);
+            grid.Children.Add(controls);
         }
         else if (!supported)
         {
@@ -242,6 +266,37 @@ public sealed partial class MainWindow
             }
             // Enrollment lands in the same device registry Rooms reads from.
             await LoadRoomsAsync();
+        }
+        catch (Exception ex)
+        {
+            DiscoveryErrorText.Text = ex.Message;
+        }
+    }
+
+    private async Task VerifyDiscoveryCandidateAsync(string candidateId)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        try
+        {
+            var result = await _client.VerifyDiscoveryCandidateAsync(candidateId);
+            if (result.ValueKind == JsonValueKind.Object
+                && result.TryGetProperty("ok", out var ok)
+                && !ok.GetBoolean())
+            {
+                DiscoveryErrorText.Text = result.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+                    ? error.GetString() ?? "HAVEN Core refused to verify the device."
+                    : "HAVEN Core refused to verify the device.";
+                return;
+            }
+            DiscoveryErrorText.Text = "";
+            if (result.ValueKind == JsonValueKind.Object && result.TryGetProperty("candidates", out var candidates))
+            {
+                _discoveryCandidates = candidates.Clone();
+                RenderDiscoveryCandidates();
+            }
         }
         catch (Exception ex)
         {

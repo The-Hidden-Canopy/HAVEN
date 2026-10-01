@@ -52,7 +52,12 @@ def _dispatch(server, method: str, params: dict) -> dict:
 
 def _use_fixture_transport(instance, *candidates: DiscoveredDevice) -> None:
     instance.discovery = DiscoveryService(
-        director=instance.director, providers=(FixtureDiscoveryProvider(candidates),)
+        director=instance.director,
+        providers=(FixtureDiscoveryProvider(candidates),),
+        persist_enrollment=instance.setup.persist_discovery_enrollment,
+        clock=instance.director._clock,  # noqa: SLF001
+        verification_reader=instance.setup.get_discovery_verification,
+        record_verification=instance.setup.record_discovery_verification,
     )
 
 
@@ -160,6 +165,33 @@ def test_discovery_enroll_emits_nothing_when_the_adapter_rejects_the_request(ser
     _dispatch(instance, "discovery.enroll", {"device_type": "light"})  # missing candidate_id
 
     assert events == []
+
+
+def test_discovery_verify_records_the_provider_unavailable_boundary(server) -> None:
+    instance, _ = server
+    _use_fixture_transport(instance, _candidate("a"))
+    _dispatch(instance, "discovery.scan", {})
+    enrolled = _dispatch(instance, "discovery.enroll", {"candidate_id": "a", "device_type": "light"})
+    assert enrolled["ok"] is True
+
+    response = _dispatch(instance, "discovery.verify", {"candidate_id": "a"})
+
+    assert response["ok"] is True
+    assert response["result"]["verification"]["status"] == "unavailable"
+    assert response["result"]["verification"]["verified"] is False
+    sidecar = json.loads(
+        (instance.setup._enrolled_path()).read_text(encoding="utf-8")  # noqa: SLF001
+    )
+    assert sidecar["verification"]["a"]["status"] == "unavailable"
+
+
+def test_discovery_verify_rejects_an_unknown_candidate(server) -> None:
+    instance, _ = server
+
+    response = _dispatch(instance, "discovery.verify", {"candidate_id": "missing"})
+
+    assert response["ok"] is True
+    assert response["result"] == {"ok": False, "error": "candidate is not enrolled: missing"}
 
 
 def test_discovery_enrollment_survives_a_real_server_restart() -> None:

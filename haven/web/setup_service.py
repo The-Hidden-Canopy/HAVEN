@@ -343,14 +343,68 @@ class _EnrolledLoad:
 
     manifests: tuple[DeviceManifest, ...]
     rows: dict[str, dict]  # candidate_id -> status row (the frontend contract)
+    verification: dict[str, dict]  # device_id -> last harmless-read result
     migrated: bool  # legacy v1 rows were upgraded and the sidecar should be rewritten
 
 
-def _enrolled_v2_payload(manifests: tuple[DeviceManifest, ...]) -> dict:
+_DISCOVERY_VERIFICATION_STATUSES = frozenset({"unverified", "verified", "unavailable", "degraded"})
+
+
+def _normalize_discovery_verification(value: object) -> dict | None:
+    """Return only the small, durable verification contract we own."""
+
+    if not isinstance(value, dict):
+        return None
+    status = value.get("status")
+    verified = value.get("verified")
+    checked_at = value.get("checked_at")
+    detail = value.get("detail")
+    source = value.get("source")
+    if (
+        not isinstance(status, str)
+        or status not in _DISCOVERY_VERIFICATION_STATUSES
+        or not isinstance(verified, bool)
+        or verified != (status == "verified")
+        or not isinstance(checked_at, str)
+        or not checked_at.strip()
+        or not isinstance(detail, str)
+        or not detail.strip()
+        or (source is not None and (not isinstance(source, str) or not source.strip()))
+    ):
+        return None
+    try:
+        parsed = datetime.fromisoformat(checked_at)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
     return {
+        "status": status,
+        "verified": verified,
+        "checked_at": checked_at,
+        "source": source,
+        "detail": detail,
+    }
+
+
+def _enrolled_v2_payload(
+    manifests: tuple[DeviceManifest, ...], verification: dict[str, dict] | None = None
+) -> dict:
+    payload = {
         "version": _ENROLLED_VERSION,
         "manifests": [manifest.to_dict() for manifest in manifests],
     }
+    if verification:
+        known_ids = {manifest.device_id for manifest in manifests}
+        rows = {
+            device_id: normalized
+            for device_id, value in verification.items()
+            if device_id in known_ids
+            and (normalized := _normalize_discovery_verification(value)) is not None
+        }
+        if rows:
+            payload["verification"] = rows
+    return payload
 
 
 def load_enrolled_sidecar(path: Path) -> _EnrolledLoad:
@@ -368,19 +422,19 @@ def load_enrolled_sidecar(path: Path) -> _EnrolledLoad:
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError:
-        return _EnrolledLoad(manifests=(), rows={}, migrated=False)
+        return _EnrolledLoad(manifests=(), rows={}, verification={}, migrated=False)
     try:
         payload = json.loads(raw)
     except ValueError:
-        return _EnrolledLoad(manifests=(), rows={}, migrated=False)
+        return _EnrolledLoad(manifests=(), rows={}, verification={}, migrated=False)
     if not isinstance(payload, dict):
-        return _EnrolledLoad(manifests=(), rows={}, migrated=False)
+        return _EnrolledLoad(manifests=(), rows={}, verification={}, migrated=False)
     if payload.get("version") == _ENROLLED_VERSION:
         manifests: list[DeviceManifest] = []
         rows: dict[str, dict] = {}
         raw_manifests = payload.get("manifests")
         if not isinstance(raw_manifests, list):
-            return _EnrolledLoad(manifests=(), rows={}, migrated=False)
+            return _EnrolledLoad(manifests=(), rows={}, verification={}, migrated=False)
         for entry in raw_manifests:
             if not isinstance(entry, dict):
                 continue
@@ -390,11 +444,23 @@ def load_enrolled_sidecar(path: Path) -> _EnrolledLoad:
                 continue
             manifests.append(manifest)
             rows[manifest.device_id] = _enrolled_row(manifest.device_id, manifest)
-        return _EnrolledLoad(manifests=tuple(manifests), rows=rows, migrated=False)
+        known_ids = {manifest.device_id for manifest in manifests}
+        verification: dict[str, dict] = {}
+        raw_verification = payload.get("verification")
+        if isinstance(raw_verification, dict):
+            for device_id, value in raw_verification.items():
+                if not isinstance(device_id, str) or device_id not in known_ids:
+                    continue
+                normalized = _normalize_discovery_verification(value)
+                if normalized is not None:
+                    verification[device_id] = normalized
+        return _EnrolledLoad(
+            manifests=tuple(manifests), rows=rows, verification=verification, migrated=False
+        )
     # Legacy v1: {"enrolled": [{candidate_id, device_id, device_type, room}]}.
     entries = payload.get("enrolled")
     if not isinstance(entries, list):
-        return _EnrolledLoad(manifests=(), rows={}, migrated=False)
+        return _EnrolledLoad(manifests=(), rows={}, verification={}, migrated=False)
     manifests = []
     rows = {}
     for entry in entries:
@@ -415,7 +481,9 @@ def load_enrolled_sidecar(path: Path) -> _EnrolledLoad:
         )
         manifests.append(manifest)
         rows[manifest.device_id] = _enrolled_row(manifest.device_id, manifest)
-    return _EnrolledLoad(manifests=tuple(manifests), rows=rows, migrated=bool(manifests))
+    return _EnrolledLoad(
+        manifests=tuple(manifests), rows=rows, verification={}, migrated=bool(manifests)
+    )
 
 
 def _enrolled_row(candidate_id: str, manifest: DeviceManifest) -> dict:
@@ -569,6 +637,7 @@ class SetupService:
         self._include_demo_candidates = include_demo_candidates
         self._config_error: str | None = None
         self._config = self._load_config()
+        self._verification: dict[str, dict] = {}
         self._enrolled: dict[str, dict] = self._load_enrolled()
         self.household: HouseholdDeclarations = self._load_household()
         self._last_scan: tuple[SetupCandidate, ...] | None = None
@@ -1039,7 +1108,7 @@ class SetupService:
         try:
             _write_json_atomic(
                 self._enrolled_path(),
-                {"version": _ENROLLED_VERSION, "manifests": manifests},
+                _enrolled_v2_payload(tuple(DeviceManifest.from_dict(item) for item in manifests), self._verification),
             )
         except SetupConfigError as exc:
             return str(exc)
@@ -1557,11 +1626,14 @@ class SetupService:
             self._director.registry.register(manifest)
         if load.migrated:
             try:
-                _write_json_atomic(self._enrolled_path(), _enrolled_v2_payload(load.manifests))
+                _write_json_atomic(
+                    self._enrolled_path(), _enrolled_v2_payload(load.manifests, load.verification)
+                )
             except SetupConfigError:
                 # The eager rewrite is best-effort at boot; the migration
                 # simply runs again on the next load.
                 pass
+        self._verification = dict(load.verification)
         return load.rows
 
     def _persist_enrolled(self) -> str | None:
@@ -1573,10 +1645,47 @@ class SetupService:
         try:
             _write_json_atomic(
                 self._enrolled_path(),
-                {"version": _ENROLLED_VERSION, "manifests": manifests},
+                _enrolled_v2_payload(
+                    tuple(DeviceManifest.from_dict(item) for item in manifests), self._verification
+                ),
             )
         except SetupConfigError as exc:
             return str(exc)
+        return None
+
+    def get_discovery_verification(self, device_id: str) -> dict:
+        """Return the last harmless-read result without inventing a pass."""
+
+        value = self._verification.get(device_id)
+        if value is None:
+            return {
+                "status": "unverified",
+                "verified": False,
+                "checked_at": None,
+                "source": None,
+                "detail": "No harmless read has been recorded.",
+            }
+        return dict(value)
+
+    def record_discovery_verification(self, device_id: str, value: dict) -> str | None:
+        """Persist one verified, unavailable, or degraded harmless-read result."""
+
+        if not isinstance(device_id, str) or not device_id.strip():
+            return "discovery verification requires a device_id"
+        if device_id not in self._enrolled:
+            return f"device is not enrolled: {device_id}"
+        normalized = _normalize_discovery_verification(value)
+        if normalized is None:
+            return "discovery verification has an invalid result"
+        previous = self._verification.get(device_id)
+        self._verification[device_id] = normalized
+        error = self._persist_enrolled()
+        if error is not None:
+            if previous is None:
+                self._verification.pop(device_id, None)
+            else:
+                self._verification[device_id] = previous
+            return error
         return None
 
     def _household_path(self) -> Path:

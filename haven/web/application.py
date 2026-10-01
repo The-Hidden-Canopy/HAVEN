@@ -239,7 +239,10 @@ def build_application(
     for manifest in enrolled.manifests:
         registry.register(manifest)
     if enrolled.migrated:
-        _write_json_atomic(store.path.parent / _ENROLLED_FILENAME, _enrolled_v2_payload(enrolled.manifests))
+        _write_json_atomic(
+            store.path.parent / _ENROLLED_FILENAME,
+            _enrolled_v2_payload(enrolled.manifests, enrolled.verification),
+        )
     declarations = _load_declarations_or_empty(store)
     # Presence and context meaning are declared, not inferred: every declared
     # occupancy entity becomes one PresenceSource, every declared context one

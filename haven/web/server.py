@@ -172,6 +172,7 @@ _IPC_METHOD_EVENTS = {
     "rooms.remove": "home.state.changed",
     "devices.command": "home.state.changed",
     "discovery.enroll": "home.state.changed",
+    "discovery.verify": "home.state.changed",
     "external_agents.connections.create": "external_agents.changed",
     "external_agents.connections.enable": "external_agents.changed",
     "external_agents.connections.revoke": "external_agents.changed",
@@ -581,6 +582,9 @@ class HavenWebServer(ThreadingHTTPServer):
             director=self.director,
             providers=default_discovery_providers(),
             persist_enrollment=self.setup.persist_discovery_enrollment,
+            clock=scope_clock,
+            verification_reader=self.setup.get_discovery_verification,
+            record_verification=self.setup.record_discovery_verification,
         )
         # External Agent Gateway (Build/Ship/Shape): admission boundary for
         # outside assistants (Alexa+ MCP first). `self.external_agents` is
@@ -2520,6 +2524,12 @@ class HavenWebServer(ThreadingHTTPServer):
                 room=room if isinstance(room, str) and room.strip() else None,
             )
 
+        def _discovery_verify(params: dict) -> dict:
+            candidate_id = params.get("candidate_id")
+            if not isinstance(candidate_id, str) or not candidate_id.strip():
+                raise ValueError("a non-empty 'candidate_id' is required")
+            return self.discovery.verify(candidate_id.strip())
+
         def _setup_enroll(params: dict) -> dict:
             candidate_id = params.get("candidate_id")
             device_type = params.get("device_type")
@@ -2617,6 +2627,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 "discovery.scan": lambda _params: self.discovery.scan(),
                 "discovery.candidates": lambda _params: self.discovery.candidates(),
                 "discovery.enroll": _discovery_enroll,
+                "discovery.verify": _discovery_verify,
                 "external_agents.tools.call": _external_agents_tools_call,
                 "setup.household.people.add": _setup_household_people_add,
                 "setup.household.people.remove": lambda params: self.setup.remove_person(
