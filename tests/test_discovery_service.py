@@ -11,7 +11,11 @@ from unittest.mock import patch
 from haven.core.domain import DeviceState, EvidenceStatus, WorldSnapshot
 from haven.discovery import DiscoveredDevice, FixtureDiscoveryProvider
 from haven.web.demo import DemoDirector
-from haven.web.discovery_service import DiscoveryService, default_discovery_providers
+from haven.web.discovery_service import (
+    DiscoveryService,
+    default_discovery_bundle,
+    default_discovery_providers,
+)
 
 UTC = timezone.utc
 NOW = datetime(2026, 9, 16, 20, 0, tzinfo=UTC)
@@ -283,6 +287,45 @@ def test_default_discovery_providers_includes_bluetooth_when_the_library_loads()
         providers = default_discovery_providers()
 
     assert any(isinstance(provider, BluetoothProvider) for provider in providers)
+
+
+def test_default_discovery_bundle_reports_bluetooth_unavailable_without_fabricating_readiness():
+    with patch("haven.integrations.bluetooth.CtypesBluetoothLibrary.load", side_effect=FileNotFoundError()):
+        providers, status = default_discovery_bundle()
+
+    assert len(providers) == 2
+    by_id = {row["provider_id"]: row for row in status}
+    assert by_id["wifi-ssdp"]["available"] is True
+    assert by_id["wifi-mdns"]["available"] is True
+    assert by_id["bluetooth.native"]["available"] is False
+    assert "native Bluetooth backend is unavailable" in by_id["bluetooth.native"]["detail"]
+
+
+def test_candidates_include_transport_readiness_separate_from_scan_results():
+    service = DiscoveryService(
+        director=DemoDirector(clock=lambda: NOW),
+        providers=(FixtureDiscoveryProvider(()),),
+        transport_status=(
+            {
+                "provider_id": "fixture",
+                "label": "Fixture",
+                "available": False,
+                "detail": "fixture transport disabled",
+            },
+        ),
+    )
+
+    body = service.scan()
+
+    assert body["candidates"] == []
+    assert body["transports"] == [
+        {
+            "provider_id": "fixture",
+            "label": "Fixture",
+            "available": False,
+            "detail": "fixture transport disabled",
+        }
+    ]
 
 
 def test_candidates_view_surfaces_cross_transport_correlation():
