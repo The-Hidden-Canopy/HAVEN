@@ -630,13 +630,19 @@ class HavenWebServer(ThreadingHTTPServer):
         # feed and dispatch only through already-governed domain services.
         # The sidecar preserves rules, lifecycle audit events, pending event
         # deliveries, and scheduler dedup state across restarts.
+        def _resource_deadlines():
+            return (
+                *self.tasks_service.automation_deadlines(
+                    self.identity.visible_scope_ids(), household_id=self.director.household_id
+                ),
+                *self.comms.automation_deadlines(household_id=self.director.household_id),
+            )
+
         self.resource_automations = ResourceAutomationService(
             path=Path(resolved_data_dir) / "resource_automations.json",
             household_id=self.director.household_id,
             feed=self.automation_events,
-            deadline_provider=lambda: self.tasks_service.automation_deadlines(
-                self.identity.visible_scope_ids(), household_id=self.director.household_id
-            ),
+            deadline_provider=_resource_deadlines,
             dispatch={
                 "computer": self.computer_actions.request_action,
                 "email": _resource_email_dispatch,

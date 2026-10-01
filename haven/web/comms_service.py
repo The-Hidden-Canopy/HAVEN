@@ -15,6 +15,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from haven.credentials import CredentialKind, CredentialStore, UnknownCredentialError
+from haven.automation.deadlines import AutomationDeadline
 from haven.actions import (
     ActionLedgerEntry,
     ActionLedgerStore,
@@ -23,7 +24,7 @@ from haven.actions import (
     ResourceAuthorityEngine,
 )
 from haven.core import correlation
-from haven.core.domain import ConfirmationToken, DecisionStatus, RiskTier
+from haven.core.domain import ConfirmationToken, DecisionStatus, EvidenceStatus, RiskTier
 from haven.integrations.comms import (
     EMAIL_PROVIDER_ID,
     IMAP_SMTP_PROVIDER_ID,
@@ -191,6 +192,38 @@ class CommsService:
 
     def calendar_provider(self) -> LocalIcsCalendarProvider:
         return LocalIcsCalendarProvider(self._config["calendar_sources"])
+
+    def automation_deadlines(self, *, household_id: str) -> tuple[AutomationDeadline, ...]:
+        """Project authoritative local-calendar starts into the automation seam.
+
+        The ICS adapter is a read-through provider: every observation comes
+        from the configured source file at projection time and is marked
+        observed. Missing or unreadable files produce no runnable signal. A
+        credentialed remote-calendar adapter remains a separate deployment
+        boundary and is intentionally not implied by this local projection.
+        """
+
+        seen: dict[str, CalendarEvent] = {}
+        for event in self.calendar_provider().events():
+            seen.setdefault(event.event_id, event)
+        return tuple(
+            AutomationDeadline(
+                deadline_id=f"calendar:{event.event_id}",
+                household_id=household_id,
+                source_kind="calendar_event",
+                source_id=event.event_id,
+                due_at=event.start_at,
+                payload={
+                    "event_id": event.event_id,
+                    "title": event.title,
+                    "provider_id": event.provider_id,
+                    "location": event.location,
+                    "has_end": event.end_at is not None,
+                },
+                evidence_status=EvidenceStatus.OBSERVED,
+            )
+            for event in seen.values()
+        )
 
     def email_provider(self):
         email_config = self._config.get("email")

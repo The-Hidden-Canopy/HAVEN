@@ -172,6 +172,18 @@ def test_calendar_lifecycle_proposal_attachment_and_verified_write(server, tmp_p
     final = _dispatch(instance, "calendar.events.list", {})["result"]
     assert [item["event_id"] for item in final["events"]] == ["evt-1"]
 
+    deadlines = instance.comms.automation_deadlines(
+        household_id=instance.director.household_id
+    )
+    assert len(deadlines) == 1
+    assert deadlines[0].deadline_id == "calendar:evt-1"
+    assert deadlines[0].source_kind == "calendar_event"
+    assert deadlines[0].payload[1] == ("title", "UNLV proposal review")
+    assert deadlines[0].evidence_status.value == "observed"
+    assert deadlines[0].is_eligible_for_automation is True
+    composed = instance.resource_automations._deadline_snapshot()  # noqa: SLF001
+    assert [item.deadline_id for item in composed] == ["calendar:evt-1"]
+
 
 def test_email_unconfigured_then_local_maildir(server, tmp_path) -> None:
     instance, _commands = server
