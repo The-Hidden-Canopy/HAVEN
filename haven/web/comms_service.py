@@ -12,7 +12,6 @@ import json
 import hashlib
 import math
 import threading
-import urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -38,6 +37,7 @@ from haven.integrations.comms import (
     LocalIcsCalendarProvider,
     REMOTE_ICS_PROVIDER_ID,
     RemoteIcsCalendarProvider,
+    validate_remote_calendar_url,
     LocalMaildirProvider,
     EmailProviderError,
     UnconfiguredEmailProvider,
@@ -171,14 +171,10 @@ class CommsService:
 
         if self._credentials is None:
             return {"ok": False, "error": "credential storage is unavailable"}
-        if not isinstance(url, str) or not url.strip():
-            return {"ok": False, "error": "a non-empty 'url' is required"}
         try:
-            parsed = urllib.parse.urlparse(url.strip())
-        except ValueError:
-            parsed = None
-        if parsed is None or parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            return {"ok": False, "error": "url must use http or https"}
+            normalized_url = validate_remote_calendar_url(url)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
         if not isinstance(secret, str) or not secret:
             return {"ok": False, "error": "a non-empty calendar secret is required"}
         if not isinstance(username, str):
@@ -194,7 +190,6 @@ class CommsService:
             or not 0 < float(timeout) <= 60
         ):
             return {"ok": False, "error": "timeout must be between 0 and 60 seconds"}
-        normalized_url = url.strip()
         credential_base = "comms.calendar." + hashlib.sha256(normalized_url.encode("utf-8")).hexdigest()[:24]
         try:
             metadata = self._credentials.list_metadata(provider=REMOTE_ICS_PROVIDER_ID, include_revoked=True)
@@ -212,8 +207,8 @@ class CommsService:
                     kind=CredentialKind.USER,
                     secret=secret,
                 )
-        except Exception as exc:
-            return {"ok": False, "error": f"calendar credential could not be stored: {exc}"}
+        except Exception:
+            return {"ok": False, "error": "calendar credential could not be stored"}
         self._config["calendar_remotes"] = [
             item for item in self._config["calendar_remotes"] if item.get("url") != normalized_url
         ]
