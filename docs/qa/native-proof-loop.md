@@ -146,13 +146,12 @@ checklist below remains required before a release tag.
 
 The current local continuation was verified in two bounded environments:
 
-- The Python suite ran with an isolated writable profile: **1764 passed, 16
-  skipped**. The remaining **38 failures and 2 errors** are host-gated: this
-  execution profile's Windows DPAPI returns `ERROR_FILE_NOT_FOUND`, the WinRT
-  fixture build cannot write its OneDrive checkout output, and the GUI
-  enumeration surface exposes no targetable windows. Provider and encrypted
-  sync failures that depend on protected credentials therefore fail closed; no
-  weaker fallback was introduced.
+- The current full Python suite collected **1829 tests** and completed
+  successfully when run with a writable external temp root. A run that placed
+  pytest's temp root inside the OneDrive checkout hit the known filesystem ACL
+  boundary during atomic replacement; the isolated rerun passed the affected
+  automation, diagnostics, and authoring cases. No weaker credential or
+  provider fallback was introduced.
 - A disposable writable clone ran the native project references and
   `Haven.Desktop.Tests`: **6/6 passed**. The run emitted only the existing
   offline NuGet vulnerability-feed warning and missing publish-profile warning.

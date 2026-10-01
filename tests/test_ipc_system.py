@@ -55,6 +55,17 @@ def test_diagnostics_shape_in_real_and_demo_and_local_modes(real_server) -> None
         "configured": True,
         "kind": "home_assistant",
         "base_url": "http://ha.local:8123",
+        "operational": {
+            "discovery": True,
+            "observation": True,
+            "read": True,
+            "mutation": True,
+            "webhook_push": False,
+            "required_credential_scopes": [],
+            "destructive_action_classes": ["reversible_external", "high_impact"],
+            "offline_behavior": "observations become unavailable and mutations fail closed when the provider cannot be reached",
+            "refresh_strategy": "on-demand GET /api/states polling; no webhook push",
+        },
     }
     assert diag["rules"]["total"] == diag["rules"]["approved"] + diag["rules"]["proposed"]
     assert diag["voice"]["enabled"] is False
