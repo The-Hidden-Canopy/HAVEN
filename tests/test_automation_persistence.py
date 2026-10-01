@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from haven.automation import (
     ActionTarget,
+    AutomationDeadline,
     AutomationEventFeed,
     AutomationSpec,
     ResourceAutomationService,
@@ -144,3 +145,55 @@ def test_failed_dispatch_keeps_event_pending_for_recovery(tmp_path):
     assert len(recovered.process_pending()) == 1
     assert recovered.pending_events() == ()
     recovered.close()
+
+
+def test_deadline_delivery_and_dedup_survive_restart(tmp_path):
+    path = tmp_path / "resource_automations.json"
+    item = AutomationDeadline(
+        deadline_id="task:deadline-1",
+        household_id="household-a",
+        source_kind="task",
+        source_id="task-1",
+        due_at=NOW,
+        payload={"task_id": "task-1", "priority": "high"},
+    )
+    spec = AutomationSpec(
+        spec_id="deadline-spec",
+        household_id="household-a",
+        trigger=Trigger(kind=TriggerKind.DEADLINE, parameters={"source_kind": "task"}),
+        selector=Selector(parameters={"priority": "high"}),
+        action=ActionTarget(
+            domain="computer",
+            action="computer.noop",
+            consequence_class=ConsequenceClass.REVERSIBLE_LOCAL,
+            parameters={"resource_id": "file:deadline"},
+        ),
+        source_text="run at the task deadline",
+        created_by="owner-1",
+    )
+    calls: list[dict] = []
+    feed = _feed()
+    service = ResourceAutomationService(
+        path=path,
+        household_id="household-a",
+        feed=feed,
+        deadline_provider=lambda: (item,),
+        dispatch={"computer": lambda **kwargs: calls.append(kwargs) or {"ok": True, "success": True}},
+        clock=lambda: NOW,
+    )
+    service.propose(spec, rule_id="deadline-rule")
+    service.approve("deadline-rule", principal=_owner(), justification="approved", now=NOW)
+    assert len(service.tick(now=NOW)) == 1
+    service.close()
+
+    restored = ResourceAutomationService(
+        path=path,
+        household_id="household-a",
+        feed=_feed(),
+        deadline_provider=lambda: (item,),
+        dispatch={"computer": lambda **kwargs: calls.append(kwargs) or {"ok": True, "success": True}},
+        clock=lambda: NOW,
+    )
+    assert restored.tick(now=NOW.replace(hour=22)) == []
+    assert len(calls) == 1
+    restored.close()

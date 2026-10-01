@@ -258,3 +258,38 @@ def test_domain_records_project_into_search(services) -> None:
     ]
     assert len(task_resources) == 1
     assert task_resources[0].title == "Order calibration kit"
+
+
+def test_active_task_deadlines_project_through_generic_automation_contract(services) -> None:
+    _, tasks_service, *_ = services
+    due = NOW + timedelta(hours=2)
+    open_task = tasks_service.create(
+        VISIBLE,
+        scope_id=PERSONAL,
+        title="Review the build",
+        created_by="p",
+        due_at=due,
+    )
+    done_task = tasks_service.create(
+        VISIBLE,
+        scope_id=PERSONAL,
+        title="Already complete",
+        created_by="p",
+        due_at=due,
+    )
+    tasks_service.complete(VISIBLE, done_task["task"]["task_id"], expected_revision=0)
+    tasks_service.create(
+        VISIBLE,
+        scope_id=PERSONAL,
+        title="Unaccepted suggestion",
+        created_by="model",
+        due_at=due,
+        state=PROPOSED,
+    )
+
+    deadlines = tasks_service.automation_deadlines(VISIBLE, household_id="household-a")
+    assert len(deadlines) == 1
+    assert deadlines[0].source_kind == "task"
+    assert deadlines[0].source_id == open_task["task"]["task_id"]
+    assert deadlines[0].due_at == due
+    assert deadlines[0].as_dict()["title"] == "Review the build"

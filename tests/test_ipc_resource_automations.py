@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from haven.ipc import request_message
@@ -94,5 +94,43 @@ def test_resource_automation_rejects_foreign_household_spec(tmp_path: Path):
         payload["household_id"] = "foreign-household"
         result = _dispatch(server, "resource_automations.create", {"rule_id": "foreign", "spec": payload})
         assert result["ok"] is False
+    finally:
+        server.server_close()
+
+
+def test_task_deadline_reaches_the_durable_ipc_scheduler(tmp_path: Path):
+    server, _ = make_server(0, data_dir=tmp_path / "data", clock=lambda: NOW)
+    try:
+        principal = server.identity.current_principal()
+        created_task = server.tasks_service.create(
+            server.identity.visible_scope_ids(),
+            scope_id=server.identity.personal_scope_id,
+            title="Deadline-backed action",
+            created_by=principal.actor_id,
+            due_at=NOW - timedelta(minutes=1),
+        )
+        assert created_task["ok"] is True
+        task_id = created_task["task"]["task_id"]
+        payload = _spec(household_id=server.director.household_id)
+        payload["trigger"] = {
+            "kind": "deadline",
+            "parameters": [["source_kind", "task"], ["source_id", task_id]],
+        }
+        created = _dispatch(
+            server,
+            "resource_automations.create",
+            {"rule_id": "deadline-rule", "spec": payload},
+        )
+        assert created["ok"] is True
+        approved = _dispatch(
+            server,
+            "resource_automations.approve",
+            {"rule_id": "deadline-rule", "justification": "approve the deadline test"},
+        )
+        assert approved["ok"] is True
+
+        ticked = _dispatch(server, "resource_automations.tick", {})
+        assert ticked["ok"] is True
+        assert [row["rule_id"] for row in ticked["result"]["outcomes"]] == ["deadline-rule"]
     finally:
         server.server_close()

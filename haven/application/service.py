@@ -24,6 +24,7 @@ from haven.domains.tasks import (
     TaskRecord,
 )
 from haven.domains.tasks.store import TaskStore, task_to_dict
+from haven.automation.deadlines import AutomationDeadline
 from haven.knowledge.claims import ClaimState
 from haven.ontology.assertions import OntologyAssertion
 from haven.ontology.predicates import BELONGS_TO, DEPENDS_ON
@@ -356,6 +357,42 @@ class TaskService:
             else:  # someday
                 records = tuple(record for record in live if record.due_at is None)
         return {"ok": True, "tasks": [self._wire(record, visible) for record in records]}
+
+    def automation_deadlines(
+        self, visible: tuple[str, ...], *, household_id: str
+    ) -> tuple[AutomationDeadline, ...]:
+        """Project active task due times into the generic automation seam.
+
+        This is read-only and scope-intersected by the caller. The scheduler
+        receives task evidence, not a task store, and still routes any action
+        through the destination domain's governed service.
+        """
+
+        deadlines: list[AutomationDeadline] = []
+        for record in self._store.list_visible(tuple(visible)):
+            # A model-derived proposed task is not a household commitment;
+            # it cannot become an unattended automation trigger before a
+            # person accepts it into the normal task lifecycle.
+            if record.is_terminal or record.state == PROPOSED or record.due_at is None:
+                continue
+            deadlines.append(
+                AutomationDeadline(
+                    deadline_id=f"task:{record.task_id}",
+                    household_id=household_id,
+                    source_kind="task",
+                    source_id=record.task_id,
+                    due_at=record.due_at,
+                    payload={
+                        "task_id": record.task_id,
+                        "scope_id": record.scope_id,
+                        "title": record.title,
+                        "state": record.state,
+                        "project_id": record.project_id,
+                        "priority": record.priority,
+                    },
+                )
+            )
+        return tuple(deadlines)
 
     def _wire(self, record: TaskRecord, visible: tuple[str, ...]) -> dict:
         payload = task_to_dict(record)
