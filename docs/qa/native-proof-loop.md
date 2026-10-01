@@ -131,6 +131,26 @@ The evidence above was captured as live UI-automation observations; no
 screenshots or diagnostic exports were produced by this run. The full artifact
 checklist below remains required before a release tag.
 
+### Verification refresh — 2026-10-01
+
+The current local continuation was verified in two bounded environments:
+
+- The Python suite ran with an isolated writable profile: **1764 passed, 16
+  skipped**. The remaining **38 failures and 2 errors** are host-gated: this
+  execution profile's Windows DPAPI returns `ERROR_FILE_NOT_FOUND`, the WinRT
+  fixture build cannot write its OneDrive checkout output, and the GUI
+  enumeration surface exposes no targetable windows. Provider and encrypted
+  sync failures that depend on protected credentials therefore fail closed; no
+  weaker fallback was introduced.
+- A disposable writable clone ran the native project references and
+  `Haven.Desktop.Tests`: **6/6 passed**. The run emitted only the existing
+  offline NuGet vulnerability-feed warning and missing publish-profile warning.
+
+These results confirm local code/test coverage without converting the host-only
+limitations into product acceptance claims. The interactive proof loop and
+target-hardware/provider gates remain open until they can be run on a suitable
+Windows session.
+
 ## Artifact checklist
 
 For each run, record:
