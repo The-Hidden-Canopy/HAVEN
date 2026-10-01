@@ -11,14 +11,20 @@ suggestion (`suggested_device_type`) is a UI hint, never a decision, and the
 capability set actually granted still comes from the explicit
 `CAPABILITY_PRESETS` table the setup wizard's own enrollment shares (spec:
 "protocol metadata can propose a safe capability template, but templates are
-suggestions" -- see `haven.discovery.capability_presets`'s docstring). There
-is no separate "enrolled" sidecar here: `enroll_device()` always sets
-`device_id=candidate_id`, so "is this candidate already enrolled" is answered
-directly from the shared `DeviceRegistry` rather than a forked record.
+suggestions" -- see `haven.discovery.capability_presets`'s docstring). The
+post-setup surface does not invent a second enrollment record:
+`enroll_device()` always sets `device_id=candidate_id`, and the composed
+server writes the resulting manifest through `SetupService` into the same
+`enrolled_devices.json` sidecar the setup wizard uses. "Is this candidate
+already enrolled" is still answered from the shared `DeviceRegistry` during
+the run, while the sidecar supplies restart durability.
 """
 
 from __future__ import annotations
 
+from typing import Callable
+
+from haven.devices import DeviceManifest
 from haven.discovery import DiscoveredDevice, DiscoveryProvider, correlate, enroll_device
 from haven.discovery.capability_presets import CAPABILITY_PRESETS
 from haven.integrations.wifi import MdnsDiscoveryProvider, SsdpDiscoveryProvider
@@ -56,9 +62,16 @@ def default_discovery_providers() -> tuple[DiscoveryProvider, ...]:
 class DiscoveryService:
     """One façade over every real discovery transport; enrollment is governed."""
 
-    def __init__(self, *, director, providers: tuple[DiscoveryProvider, ...]) -> None:
+    def __init__(
+        self,
+        *,
+        director,
+        providers: tuple[DiscoveryProvider, ...],
+        persist_enrollment: Callable[[DeviceManifest], str | None] | None = None,
+    ) -> None:
         self._director = director
         self._providers = providers
+        self._persist_enrollment = persist_enrollment
         self._last_scan: tuple[DiscoveredDevice, ...] = ()
 
     def set_director(self, director) -> None:
@@ -116,6 +129,10 @@ class DiscoveryService:
             room=room if room else candidate.suggested_room,
             semantic_role=device_type,
         )
+        if self._persist_enrollment is not None:
+            error = self._persist_enrollment(manifest)
+            if error is not None:
+                return {"ok": False, "error": error}
         self._director.registry.register(manifest)
         return self.candidates()
 
