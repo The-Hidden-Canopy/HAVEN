@@ -10,9 +10,11 @@ from pathlib import Path
 import pytest
 
 from haven.integrations.comms import (
+    CalendarProviderError,
     CredentialEmailProvider,
     LocalIcsCalendarProvider,
     LocalMaildirProvider,
+    RemoteIcsCalendarProvider,
     parse_ics,
 )
 from haven.integrations.comms.calendar import CalendarEvent
@@ -213,3 +215,53 @@ def test_credential_email_provider_reads_imap_and_sends_smtp_without_exposing_se
     assert sent[0]["To"] == "ada@example.org"
     assert sent[0]["Subject"] == "Follow-up"
     assert sent[0].get_payload(decode=True) is not None
+
+
+def test_remote_ics_provider_reads_with_bounded_credentialed_transport() -> None:
+    requests = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, limit):
+            assert limit == 2 * 1024 * 1024 + 1
+            return ICS.encode("utf-8")
+
+    def opener(request, *, timeout):
+        requests.append((request, timeout))
+        return FakeResponse()
+
+    provider = RemoteIcsCalendarProvider(
+        url="https://calendar.example.org/private.ics",
+        secret_loader=lambda: "calendar-token",
+        opener=opener,
+    )
+
+    events = provider.events()
+
+    assert [event.event_id for event in events] == ["evt-1", "evt-2"]
+    assert events[0].provider_id == "haven.calendar.ics_remote"
+    assert events[0].source_path == "https://calendar.example.org/private.ics"
+    request, timeout = requests[0]
+    assert request.get_header("Authorization") == "Bearer calendar-token"
+    assert request.get_header("Accept") == "text/calendar"
+    assert timeout == 10.0
+    assert provider.capabilities().mutate is False
+
+
+def test_remote_ics_provider_fails_closed_on_unavailable_source() -> None:
+    def opener(_request, *, timeout):
+        raise OSError("network is unavailable")
+
+    provider = RemoteIcsCalendarProvider(
+        url="https://calendar.example.org/private.ics",
+        secret_loader=lambda: "calendar-token",
+        opener=opener,
+    )
+
+    with pytest.raises(CalendarProviderError, match="remote calendar fetch failed"):
+        provider.events()
