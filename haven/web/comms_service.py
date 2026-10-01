@@ -492,6 +492,7 @@ class CommsService:
     def email_status(self) -> dict:
         provider = self.email_provider()
         capabilities = provider.capabilities()
+        body_scope_available = self._scope_id == getattr(self._identity, "personal_scope_id", None)
         return {
             "ok": True,
             "provider": getattr(provider, "provider_id", EMAIL_PROVIDER_ID),
@@ -501,10 +502,19 @@ class CommsService:
                 "send": capabilities.send,
                 "mutate": capabilities.mutate,
             },
+            "full_body_indexing": {
+                "available": bool(capabilities.read and body_scope_available),
+                "scope": "personal",
+                "opt_in": True,
+            },
             "detail": capabilities.detail,
         }
 
-    def list_messages(self, *, limit: int = 100) -> dict:
+    def list_messages(self, *, limit: int = 100, include_body: bool = False) -> dict:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+            return {"ok": False, "error": "limit must be an integer from 1 to 200"}
+        if not isinstance(include_body, bool):
+            return {"ok": False, "error": "include_body must be a boolean"}
         status = self.email_status()
         if not status["capabilities"]["read"]:
             # Spread order matters: status.ok is True; the unavailability
@@ -517,9 +527,15 @@ class CommsService:
                 "capabilities": status["capabilities"],
                 "detail": status["detail"],
             }
+        if include_body and not status["full_body_indexing"]["available"]:
+            return {
+                **status,
+                "ok": False,
+                "error": "full-body indexing is available only for the personal scope",
+            }
         provider = self.email_provider()
         try:
-            messages = provider.messages(limit=limit)
+            messages = provider.messages(limit=limit, include_body=include_body)
         except (EmailProviderError, OSError, UnknownCredentialError) as exc:
             return {
                 "ok": False,
@@ -542,6 +558,14 @@ class CommsService:
                 # succeeded must remain a successful read if delivery fails.
                 pass
         for message in messages:
+            metadata = [
+                ("sender", message.sender),
+                ("at", message.at),
+                ("labels", ", ".join(message.labels)),
+                ("thread", message.thread_id.strip("<>")),
+            ]
+            if include_body:
+                metadata.append(("body", message.body))
             self._resources.save(
                 ResourceRecord(
                     resource_id=f"email:{message.message_id.strip('<>')}",
@@ -552,30 +576,29 @@ class CommsService:
                     locator=None,
                     capabilities=(),
                     observed_at=now,
-                    metadata=(
-                        ("sender", message.sender),
-                        ("at", message.at),
-                        ("labels", ", ".join(message.labels)),
-                        ("thread", message.thread_id.strip("<>")),
-                    ),
+                    metadata=tuple(metadata),
                 )
             )
+        payloads = []
+        for message in messages:
+            payload = {
+                "message_id": message.message_id,
+                "sender": message.sender,
+                "recipients": list(message.recipients),
+                "subject": message.subject,
+                "at": message.at,
+                "thread_id": message.thread_id,
+                "labels": list(message.labels),
+                "snippet": message.snippet,
+            }
+            if include_body:
+                payload["body"] = message.body
+            payloads.append(payload)
         return {
             "ok": True,
             **status,
-            "messages": [
-                {
-                    "message_id": message.message_id,
-                    "sender": message.sender,
-                    "recipients": list(message.recipients),
-                    "subject": message.subject,
-                    "at": message.at,
-                    "thread_id": message.thread_id,
-                    "labels": list(message.labels),
-                    "snippet": message.snippet,
-                }
-                for message in messages
-            ],
+            "body_indexed": include_body,
+            "messages": payloads,
         }
 
     def send_message(

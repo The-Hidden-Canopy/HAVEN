@@ -212,6 +212,18 @@ def test_email_unconfigured_then_local_maildir(server, tmp_path) -> None:
     assert message["subject"] == "Model results"
     assert message["sender"] == "ada@example.org"
     assert "Body text here" in message["snippet"]
+    assert "body" not in message
+    full_messages = _dispatch(instance, "email.messages.list", {"include_body": True})["result"]
+    assert full_messages["body_indexed"] is True
+    assert full_messages["full_body_indexing"]["available"] is True
+    assert full_messages["messages"][0]["body"].strip() == "Body text here."
+    indexed = instance.resources.get("email:m1@example.org")
+    assert indexed is not None
+    assert dict(indexed.metadata)["body"].strip() == "Body text here."
+    instance.comms._scope_id = instance.identity.personal_scope_id + ":shared"  # noqa: SLF001 - scope guard contract
+    refused_body = _dispatch(instance, "email.messages.list", {"include_body": True})["result"]
+    assert refused_body["ok"] is False
+    assert "personal scope" in refused_body["error"]
     refused_delete = _dispatch(
         instance,
         "email.message.delete",
