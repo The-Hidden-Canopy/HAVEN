@@ -69,6 +69,17 @@ class _FakeObservation:
     def activity(self, *, limit: int = 50):
         return ()
 
+    def recent_work(self, *, day=None, limit: int = 25):
+        return {
+            "ok": True,
+            "available": False,
+            "date": (day or NOW.date()).isoformat(),
+            "reason": "foreground observation is off",
+            "candidates": [],
+            "foreground_events": [],
+            "files": [],
+        }
+
     def set_observation(self, enabled: bool):
         self.enabled = enabled
         return {"ok": True, "observation": self.status()}
@@ -185,3 +196,18 @@ def test_observation_is_opt_in_and_suppressible(server) -> None:
 
     blank = _dispatch(instance, "computer.observation.suppress", {"app": " "})
     assert blank["result"]["ok"] is False
+
+
+def test_recent_work_query_has_explicit_empty_state(server) -> None:
+    instance, _fake = server
+    result = _dispatch(
+        instance,
+        "computer.activity.list",
+        {"date": "2026-09-24", "limit": 10},
+    )
+    assert result["result"]["recent_work"]["available"] is False
+    assert result["result"]["recent_work"]["candidates"] == []
+    assert "foreground observation is off" in result["result"]["recent_work"]["reason"]
+
+    bad_date = _dispatch(instance, "computer.activity.list", {"date": "not-a-date"})
+    assert bad_date["ok"] is False

@@ -146,7 +146,7 @@ checklist below remains required before a release tag.
 
 The current local continuation was verified in two bounded environments:
 
-- The current full Python suite collected **1836 tests** and completed
+- The current full Python suite collected **1840 tests** and completed
   successfully when run with a writable external temp root. A run that placed
   pytest's temp root inside the OneDrive checkout hit the known filesystem ACL
   boundary during atomic replacement; the isolated rerun passed the affected

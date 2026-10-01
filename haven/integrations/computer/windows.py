@@ -14,10 +14,11 @@ windows; the defaults are thin ctypes wrappers.
 from __future__ import annotations
 
 import ctypes
+import re
 import threading
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
 from haven.resources.models import ResourceRecord
@@ -244,6 +245,104 @@ class WindowObservationProvider:
             {"app": event.app, "title": event.title, "at": event.at.isoformat()}
             for event in reversed(events)
         )
+
+    def recent_work(self, *, day: date | None = None, limit: int = 25) -> dict:
+        """Correlate observed file changes with foreground window evidence.
+
+        This is intentionally a bounded, read-only projection. A modified
+        file is evidence that the filesystem observed a change, not proof
+        that a person edited it; a filename appearing in a foreground title
+        is a useful correlation, not a claim about document contents. The
+        result therefore keeps both evidence streams visible and reports
+        when no evidence is available.
+        """
+
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        now = self._clock().astimezone(timezone.utc)
+        target = day or (now.date() - timedelta(days=1))
+        if not isinstance(target, date):
+            raise ValueError("day must be a date")
+
+        with self._lock:
+            history = tuple(self._history)
+        foreground = [
+            {
+                "app": event.app,
+                "title": event.title,
+                "at": event.at.astimezone(timezone.utc).isoformat(),
+            }
+            for event in history
+            if event.at.astimezone(timezone.utc).date() == target
+        ]
+        foreground.sort(key=lambda event: event["at"], reverse=True)
+        foreground = foreground[:limit]
+
+        files: list[dict] = []
+        for record in self._resources.list_by_scope(self._scope_id):
+            if record.stale or record.resource_type not in {"file", "document"}:
+                continue
+            raw_modified = dict(record.metadata).get("modified_at")
+            try:
+                modified = datetime.fromtimestamp(float(raw_modified), timezone.utc)
+            except (TypeError, ValueError, OSError, OverflowError):
+                continue
+            if modified.date() != target:
+                continue
+            files.append(
+                {
+                    "resource_id": record.resource_id,
+                    "title": record.title,
+                    "locator": record.locator,
+                    "modified_at": modified.isoformat(),
+                }
+            )
+        files.sort(key=lambda item: (item["modified_at"], item["title"].casefold()), reverse=True)
+        files = files[:limit]
+
+        candidates = []
+        for file in files:
+            title = file["title"].casefold()
+            stem = re.sub(r"\.[^.\\/]+$", "", title).strip()
+            matches = [
+                event
+                for event in foreground
+                if stem and len(stem) >= 3 and stem in event["title"].casefold()
+            ]
+            candidates.append(
+                {
+                    **file,
+                    "foreground_events": matches,
+                    "correlation": (
+                        "filename appears in a foreground window title"
+                        if matches
+                        else "filesystem modification timestamp only"
+                    ),
+                }
+            )
+
+        available = bool(files or foreground)
+        if available:
+            reason = (
+                "Derived from observed file modification timestamps and opt-in "
+                "foreground history; it does not infer document contents."
+            )
+        elif not self._observation_enabled:
+            reason = (
+                f"No file modification evidence for {target.isoformat()}; "
+                "foreground observation is off."
+            )
+        else:
+            reason = f"No file modification or foreground evidence for {target.isoformat()}."
+        return {
+            "ok": True,
+            "available": available,
+            "date": target.isoformat(),
+            "reason": reason,
+            "candidates": candidates,
+            "foreground_events": foreground,
+            "files": files,
+        }
 
     # -- projection ---------------------------------------------------------------
 

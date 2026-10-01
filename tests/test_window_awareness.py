@@ -14,11 +14,13 @@ import pytest
 
 from haven.actions import ActionLedgerStore
 from haven.integrations.computer.windows import (
+    ForegroundEvent,
     PROVIDER_ID,
     WindowObservationProvider,
     WindowSnapshot,
     window_resource_id,
 )
+from haven.resources import ResourceRecord
 from haven.resources.store import ResourceStore
 from haven.web.window_actions import WindowActionService
 
@@ -96,6 +98,43 @@ def test_apps_listing_distinguishes_apps(provider) -> None:
     apps = {row["app"]: row for row in observation.apps()}
     assert apps["WINWORD.EXE"]["windows"] == 2
     assert apps["python.exe"]["windows"] == 1
+
+
+def test_recent_work_correlates_file_changes_without_overclaiming(provider) -> None:
+    observation, _state = _make(provider, windows=(SNAPSHOT_A, SNAPSHOT_B))
+    provider.save(
+        ResourceRecord(
+            resource_id="file:proposal.docx",
+            resource_type="file",
+            scope_id="scope:personal",
+            provider_id="local_filesystem",
+            title="Proposal.docx",
+            locator="E:/roots/Proposal.docx",
+            capabilities=(),
+            observed_at=NOW,
+            metadata=(("modified_at", NOW.timestamp()),),
+        )
+    )
+    with observation._lock:  # noqa: SLF001 - deterministic provider seam
+        observation._history.append(  # noqa: SLF001
+            ForegroundEvent(app="WINWORD.EXE", title="Proposal.docx - Word", at=NOW)
+        )
+
+    result = observation.recent_work(day=NOW.date())
+    assert result["available"] is True
+    assert result["date"] == "2026-09-24"
+    assert result["candidates"][0]["title"] == "Proposal.docx"
+    assert result["candidates"][0]["correlation"] == "filename appears in a foreground window title"
+    assert result["candidates"][0]["foreground_events"][0]["app"] == "WINWORD.EXE"
+    assert "does not infer document contents" in result["reason"]
+
+
+def test_recent_work_reports_empty_evidence_honestly(provider) -> None:
+    observation, _state = _make(provider)
+    result = observation.recent_work(day=NOW.date())
+    assert result["available"] is False
+    assert result["candidates"] == []
+    assert "foreground observation is off" in result["reason"]
 
 
 def test_foreground_observation_is_opt_in_with_suppression_and_retention(provider) -> None:
