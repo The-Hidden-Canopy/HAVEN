@@ -6,9 +6,14 @@ Secrets stay in the credential subsystem and capabilities remain explicit.
 """
 
 from .calendar import (
+    CalendarCapabilities,
     ICS_PROVIDER_ID,
     CalendarEvent,
+    CalendarProviderError,
+    CompositeCalendarProvider,
     LocalIcsCalendarProvider,
+    REMOTE_ICS_PROVIDER_ID,
+    RemoteIcsCalendarProvider,
     parse_ics,
     render_ics,
 )
@@ -42,8 +47,13 @@ __all__ = [
     "EmailMessage",
     "EmailProviderError",
     "ICS_PROVIDER_ID",
+    "REMOTE_ICS_PROVIDER_ID",
+    "CalendarCapabilities",
     "CalendarEvent",
+    "CalendarProviderError",
+    "CompositeCalendarProvider",
     "LocalIcsCalendarProvider",
+    "RemoteIcsCalendarProvider",
     "LocalConversationJsonlProvider",
     "LocalMaildirProvider",
     "UnconfiguredEmailProvider",

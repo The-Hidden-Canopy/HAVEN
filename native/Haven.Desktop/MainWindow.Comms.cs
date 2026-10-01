@@ -378,6 +378,48 @@ public sealed partial class MainWindow
         await PickIcsSourceAsync();
     }
 
+    private async void OnRemoteCalendarClicked(object sender, RoutedEventArgs args)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+        var url = new TextBox { PlaceholderText = "https://calendar.example.org/private.ics", MinWidth = 360 };
+        var authMode = new ComboBox { MinWidth = 180, ItemsSource = new[] { "Bearer token", "Basic username + password" }, SelectedIndex = 0 };
+        var username = new TextBox { PlaceholderText = "Username (only for Basic)", MinWidth = 360 };
+        var secret = new PasswordBox { PlaceholderText = "Token or password", MinWidth = 360 };
+        var fields = new StackPanel { Spacing = 8 };
+        fields.Children.Add(new TextBlock { Text = "Remote iCalendar URL" });
+        fields.Children.Add(url);
+        fields.Children.Add(new TextBlock { Text = "Authentication" });
+        fields.Children.Add(authMode);
+        fields.Children.Add(username);
+        fields.Children.Add(secret);
+        fields.Children.Add(new TextBlock
+        {
+            Text = "HAVEN stores the credential in protected storage. Remote calendars are observed only; writes are not sent to the provider.",
+            TextWrapping = TextWrapping.Wrap,
+            Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+        });
+        var dialog = new ContentDialog
+        {
+            Title = "Connect remote iCalendar",
+            Content = fields,
+            PrimaryButtonText = "Connect",
+            CloseButtonText = "Cancel",
+            XamlRoot = RootGrid().XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary
+            || string.IsNullOrWhiteSpace(url.Text)
+            || string.IsNullOrWhiteSpace(secret.Password))
+        {
+            return;
+        }
+        var mode = authMode.SelectedIndex == 1 ? "basic" : "bearer";
+        await RunCommsMutationAsync(() => _client.ConfigureRemoteCalendarAsync(
+            url.Text.Trim(), secret.Password, username.Text.Trim(), mode));
+    }
+
     private void OnCalendarPrevWeekClicked(object sender, RoutedEventArgs args)
     {
         _calendarWeekStart = _calendarWeekStart.AddDays(-7);
@@ -406,6 +448,18 @@ public sealed partial class MainWindow
         {
             var result = await _client.GetCalendarEventsAsync();
             _calendarEvents = Enumerate(result, "events").ToList();
+            var status = result.TryGetProperty("status", out var sourceStatus)
+                && sourceStatus.ValueKind == JsonValueKind.Object
+                ? sourceStatus
+                : default;
+            var sourceErrors = status.ValueKind == JsonValueKind.Object
+                ? Enumerate(status, "errors").Select(item => item.GetString()).OfType<string>().Where(item => !string.IsNullOrWhiteSpace(item)).ToList()
+                : new List<string>();
+            CalendarSourceStatusText.Text = sourceErrors.Count > 0
+                ? $"Calendar source unavailable: {string.Join("; ", sourceErrors)} No remote events were used for automation."
+                : status.ValueKind == JsonValueKind.Object && GetString(status, "detail") is { Length: > 0 } detail
+                    ? detail
+                    : "Calendar observations are read-only for remote sources; local .ics files remain writable through governed confirmation.";
             RenderCalendarEventDetail(null);
             RenderCalendarWeek();
         }

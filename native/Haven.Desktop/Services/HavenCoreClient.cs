@@ -878,6 +878,19 @@ public sealed class HavenCoreClient : IAsyncDisposable
         CancellationToken cancellationToken = default) =>
         RequestResultAsync("calendar.sources.add", new { path }, cancellationToken);
 
+    public Task<JsonElement> ConfigureRemoteCalendarAsync(
+        string url,
+        string secret,
+        string username = "",
+        string authMode = "bearer",
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("calendar.remote.configure", new { url, secret, username, auth_mode = authMode }, cancellationToken);
+
+    public Task<JsonElement> RemoveRemoteCalendarAsync(
+        string url,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync("calendar.remote.remove", new { url }, cancellationToken);
+
     public Task<JsonElement> ProposeTaskForEventAsync(
         string eventId,
         CancellationToken cancellationToken = default) =>

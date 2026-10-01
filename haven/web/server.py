@@ -218,6 +218,8 @@ _IPC_METHOD_EVENTS = {
     "browser.tab.close.deny": "browser.tabs.changed",
     "calendar.sources.add": "calendar.changed",
     "calendar.sources.remove": "calendar.changed",
+    "calendar.remote.configure": "calendar.changed",
+    "calendar.remote.remove": "calendar.changed",
     "calendar.event.attach": "calendar.changed",
     "calendar.event.propose_task": "calendar.changed",
     "calendar.event.create": "calendar.changed",
@@ -2002,6 +2004,21 @@ class HavenWebServer(ThreadingHTTPServer):
                 params.get("path") if isinstance(params.get("path"), str) else ""
             )
 
+        def _calendar_status(_params: dict) -> dict:
+            return self.comms.calendar_status()
+
+        def _calendar_remote_configure(params: dict) -> dict:
+            return self.comms.configure_calendar(
+                url=params.get("url"),
+                secret=params.get("secret"),
+                username=params.get("username", ""),
+                auth_mode=params.get("auth_mode", "bearer"),
+                timeout=params.get("timeout", 10.0),
+            )
+
+        def _calendar_remote_remove(params: dict) -> dict:
+            return self.comms.remove_calendar_remote(params.get("url"))
+
         def _calendar_event_attach(params: dict) -> dict:
             project_id = params.get("project_id")
             resource_id = params.get("resource_id")
@@ -2743,8 +2760,11 @@ class HavenWebServer(ThreadingHTTPServer):
                 "browser.tab.close.confirm": _browser_close_confirm,
                 "browser.tab.close.deny": _browser_close_deny,
                 "calendar.events.list": _calendar_events,
+                "calendar.status": _calendar_status,
                 "calendar.sources.add": _calendar_sources_add,
                 "calendar.sources.remove": _calendar_sources_remove,
+                "calendar.remote.configure": _calendar_remote_configure,
+                "calendar.remote.remove": _calendar_remote_remove,
                 "calendar.event.attach": _calendar_event_attach,
                 "calendar.event.propose_task": _calendar_event_propose_task,
                 "calendar.event.create": _calendar_event_create,
