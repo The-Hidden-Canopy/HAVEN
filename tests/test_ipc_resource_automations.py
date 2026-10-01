@@ -87,6 +87,20 @@ def test_resource_automation_ipc_lifecycle_and_restart(tmp_path: Path):
         restored.server_close()
 
 
+def test_resource_automation_ipc_options_are_authoritative(tmp_path: Path):
+    server, _ = make_server(0, data_dir=tmp_path / "data", clock=lambda: NOW)
+    try:
+        response = _dispatch(server, "resource_automations.options", {})
+        assert response["ok"] is True
+        options = response["result"]["options"]
+        assert options["household_id"] == server.director.household_id
+        assert options["created_by"] == server.identity.principal_id
+        assert options["trigger_kinds"] == ["time", "event", "deadline"]
+        assert {item["domain"] for item in options["actions"]} == {"computer", "email"}
+    finally:
+        server.server_close()
+
+
 def test_resource_automation_rejects_foreign_household_spec(tmp_path: Path):
     server, _ = make_server(0, data_dir=tmp_path / "data", clock=lambda: NOW)
     try:
