@@ -27,6 +27,7 @@ from ..ipc.events_pipe import EventPublisher
 from ..models.jobs import DownloadJobManager, job_to_dict
 from ..models.storage import default_models_root
 from ..core.correlation import bind as bind_correlation, current as current_correlation, new_id as new_correlation_id
+from ..core.consequence import ConsequenceClass
 from ..core.domain import Principal, RoleTier
 from ..credentials import CredentialStore
 from .application import build_application
@@ -88,6 +89,7 @@ from ..automation import (
     TaskAutomationEmitter,
 )
 from ..automation.persistence import event_to_dict, lifecycle_event_to_dict, rule_to_dict, spec_from_dict
+from ..automation.schema import TriggerKind
 from ..domains.projects import ProjectStore
 from ..domains.tasks import TaskStore
 from ..extensions import (
@@ -1417,6 +1419,46 @@ class HavenWebServer(ThreadingHTTPServer):
                 "pending_events": [event_to_dict(event) for event in self.resource_automations.pending_events()],
             }
 
+        def _resource_automation_options(_params: dict) -> dict:
+            """Return the authoritative vocabulary used by both authoring adapters.
+
+            The UI must not invent household or actor identifiers, and it must
+            not present trigger families the current scheduler cannot evaluate.
+            Action names remain an explicit vocabulary rather than an execution
+            shortcut; proposals still enter the normal approve/enable lifecycle.
+            """
+
+            return {
+                "ok": True,
+                "options": {
+                    "household_id": self.director.household_id,
+                    "created_by": self.identity.principal_id,
+                    "trigger_kinds": [
+                        TriggerKind.TIME.value,
+                        TriggerKind.EVENT.value,
+                        TriggerKind.DEADLINE.value,
+                    ],
+                    "consequence_classes": [item.value for item in ConsequenceClass],
+                    "actions": [
+                        {
+                            "domain": "computer",
+                            "actions": [
+                                "filesystem.open",
+                                "filesystem.reveal",
+                                "filesystem.copy",
+                                "filesystem.move",
+                                "filesystem.rename",
+                                "filesystem.create_folder",
+                            ],
+                        },
+                        {
+                            "domain": "email",
+                            "actions": ["email.message.send"],
+                        },
+                    ],
+                }
+            }
+
         def _resource_transition_payload(result) -> dict:
             return {
                 "ok": result.status.value == "allow",
@@ -2617,6 +2659,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 "automations.approve": _automations_approve,
                 "automations.revoke": _automations_revoke,
                 "resource_automations.list": lambda _params: _resource_automation_payload(),
+                "resource_automations.options": _resource_automation_options,
                 "resource_automations.create": _resource_automations_create,
                 "resource_automations.approve": _resource_automations_approve,
                 "resource_automations.revoke": _resource_automations_revoke,
@@ -3122,6 +3165,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200 if result.get("ok") else 400, result)
         elif path == "/api/resource-automations":
             self._call_resource_automations("resource_automations.list", {})
+        elif path == "/api/resource-automations/options":
+            self._call_resource_automations("resource_automations.options", {})
         elif path == "/api/automations":
             self._send_json(200, {"ok": True, "automations": self.director.state()["automations"]})
         elif path == "/api/automations/options":

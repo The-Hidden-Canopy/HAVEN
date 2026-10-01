@@ -735,6 +735,8 @@
                         <StackPanel x:Name="ResourceAutomationsSection" Spacing="8">
                             <TextBlock Text="Cross-domain resource automations" Style="{StaticResource HavenSectionTextStyle}" />
                             <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button Content="Add" Click="OnResourceAutomationAddClicked"
+                                        Style="{StaticResource HavenPrimaryButtonStyle}" />
                                 <Button Content="Refresh" Click="OnResourceAutomationsRefreshClicked"
                                         Style="{StaticResource HavenSecondaryButtonStyle}" />
                                 <TextBlock x:Name="ResourceAutomationsStatusText" Style="{StaticResource HavenMetadataTextStyle}"

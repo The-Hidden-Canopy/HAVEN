@@ -29,6 +29,7 @@ const els = {
   automationsAdd: $('#automations-add'),
   resourceAutomationsList: $('#resource-automations-list'),
   resourceAutomationsCount: $('#resource-automations-count'),
+  resourceAutomationsAdd: $('#resource-automations-add'),
   resourceAutomationsRefresh: $('#resource-automations-refresh'),
   resourceAutomationsError: $('#resource-automations-error'),
   systemBody: $('#system-body'),
@@ -133,6 +134,7 @@ const VOICE_ACTIVE = new Set(['wake', 'listening', 'interpreting']);
 const app = {
   data: null,
   resourceAutomations: null,
+  resourceAutomationOptions: null,
   focus: null,      // room id or null
   automationFocus: null, // rule id or null
   selectedRoom: null, // room id selected in the rooms view, or null
@@ -2482,16 +2484,151 @@ async function openAuthoringDialog(kind, record) {
     person: editing ? 'Edit person' : 'Add person',
     context: editing ? 'Edit context' : 'Add context',
     automation: editing ? 'Edit proposed automation' : 'Add automation',
+    'resource-automation': 'Add resource automation',
   };
   els.authoringTitle.textContent = titles[kind] || 'Add to your world';
   els.authoringNote.textContent = kind === 'automation'
     ? (editing
       ? 'This proposal is not approved yet. Editing creates a new audited draft; approved automations stay immutable.'
       : 'HAVEN will propose this rule first. An owner must approve it before the scheduler can act.')
+    : kind === 'resource-automation'
+      ? 'This cross-domain rule is only a proposal until an owner approves it. Email and other confirmation-required actions remain blocked when unattended.'
     : 'This is a household declaration. It remains yours even when a provider is unavailable.';
 
   const form = els.authoringForm;
-  if (kind === 'room') {
+  if (kind === 'resource-automation') {
+    const optionsResponse = await refreshResourceAutomationOptions();
+    const options = app.resourceAutomationOptions;
+    if (!options) {
+      showAuthoringError('HAVEN could not load the executable automation vocabulary.');
+      return;
+    }
+    const source = authoringField(form, 'What should this rule mean?', authoringTextarea(
+      'resource-authoring-source', '', 'e.g. When the project deadline arrives, open the brief'
+    ));
+    const triggerKind = authoringField(form, 'Trigger', authoringSelect(
+      'resource-automation-trigger',
+      (options.trigger_kinds || []).map((value) => ({ value, label: value })),
+      'time'
+    ));
+    const timeOfDay = authoringField(form, 'Time (HH:MM)', authoringInput(
+      'resource-authoring-time', 'time', '09:00'
+    ));
+    const weekdays = authoringField(form, 'Weekdays (0=Mon, comma-separated; blank = every day)', authoringInput(
+      'resource-authoring-weekdays', 'text', '', 'e.g. 0,1,2,3,4'
+    ));
+    const eventName = authoringField(form, 'Event name (for event trigger)', authoringInput(
+      'resource-authoring-event', 'text', '', 'e.g. task.status_changed'
+    ));
+    const deadlineSourceKind = authoringField(form, 'Deadline source kind', authoringInput(
+      'resource-authoring-deadline-kind', 'text', '', 'e.g. task or calendar'
+    ));
+    const deadlineSourceId = authoringField(form, 'Deadline source id', authoringInput(
+      'resource-authoring-deadline-id', 'text', '', 'optional exact source id'
+    ));
+    const deadlineOffset = authoringField(form, 'Deadline offset (minutes)', authoringInput(
+      'resource-authoring-deadline-offset', 'number', '0'
+    ));
+    const selector = authoringField(form, 'Selector filters (JSON object, optional)', authoringTextarea(
+      'resource-authoring-selector', '{}', '{"project_id":"project-1"}'
+    ));
+    const domainValues = Array.isArray(options.actions) ? options.actions : [];
+    const domain = authoringField(form, 'Action domain', authoringSelect(
+      'resource-authoring-domain',
+      domainValues.map((item) => ({ value: item.domain, label: item.domain })),
+      domainValues[0] && domainValues[0].domain
+    ));
+    const action = authoringField(form, 'Action', authoringSelect(
+      'resource-authoring-action', [], ''
+    ));
+    const syncActions = () => {
+      const selected = domainValues.find((item) => item.domain === domain.value);
+      action.textContent = '';
+      for (const value of (selected && selected.actions) || []) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        action.appendChild(option);
+      }
+    };
+    domain.addEventListener('change', syncActions);
+    syncActions();
+    const consequence = authoringField(form, 'Consequence class', authoringSelect(
+      'resource-authoring-consequence',
+      (options.consequence_classes || []).map((value) => ({ value, label: value })),
+      'reversible_local'
+    ));
+    const resourceId = authoringField(form, 'Resource id (optional)', authoringInput(
+      'resource-authoring-resource', 'text', '', 'current resource id when the action names one'
+    ));
+    const parameters = authoringField(form, 'Action parameters (JSON object, optional)', authoringTextarea(
+      'resource-automation-parameters', '{}', '{"destination":"C:\\briefs"}'
+    ));
+    const note = document.createElement('p');
+    note.className = 'authoring-inline-note muted';
+    note.textContent = 'Parameter bags are passed to the existing governed domain adapter. Creation never approves or executes the rule.';
+    form.appendChild(note);
+    const actions = document.createElement('div');
+    actions.className = 'authoring-form-actions';
+    actions.appendChild(authoringButton('Cancel', closeAuthoringDialog));
+    actions.appendChild(authoringButton('Propose resource automation', async () => {
+      try {
+        const parseObject = (text, label) => {
+          const parsed = JSON.parse(text || '{}');
+          if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+            throw new Error(label + ' must be a JSON object.');
+          }
+          return parsed;
+        };
+        const weekdayValues = weekdays.value.split(',').map((value) => value.trim()).filter(Boolean);
+        const weekdayNumbers = weekdayValues.map((value) => Number(value));
+        if (weekdayNumbers.some((value) => !Number.isInteger(value) || value < 0 || value > 6)) {
+          throw new Error('Weekdays must be integers from 0 through 6.');
+        }
+        const triggerParameters = triggerKind.value === 'time'
+          ? [['time_of_day', timeOfDay.value.trim()], ['weekdays', weekdayNumbers], ['window_minutes', 5]]
+          : triggerKind.value === 'event'
+            ? [['event_name', eventName.value.trim()]]
+            : [
+              ...(deadlineSourceKind.value.trim() ? [['source_kind', deadlineSourceKind.value.trim()]] : []),
+              ...(deadlineSourceId.value.trim() ? [['source_id', deadlineSourceId.value.trim()]] : []),
+              ['offset_minutes', Number(deadlineOffset.value || 0)],
+            ];
+        if (triggerKind.value === 'event' && !eventName.value.trim()) {
+          throw new Error('An event name is required for an event trigger.');
+        }
+        const actionParameters = parseObject(parameters.value, 'Action parameters');
+        if (resourceId.value.trim()) actionParameters.resource_id = resourceId.value.trim();
+        const specId = (window.crypto && window.crypto.randomUUID)
+          ? window.crypto.randomUUID() : 'web-' + Date.now();
+        const response = await postJSONDetailed('/api/resource-automations', {
+          rule_id: 'resource-' + specId,
+          spec: {
+            spec_id: specId,
+            household_id: options.household_id,
+            trigger: { kind: triggerKind.value, parameters: triggerParameters },
+            selector: { parameters: Object.entries(parseObject(selector.value, 'Selector')) },
+            action: {
+              domain: domain.value,
+              action: action.value,
+              consequence_class: consequence.value,
+              parameters: Object.entries(actionParameters),
+            },
+            source_text: source.value.trim(),
+            created_by: options.created_by,
+          },
+        });
+        if (!response || response.httpOk !== true || response.ok !== true) {
+          throw new Error((response && (response.error || response.detail)) || 'HAVEN refused the proposal.');
+        }
+        closeAuthoringDialog();
+        await refreshResourceAutomations();
+      } catch (error) {
+        showAuthoringError(error instanceof Error ? error.message : 'HAVEN could not create the proposal.');
+      }
+    }, 'btn-approve'));
+    form.appendChild(actions);
+  } else if (kind === 'room') {
     const name = authoringField(form, 'Room name', authoringInput('authoring-name', 'text', record && record.name, 'e.g. Office'));
     const actions = document.createElement('div');
     actions.className = 'authoring-form-actions';
@@ -4381,6 +4518,17 @@ async function refreshResourceAutomations() {
   return response;
 }
 
+async function refreshResourceAutomationOptions() {
+  const response = await requestJSON('/api/resource-automations/options');
+  if (response && response.httpOk === true && response.ok === true &&
+      response.options && typeof response.options === 'object') {
+    app.resourceAutomationOptions = response.options;
+  } else {
+    app.resourceAutomationOptions = null;
+  }
+  return response;
+}
+
 function renderResourceAutomations() {
   if (!els.resourceAutomationsList) return;
   const state = app.resourceAutomations;
@@ -5034,6 +5182,7 @@ function wireEvents() {
   els.peopleAdd.addEventListener('click', () => openAuthoringDialog('person'));
   els.contextsAdd.addEventListener('click', () => openAuthoringDialog('context'));
   els.automationsAdd.addEventListener('click', () => openAuthoringDialog('automation'));
+  els.resourceAutomationsAdd.addEventListener('click', () => openAuthoringDialog('resource-automation'));
   els.resourceAutomationsRefresh.addEventListener('click', refreshResourceAutomations);
   els.authoringClose.addEventListener('click', closeAuthoringDialog);
   els.authoringScrim.addEventListener('click', closeAuthoringDialog);
