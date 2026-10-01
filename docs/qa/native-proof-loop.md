@@ -181,6 +181,8 @@ standard-library transports, while an unavailable native Bluetooth library is
 reported with an explicit unavailable state rather than being described as a
 successful Bluetooth scan. This is a truthful transport boundary, not evidence
 of a nearby device or of WinRT DLL installation; those remain external gates.
+The transport-readiness follow-up expanded the focused discovery/IPC/native
+contract selection to **42 tests**, all passing.
 
 ## Artifact checklist
 
