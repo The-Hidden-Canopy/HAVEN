@@ -118,6 +118,15 @@ identified disposable core/native processes were stopped after observation.
 This repeats the host/tooling limitation above and does not constitute a
 product acceptance result.
 
+### Third targetability check — 2026-10-01
+
+A third disposable launch used a writable fresh data directory and the
+current native build. Process inspection again confirmed a responsive
+`HAVEN` window, while the available Windows computer-use surface returned
+`apps: []`. No interaction or screenshot was claimed; the verified launcher
+and native processes were stopped and the disposable data directory removed.
+The interactive proof loop therefore remains unverified on this host.
+
 The evidence above was captured as live UI-automation observations; no
 screenshots or diagnostic exports were produced by this run. The full artifact
 checklist below remains required before a release tag.
