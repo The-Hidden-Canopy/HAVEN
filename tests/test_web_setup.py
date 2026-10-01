@@ -15,6 +15,7 @@ from haven.web.setup_config import default_data_dir
 
 UTC = timezone.utc
 FIXED_NOW = datetime(2026, 9, 16, 20, 0, tzinfo=UTC)
+STATIC_ROOT = Path(__file__).parents[1] / "haven" / "web" / "static"
 
 
 @contextmanager
@@ -70,6 +71,14 @@ def test_initial_status_is_default_then_empty_data_dir_flips_source() -> None:
             assert body["ok"] is True
             assert body["setup"]["data_dir"]["source"] == "chosen"
             assert Path(body["setup"]["data_dir"]["resolved"]) == default_data_dir()
+
+
+def test_provider_operational_metadata_is_rendered_by_the_web_system_surface() -> None:
+    app = (STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+    assert "providerOperationalSummary" in app
+    assert "Provider capabilities" in app
+    assert "Provider offline behavior" in app
+    assert "Provider refresh" in app
 
 
 def test_choose_data_dir_accepts_a_directory_and_rejects_a_file() -> None:

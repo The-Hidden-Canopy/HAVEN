@@ -248,6 +248,49 @@ public sealed partial class MainWindow
                 ? $"{GetString(provider, "kind")} · {GetString(provider, "base_url")}"
                 : "not configured")
             : "—");
+        var operational = provider.ValueKind == JsonValueKind.Object
+            && provider.TryGetProperty("operational", out var operationalValue)
+            && operationalValue.ValueKind == JsonValueKind.Object
+            ? operationalValue
+            : default;
+        if (operational.ValueKind == JsonValueKind.Object)
+        {
+            var capabilities = new[]
+            {
+                (Key: "discovery", Label: "discovery"),
+                (Key: "observation", Label: "observation"),
+                (Key: "read", Label: "read"),
+                (Key: "mutation", Label: "mutation"),
+                (Key: "webhook_push", Label: "webhook push"),
+            }
+            .Where(item => operational.TryGetProperty(item.Key, out var value)
+                && value.ValueKind == JsonValueKind.True
+                && value.GetBoolean())
+            .Select(item => item.Label)
+            .ToList();
+            if (operational.TryGetProperty("destructive_action_classes", out var outcomes)
+                && outcomes.ValueKind == JsonValueKind.Array)
+            {
+                var labels = outcomes.EnumerateArray()
+                    .Where(value => value.ValueKind == JsonValueKind.String)
+                    .Select(value => value.GetString())
+                    .Where(value => value is { Length: > 0 })
+                    .ToList();
+                if (labels.Count > 0)
+                {
+                    capabilities.Add("outcomes: " + string.Join(", ", labels));
+                }
+            }
+            Row("Provider capabilities", capabilities.Count > 0 ? string.Join(", ", capabilities) : "none declared");
+            if (GetString(operational, "offline_behavior") is { Length: > 0 } offline)
+            {
+                Row("Provider offline behavior", offline);
+            }
+            if (GetString(operational, "refresh_strategy") is { Length: > 0 } refresh)
+            {
+                Row("Provider refresh", refresh);
+            }
+        }
         var household = _diagnostics.TryGetProperty("household", out var householdValue) && householdValue.ValueKind == JsonValueKind.Object
             ? householdValue
             : default;
