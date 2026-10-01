@@ -55,6 +55,16 @@ def test_today_uses_one_snapshot_request_and_never_renders_raw_provider_errors()
     assert "Text = ex.Message" not in today
 
 
+def test_native_settings_projects_the_support_safe_unified_receipt_export():
+    system = (NATIVE / "MainWindow.System.cs").read_text(encoding="utf-8")
+    xaml = (NATIVE / "MainWindow.xaml").read_text(encoding="utf-8")
+    assert "ExportDiagnosticsAsync" in system
+    assert "RenderUnifiedReceipts" in system
+    assert '"unified_receipts"' in system
+    assert "ReceiptsList" in xaml
+    assert "Recent governed actions" in xaml
+
+
 def test_generated_native_snapshot_and_root_scratch_scripts_are_ignored_and_absent():
     ignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "native/Haven.Desktop/bin-shot/" in ignore

@@ -937,6 +937,9 @@
                                 ToolTipService.ToolTip="A support-safe snapshot (version, provider/model/scheduler state, recent receipts) - never secrets." />
                     </StackPanel>
                     <StackPanel x:Name="DiagnosticsList" Spacing="4" />
+                    <TextBlock Style="{StaticResource HavenSectionTextStyle}" Text="Recent governed actions" />
+                    <TextBlock x:Name="ReceiptsErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
+                    <StackPanel x:Name="ReceiptsList" Spacing="8" />
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>
