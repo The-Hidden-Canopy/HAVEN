@@ -5,9 +5,10 @@ the service's own aggregation/enrollment logic, not any one transport (SSDP
 has its own `test_wifi_ssdp.py`; enrollment's own rules have `test_discovery.py`).
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from haven.core.domain import DeviceState, EvidenceStatus, WorldSnapshot
 from haven.discovery import DiscoveredDevice, FixtureDiscoveryProvider
 from haven.web.demo import DemoDirector
 from haven.web.discovery_service import DiscoveryService, default_discovery_providers
@@ -181,6 +182,80 @@ def test_enroll_does_not_register_when_durable_persistence_refuses():
 
     assert body == {"ok": False, "error": "could not persist enrollment"}
     assert not service._director.registry.is_registered("a")
+
+
+def test_verify_records_an_observed_provider_read():
+    director = DemoDirector(clock=lambda: NOW)
+    service = DiscoveryService(
+        director=director,
+        providers=(FixtureDiscoveryProvider((_candidate("a"),)),),
+        clock=lambda: NOW,
+    )
+    service.scan()
+    assert service.enroll("a", device_type="light")["ok"] is True
+
+    director.world = type(
+        "ObservedWorld",
+        (),
+        {
+            "observe": lambda self, now: WorldSnapshot(
+                snapshot_id="verification-snapshot",
+                household_id=director.household_id,
+                captured_at=now,
+                valid_until=now + timedelta(minutes=1),
+                devices=(
+                    DeviceState(
+                        device_id="a",
+                        kind="light",
+                        room_id="office",
+                        is_on=False,
+                        brightness_pct=0,
+                        observed_at=now,
+                        source="fixture.provider",
+                        status=EvidenceStatus.OBSERVED,
+                    ),
+                ),
+            ),
+        },
+    )()
+
+    result = service.verify("a")
+
+    assert result["ok"] is True
+    assert result["verification"] == {
+        "status": "verified",
+        "verified": True,
+        "checked_at": NOW.isoformat(),
+        "source": "fixture.provider",
+        "detail": "The provider returned an observed device state.",
+    }
+    row = next(row for row in result["candidates"] if row["candidate_id"] == "a")
+    assert row["verification"]["status"] == "verified"
+
+
+def test_verify_records_unavailable_when_the_provider_has_no_current_state():
+    service = DiscoveryService(
+        director=DemoDirector(clock=lambda: NOW),
+        providers=(FixtureDiscoveryProvider((_candidate("a"),)),),
+        clock=lambda: NOW,
+    )
+    service.scan()
+    assert service.enroll("a", device_type="light")["ok"] is True
+
+    result = service.verify("a")
+
+    assert result["ok"] is True
+    assert result["verification"]["status"] == "unavailable"
+    assert result["verification"]["verified"] is False
+    assert "No current provider state" in result["verification"]["detail"]
+
+
+def test_verify_requires_an_enrolled_candidate():
+    service = _service(FixtureDiscoveryProvider((_candidate("a"),)))
+
+    result = service.verify("a")
+
+    assert result == {"ok": False, "error": "candidate is not enrolled: a"}
 
 
 def test_default_discovery_providers_always_includes_ssdp_and_mdns():
