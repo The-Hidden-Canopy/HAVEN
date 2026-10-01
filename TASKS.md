@@ -464,7 +464,19 @@ Source: `HAVEN_Needs_You_Temporal_Home_Spec_REFRESHED.docx` (baseline commit `8a
 - [x] **Slice C — Needs You native UI + routing fix.** See below.
 - [x] **Slice D — temporal service.** See below.
 - [x] **Slice E — hero integration.** Quick actions (New task/New project/Note/Find/Open) moved from a standalone section beneath the hero into the hero itself as a compact translucent-pill row (spec §16.3); a `HeroNeedsYouButton` count pill sits top-right of the hero (spec §16.2 "far right if contrast is guaranteed"), visible only when count > 0, opening the same review pane as "Review all". Per-theme overlay tinting (spec §14): `HeroOverlayTintColor`/`HeroOverlayTintColorFade` added to all 8 `Themes/*.xaml` files (one pair of values per color theme — Haven navy/blue-violet, Canopy blue-green, Ember neutral-charcoal-warm, Mono neutral-desaturated — shared across that theme's Dark/Light variant) and `HavenHeroOverlayBrush` now references them via `{ThemeResource}` so `ThemeService` swapping the merged dictionary retints the hero with zero code-behind. **Deliberately not implemented:** the light/dark *appearance* axis from spec §14.1 (a lighter scrim + dark text option) — the hero keeps a dark scrim + light foreground regardless of app appearance; a real light-mode hero treatment is a separate, larger design decision than retinting by color theme.
-- [ ] **Slices F–G — not started.** The Today layout pass beyond what Slices C/D/E already changed, and the optional `TodayView` extraction from `MainWindow`.
+- [x] **Slice F — responsive Today layout.** `MainWindow.Adaptive.cs` now
+  switches Today from its wide two-column dashboard to one ordered, touch-safe
+  column below the existing narrow-window breakpoint. Focus, Needs You, Tasks,
+  Upcoming, Recent files, Recent activity, and Pending replies keep an
+  explicit reading order; the hero actions stack instead of clipping into a
+  horizontal row, and the hero receives a narrow-window height allowance.
+  This is compile-verified; interactive tablet pixel/touch QA remains an
+  external gate.
+- [ ] **Slice G — optional `TodayView` extraction.** The existing partial
+  `MainWindow.Today.cs` remains the current implementation. Extracting it into
+  a separate view is still a maintainability refactor, not a user-visible
+  acceptance claim, and is deferred until the native interaction pass can
+  exercise the resulting surface.
 
 ## Slice C detail — Needs You native UI
 

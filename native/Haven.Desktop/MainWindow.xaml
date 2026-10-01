@@ -246,7 +246,7 @@
                                         <TextBlock Text="Needs You" Foreground="{ThemeResource HavenWarningBrush}" />
                                     </StackPanel>
                                 </Button>
-                                <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                                <StackPanel x:Name="TodayHeroActions" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
                                             Orientation="Horizontal" Spacing="6">
                                     <Button Click="OnQuickActionTaskClicked" Background="#26FFFFFF" BorderThickness="0" Padding="10,7" CornerRadius="8">
                                         <StackPanel Orientation="Horizontal" Spacing="6">

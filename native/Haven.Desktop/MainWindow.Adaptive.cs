@@ -66,6 +66,7 @@ public sealed partial class MainWindow
         ApplyDrillInState(MemoryClaims, MemoryInspector, MemoryBackButton, narrow, HasSelectedItem(MemoryClaims));
         ApplyDrillInState(PeopleDirectory, PersonInspector, PersonBackButton, narrow, HasSelectedItem(PeopleDirectory));
         ApplyDrillInState(SearchResults, SearchInspector, SearchBackButton, narrow, HasSelectedItem(SearchResults));
+        AdaptTodayLayout(narrow);
 
         // Project detail: not a list+inspector shape (the left side is the
         // tabbed work area, not a ListView), so it collapses inline rather
@@ -114,6 +115,60 @@ public sealed partial class MainWindow
             Grid.SetRow(inspector, 0);
             Grid.SetColumn(inspector, 1);
         }
+    }
+
+    /// <summary>
+    /// Today is a dashboard rather than a master/detail split. On a narrow
+    /// window its two-column grid becomes one ordered reading flow, and the
+    /// hero actions stack so every action remains touch-visible instead of
+    /// being squeezed into a clipped horizontal row.
+    /// </summary>
+    private void AdaptTodayLayout(bool narrow)
+    {
+        TodayHero.MaxHeight = narrow ? 440 : 300;
+        TodayHeroActions.Orientation = narrow ? Orientation.Vertical : Orientation.Horizontal;
+        TodayGrid.ColumnSpacing = narrow ? 12 : 16;
+        TodayGrid.RowSpacing = narrow ? 12 : 16;
+
+        TodayGrid.ColumnDefinitions.Clear();
+        TodayGrid.RowDefinitions.Clear();
+        if (narrow)
+        {
+            TodayGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
+            for (var index = 0; index < 7; index++)
+            {
+                TodayGrid.RowDefinitions.Add(new RowDefinition { Height = Microsoft.UI.Xaml.GridLength.Auto });
+            }
+            PlaceTodayCard(TodayFocusCard, row: 0, column: 0, columnSpan: 1);
+            PlaceTodayCard(TodayNeedsYouCard, row: 1, column: 0, columnSpan: 1);
+            PlaceTodayCard(TodayTasksCard, row: 2, column: 0, columnSpan: 1);
+            PlaceTodayCard(TodayUpcomingCard, row: 3, column: 0, columnSpan: 1);
+            PlaceTodayCard(TodayFilesCard, row: 4, column: 0, columnSpan: 1);
+            PlaceTodayCard(TodayActivityCard, row: 5, column: 0, columnSpan: 1);
+            PlaceTodayCard(TodayRepliesCard, row: 6, column: 0, columnSpan: 1);
+            return;
+        }
+
+        TodayGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
+        TodayGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star) });
+        for (var index = 0; index < 4; index++)
+        {
+            TodayGrid.RowDefinitions.Add(new RowDefinition { Height = Microsoft.UI.Xaml.GridLength.Auto });
+        }
+        PlaceTodayCard(TodayFocusCard, row: 0, column: 0, columnSpan: 1);
+        PlaceTodayCard(TodayNeedsYouCard, row: 0, column: 1, columnSpan: 1);
+        PlaceTodayCard(TodayTasksCard, row: 1, column: 0, columnSpan: 1);
+        PlaceTodayCard(TodayUpcomingCard, row: 1, column: 1, columnSpan: 1);
+        PlaceTodayCard(TodayFilesCard, row: 2, column: 0, columnSpan: 1);
+        PlaceTodayCard(TodayActivityCard, row: 2, column: 1, columnSpan: 1);
+        PlaceTodayCard(TodayRepliesCard, row: 3, column: 0, columnSpan: 2);
+    }
+
+    private static void PlaceTodayCard(FrameworkElement card, int row, int column, int columnSpan)
+    {
+        Grid.SetRow(card, row);
+        Grid.SetColumn(card, column);
+        Grid.SetColumnSpan(card, columnSpan);
     }
 
     private static bool HasSelectedItem(ListView list) =>
