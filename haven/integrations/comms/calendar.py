@@ -20,6 +20,9 @@ from typing import Callable
 
 ICS_PROVIDER_ID = "haven.calendar.ics"
 REMOTE_ICS_PROVIDER_ID = "haven.calendar.ics_remote"
+_CREDENTIAL_QUERY_KEYS = frozenset(
+    {"access_token", "api_key", "apikey", "auth", "credential", "key", "password", "passwd", "secret", "token"}
+)
 
 _CONTENT_LINES = ("SUMMARY", "DTSTART", "DTEND", "LOCATION", "UID", "URL", "DESCRIPTION")
 
@@ -61,6 +64,24 @@ class CalendarCapabilities:
     read: bool
     mutate: bool
     detail: str
+
+
+def validate_remote_calendar_url(url: str) -> str:
+    """Accept only a transport URL whose credential is not embedded in it."""
+
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("url must be a non-empty string")
+    normalized = url.strip()
+    parsed = urllib.parse.urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("url must use http or https")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("url must not embed username or password")
+    if parsed.fragment:
+        raise ValueError("url must not contain a fragment")
+    if any(key.lower() in _CREDENTIAL_QUERY_KEYS for key, _value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)):
+        raise ValueError("url query must not carry credential material")
+    return normalized
 
 
 def _unfold(text: str) -> list[str]:
@@ -267,11 +288,7 @@ class RemoteIcsCalendarProvider:
         timeout: float = 10.0,
         max_bytes: int = 2 * 1024 * 1024,
     ) -> None:
-        if not isinstance(url, str) or not url.strip():
-            raise ValueError("url must be a non-empty string")
-        parsed = urllib.parse.urlparse(url.strip())
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("url must use http or https")
+        normalized_url = validate_remote_calendar_url(url)
         if not callable(secret_loader):
             raise ValueError("secret_loader must be callable")
         if auth_mode not in {"bearer", "basic"}:
@@ -282,7 +299,7 @@ class RemoteIcsCalendarProvider:
             raise ValueError("timeout must be positive")
         if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1024:
             raise ValueError("max_bytes must be at least 1024")
-        self.url = url.strip()
+        self.url = normalized_url
         self.username = username.strip()
         self.auth_mode = auth_mode
         self._secret_loader = secret_loader
@@ -304,7 +321,10 @@ class RemoteIcsCalendarProvider:
     def events(self) -> tuple[CalendarEvent, ...]:
         try:
             request = urllib.request.Request(self.url, headers={"Accept": "text/calendar"})
-            secret = self._secret_loader()
+            try:
+                secret = self._secret_loader()
+            except Exception as exc:
+                raise CalendarProviderError("calendar credential is unavailable") from exc
             if not isinstance(secret, str) or not secret:
                 raise CalendarProviderError("calendar credential is unavailable")
             if self.auth_mode == "basic":
@@ -326,7 +346,7 @@ class RemoteIcsCalendarProvider:
         except CalendarProviderError:
             raise
         except (OSError, urllib.error.URLError, urllib.error.HTTPError, UnicodeError, ValueError, KeyError) as exc:
-            raise CalendarProviderError(f"remote calendar fetch failed: {exc}") from exc
+            raise CalendarProviderError(f"remote calendar fetch failed: {type(exc).__name__}") from exc
         except Exception as exc:
             raise CalendarProviderError("remote calendar fetch failed") from exc
 
@@ -384,4 +404,5 @@ __all__ = [
     "RemoteIcsCalendarProvider",
     "parse_ics",
     "render_ics",
+    "validate_remote_calendar_url",
 ]

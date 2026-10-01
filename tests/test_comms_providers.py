@@ -255,7 +255,7 @@ def test_remote_ics_provider_reads_with_bounded_credentialed_transport() -> None
 
 def test_remote_ics_provider_fails_closed_on_unavailable_source() -> None:
     def opener(_request, *, timeout):
-        raise OSError("network is unavailable")
+        raise OSError("network is unavailable: calendar-token")
 
     provider = RemoteIcsCalendarProvider(
         url="https://calendar.example.org/private.ics",
@@ -263,5 +263,29 @@ def test_remote_ics_provider_fails_closed_on_unavailable_source() -> None:
         opener=opener,
     )
 
-    with pytest.raises(CalendarProviderError, match="remote calendar fetch failed"):
+    with pytest.raises(CalendarProviderError, match="remote calendar fetch failed") as error:
         provider.events()
+    assert "calendar-token" not in str(error.value)
+
+
+def test_remote_ics_provider_redacts_credential_loader_errors() -> None:
+    def secret_loader():
+        raise KeyError("calendar-token")
+
+    provider = RemoteIcsCalendarProvider(
+        url="https://calendar.example.org/private.ics",
+        secret_loader=secret_loader,
+        opener=lambda _request, *, timeout: pytest.fail("network must not run without a credential"),
+    )
+
+    with pytest.raises(CalendarProviderError, match="calendar credential is unavailable") as error:
+        provider.events()
+    assert "calendar-token" not in str(error.value)
+
+
+def test_remote_ics_provider_rejects_credential_bearing_url() -> None:
+    with pytest.raises(ValueError, match="credential material"):
+        RemoteIcsCalendarProvider(
+            url="https://calendar.example.org/private.ics?access_token=calendar-token",
+            secret_loader=lambda: "unused",
+        )
