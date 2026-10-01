@@ -153,6 +153,52 @@ public sealed partial class MainWindow
                 };
                 header.Children.Add(toggle);
                 ComputerTabContent.Children.Add(header);
+                if (result.TryGetProperty("recent_work", out var recentWork)
+                    && recentWork.ValueKind == JsonValueKind.Object)
+                {
+                    ComputerTabContent.Children.Add(new TextBlock
+                    {
+                        Text = $"Recent work · {GetString(recentWork, "date") ?? "yesterday"}",
+                        Style = (Style)Application.Current.Resources["HavenSectionTextStyle"],
+                        Margin = new Thickness(0, 12, 0, 0),
+                    });
+                    var candidates = Enumerate(recentWork, "candidates").ToList();
+                    if (candidates.Count == 0)
+                    {
+                        ComputerTabContent.Children.Add(new TextBlock
+                        {
+                            Text = GetString(recentWork, "reason") ?? "No recent-work evidence is available.",
+                            Opacity = 0.72,
+                            TextWrapping = TextWrapping.Wrap,
+                        });
+                    }
+                    foreach (var candidate in candidates)
+                    {
+                        var card = new StackPanel { Spacing = 2 };
+                        card.Children.Add(new TextBlock
+                        {
+                            Text = GetString(candidate, "title") ?? "?",
+                            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                            TextWrapping = TextWrapping.Wrap,
+                        });
+                        card.Children.Add(new TextBlock
+                        {
+                            Text = $"{GetString(candidate, "modified_at")} · {GetString(candidate, "correlation")}",
+                            Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
+                            TextWrapping = TextWrapping.Wrap,
+                        });
+                        foreach (var match in Enumerate(candidate, "foreground_events").Take(2))
+                        {
+                            card.Children.Add(new TextBlock
+                            {
+                                Text = $"Window evidence: {GetString(match, "app")} · {GetString(match, "title")}",
+                                Opacity = 0.78,
+                                TextWrapping = TextWrapping.Wrap,
+                            });
+                        }
+                        ComputerTabContent.Children.Add(WrapCard(card));
+                    }
+                }
                 var events = Enumerate(result.GetProperty("events")).ToList();
                 if (events.Count == 0)
                 {

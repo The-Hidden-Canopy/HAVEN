@@ -95,6 +95,13 @@ def test_native_email_delete_stays_confirmation_gated_and_provider_scoped():
     assert "_emailCanMutate" in comms
 
 
+def test_native_activity_renders_recent_work_evidence():
+    activity = (NATIVE / "MainWindow.Computer.cs").read_text(encoding="utf-8")
+    client = (NATIVE / "Services" / "HavenCoreClient.cs").read_text(encoding="utf-8")
+    assert '"recent_work"' in activity
+    assert "GetComputerActivityAsync" in client
+
+
 def test_native_settings_projects_the_support_safe_unified_receipt_export():
     system = (NATIVE / "MainWindow.System.cs").read_text(encoding="utf-8")
     xaml = (NATIVE / "MainWindow.xaml").read_text(encoding="utf-8")
