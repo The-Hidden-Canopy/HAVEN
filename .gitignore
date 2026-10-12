@@ -32,6 +32,9 @@ data/
 receipts/
 traces/
 
+# Chat/remote attachments are not product assets and must never enter the public tree.
+.codex-remote-attachments/
+
 # Recorded audio from scripts/smoke_mic_loopback.py: real mic input, never a repo artifact.
 scripts/*.wav
 

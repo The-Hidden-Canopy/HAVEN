@@ -32,8 +32,8 @@ DIAGNOSTIC_ADAPTER = PluginDescriptor(
     description="Reconstructs decision chains from exported receipts.",
 )
 GHOST_TEACHER = PluginDescriptor(
-    plugin_id="ghost-teacher",
-    display_name="Ghost Teacher",
+    plugin_id="adaptive-evaluator",
+    display_name="Adaptive Evaluator",
     publisher="The Hidden Canopy LLC",
     capability=PluginCapability.ADAPTIVE_CURRICULUM_EVALUATION,
     status=PluginStatus.CATALOG_ONLY,
@@ -102,12 +102,12 @@ def test_refresh_populates_the_catalog_and_a_plain_get_then_sees_it(tmp_path):
         assert status == 200
         assert body["ok"] is True
         ids = sorted(p["plugin_id"] for p in body["plugins"])
-        assert ids == ["ghost-teacher", "diagnostic-adapter"]
+        assert ids == ["adaptive-evaluator", "diagnostic-adapter"]
         assert all(p["enabled"] is False for p in body["plugins"])
 
         status, body = _get(port, "/api/plugins")
         assert status == 200
-        assert sorted(p["plugin_id"] for p in body["plugins"]) == ["ghost-teacher", "diagnostic-adapter"]
+        assert sorted(p["plugin_id"] for p in body["plugins"]) == ["adaptive-evaluator", "diagnostic-adapter"]
 
 
 def test_enable_then_disable_round_trips_over_http(tmp_path):
@@ -118,7 +118,7 @@ def test_enable_then_disable_round_trips_over_http(tmp_path):
         assert status == 200
         assert body["ok"] is True
         by_id = {p["plugin_id"]: p["enabled"] for p in body["plugins"]}
-        assert by_id == {"diagnostic-adapter": True, "ghost-teacher": False}
+        assert by_id == {"diagnostic-adapter": True, "adaptive-evaluator": False}
 
         status, body = _post(port, "/api/plugins/diagnostic-adapter/disable")
         assert status == 200
@@ -167,4 +167,4 @@ def test_a_catalog_fetch_failure_is_reported_without_losing_a_previous_good_snap
         assert status == 200
         assert body["ok"] is True
         assert body["catalog_error"] == "unreachable"
-        assert sorted(p["plugin_id"] for p in body["plugins"]) == ["ghost-teacher", "diagnostic-adapter"]
+        assert sorted(p["plugin_id"] for p in body["plugins"]) == ["adaptive-evaluator", "diagnostic-adapter"]

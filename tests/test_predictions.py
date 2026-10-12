@@ -1,7 +1,7 @@
 """Prediction-triggered rules: predictions become inputs to routines.
 
 Nothing in Haven Core produces a `Prediction` yet -- this is the contract a
-prediction engine (a world model, Ghost Teacher) plugs into. A rule that
+prediction engine (for example, a world model) plugs into. A rule that
 declares a `PredictionTrigger` is judged against the confidence bar *it*
 declared at approval time, not against `AuthorityEngine.minimum_confidence`
 (which governs observed evidence and is unrelated here) -- the ".75-.95 ->

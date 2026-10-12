@@ -20,16 +20,11 @@ with all three:
   capability registry, and operates under the exact same authority boundary
   as HAVEN's own fixtures. See `authoring-providers.md` for that contract.
 - A **local analyzer** runs locally against the household's own full
-  receipt chain, never exported, never through the Hub. Diagnostic Adapter
-  (diagnostic: `haven/trace/contracts.py`'s `TraceAnalyzer`) integrates
-  this way -- a public Protocol in HAVEN, a private implementation
-  elsewhere, same split as a provider, applied to deeper receipt-chain
-  analysis instead of a runtime capability. This is Diagnostic Adapter's primary
-  path against HAVEN specifically. (Ghost Teacher is a separate,
-  portfolio-wide adaptive evaluation system -- see its own engineering
-  spec -- with no HAVEN-specific integration today; an earlier draft of
-  this document claimed it had a local contract here the same way
-  Diagnostic Adapter does, and that was wrong.)
+  receipt chain, never exported, never through the Hub. The diagnostic
+  contract (`haven/trace/contracts.py`'s `TraceAnalyzer`) integrates this
+  way -- a public Protocol in HAVEN, with any implementation kept outside
+  this repository. Adaptive evaluation services are separate and have no
+  HAVEN-specific integration today.
 - A **Hub-relayed plugin** -- the subject of the rest of this document --
   never runs inside HAVEN, never implements a provider or local-analyzer
   Protocol, and never receives live household state. It would read only
@@ -60,10 +55,9 @@ Concretely:
   built or enabled today.
 - The Hub relays what was explicitly exported. It never becomes a household
   authority, never gains write access back into any household, and never
-  brokers a live connection from a plugin to a running HAVEN instance. (This
-  mirrors the same rule that already governs the public Hub's relationship
-  to Neural Forge and to Ask IDA CLI: the Hub coordinates approved public
-  metadata; execution and private state stay local.)
+  brokers a live connection from a plugin to a running HAVEN instance. The
+  Hub coordinates approved public metadata; execution and private state stay
+  local.
 - A plugin registers in the Hub's signed plugin catalog
   (`haven-plugin-catalog.v1`, served at `/api/haven/plugins/catalog`),
   declaring one capability from a closed set and one data boundary. The
@@ -102,21 +96,16 @@ capability value is defined once, here:
   against the full chain or, someday, as a Hub-relayed plugin against a
   redacted export.
 
-Ghost Teacher is not listed. Its actual mechanism -- adaptively probing a
-live model endpoint, per its own engineering spec -- doesn't fit this
-catalog's shape at all: it has no use for a pile of past exported receipts,
-it needs a queryable target. A prior version of this catalog listed it
-under `adaptive_curriculum_evaluation` with an `exported_receipts_only`
-boundary; that was a guess made without the real spec and has been removed
-rather than left as a plausible-sounding but inaccurate entry.
+Adaptive evaluation services are not listed. Their mechanism -- adaptively
+probing a live model endpoint -- does not fit this catalog's shape: it needs
+a queryable target rather than a pile of past exported receipts. The catalog
+therefore does not claim that an exported-receipts boundary supports that
+kind of service.
 
-Diagnostic Adapter is a Hidden Canopy product, not a community plugin, but under
-this Hub-relay contract specifically it would hold no special access -- a
+The reference catalog entry carries no privileged access semantics -- a
 third-party plugin that satisfies the same catalog entry (capability,
-`exported_receipts_only` boundary) would be architecturally
-indistinguishable from it. That symmetry is deliberate, the same way
-`haven/providers` treats a free fixture and a paid Hidden Canopy provider
-identically.
+`exported_receipts_only` boundary) is architecturally indistinguishable
+from any other entry. That symmetry is deliberate.
 
 ## What the catalog entry actually is
 

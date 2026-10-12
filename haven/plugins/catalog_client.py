@@ -24,7 +24,7 @@ import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .contracts import PluginCapability, PluginDataBoundary, PluginDescriptor, PluginStatus
 
@@ -44,6 +44,63 @@ _REQUIRED_BOUNDARY_POLICY = {
     "data_scope": "hub_exported_receipts_only",
     "household_pii": "never_included",
 }
+_CATALOG_KEYS = frozenset(
+    {
+        "schema_version",
+        "catalog_version",
+        "issued_at",
+        "expires_at",
+        "boundary_policy",
+        "plugins",
+        "signature",
+    }
+)
+_PAYLOAD_KEYS = _CATALOG_KEYS - {"signature"}
+_BOUNDARY_POLICY_KEYS = frozenset(_REQUIRED_BOUNDARY_POLICY)
+_PLUGIN_KEYS = frozenset(
+    {
+        "plugin_id",
+        "display_name",
+        "publisher",
+        "capability",
+        "status",
+        "data_boundary",
+        "description",
+    }
+)
+_SIGNATURE_KEYS = frozenset({"algorithm", "key_id", "value"})
+_MAX_PLUGINS = 200
+_PRIVATE_KEYS = frozenset(
+    {
+        "token",
+        "secret",
+        "privatekey",
+        "secretkey",
+        "apikey",
+        "localpath",
+        "checkpointpath",
+        "orgid",
+        "organizationid",
+        "workertoken",
+        "prompt",
+        "rawlog",
+        "rawlogs",
+        "password",
+        "accesstoken",
+        "credential",
+        "clientsecret",
+        "bearertoken",
+        "authtoken",
+        "authorization",
+        "cookie",
+        "privateruntime",
+        "workersubject",
+        "householdid",
+        "householddata",
+        "evidence",
+        "receipt",
+    }
+)
 
 
 class CatalogFetchError(RuntimeError):
@@ -74,6 +131,38 @@ def _canonical_bytes(value) -> bytes:
     return json.dumps(_canonicalize(value), separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+def _normalize_key(key: str) -> str:
+    return "".join(character for character in key.lower() if character.isalnum())
+
+
+def _contains_private(value) -> bool:
+    if isinstance(value, list):
+        return any(_contains_private(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    for key, child in value.items():
+        if isinstance(key, str):
+            normalized = _normalize_key(key)
+            if (
+                normalized in _PRIVATE_KEYS
+                or "password" in normalized
+                or "accesstoken" in normalized
+                or "credential" in normalized
+                or ("household" in normalized and normalized != "householdpii")
+            ):
+                return True
+        if _contains_private(child):
+            return True
+    return False
+
+
+def _assert_exact_keys(value, allowed: frozenset[str], label: str) -> None:
+    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+        raise CatalogFetchError(f"catalog {label} must be an object", code="schema_invalid")
+    if any(key not in allowed for key in value):
+        raise CatalogFetchError(f"catalog {label} contains an unknown field", code="schema_invalid")
+
+
 def _verify_signature(payload: dict, signature: dict) -> None:
     """Verify `signature` over `payload` (already stripped of `signature`).
 
@@ -92,7 +181,8 @@ def _verify_signature(payload: dict, signature: dict) -> None:
             code="verification_unavailable",
         ) from exc
 
-    if not isinstance(signature, dict) or signature.get("algorithm") != "ed25519":
+    _assert_exact_keys(signature, _SIGNATURE_KEYS, "signature")
+    if _contains_private(signature) or signature.get("algorithm") != "ed25519":
         raise CatalogFetchError("catalog signature algorithm is not ed25519", code="signature_invalid")
     if signature.get("key_id") != CATALOG_KEY_ID:
         raise CatalogFetchError("catalog signature key_id does not match the pinned key", code="signature_invalid")
@@ -112,7 +202,7 @@ def _parse_datetime(value, *, name: str) -> datetime:
     except ValueError as exc:
         raise CatalogFetchError(f"catalog {name} is invalid", code="schema_invalid") from exc
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        raise CatalogFetchError(f"catalog {name} must be timezone-aware", code="schema_invalid")
     return parsed
 
 
@@ -126,24 +216,40 @@ def _revalidate_boundary(data: dict) -> None:
     `PluginDescriptor`.
     """
 
+    _assert_exact_keys(data, _PAYLOAD_KEYS, "payload")
+    if _contains_private(data):
+        raise CatalogFetchError("catalog contains private fields", code="schema_invalid")
     if data.get("schema_version") != SCHEMA_VERSION:
         raise CatalogFetchError("catalog schema_version is not recognized", code="schema_invalid")
+    if not isinstance(data.get("catalog_version"), str) or not data["catalog_version"].strip():
+        raise CatalogFetchError("catalog catalog_version is invalid", code="schema_invalid")
     policy = data.get("boundary_policy")
-    if not isinstance(policy, dict):
-        raise CatalogFetchError("catalog boundary_policy is missing", code="schema_invalid")
+    _assert_exact_keys(policy, _BOUNDARY_POLICY_KEYS, "boundary_policy")
     for key, required in _REQUIRED_BOUNDARY_POLICY.items():
         if policy.get(key) != required:
             raise CatalogFetchError(f"catalog boundary_policy.{key} does not match the required value", code="schema_invalid")
     plugins = data.get("plugins")
-    if not isinstance(plugins, list) or not plugins:
+    if not isinstance(plugins, list) or not plugins or len(plugins) > _MAX_PLUGINS:
         raise CatalogFetchError("catalog plugins list is missing or empty", code="schema_invalid")
+    seen: set[str] = set()
+    for entry in plugins:
+        _assert_exact_keys(entry, _PLUGIN_KEYS, "plugin entry")
+        if _contains_private(entry):
+            raise CatalogFetchError("catalog plugin entry contains private fields", code="schema_invalid")
+        plugin_id = entry.get("plugin_id")
+        if not isinstance(plugin_id, str) or plugin_id in seen:
+            raise CatalogFetchError("catalog plugin id is invalid or duplicated", code="schema_invalid")
+        seen.add(plugin_id)
 
 
 def _fetch_bytes(url: str) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": "haven-plugin-catalog-client", "Accept": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=_TIMEOUT_SECONDS) as response:
-            return response.read(_MAX_RESPONSE_BYTES)
+            raw = response.read(_MAX_RESPONSE_BYTES + 1)
+            if len(raw) > _MAX_RESPONSE_BYTES:
+                raise CatalogFetchError("catalog response is too large", code="response_too_large")
+            return raw
     except (urllib.error.URLError, TimeoutError) as exc:
         raise CatalogFetchError(f"cannot reach the Hub plugin catalog: {exc}", code="unreachable") from exc
 
@@ -165,6 +271,9 @@ def parse_and_verify_catalog(raw: bytes | dict) -> CatalogSnapshot:
     if not isinstance(data, dict):
         raise CatalogFetchError("catalog response is not a JSON object", code="invalid_payload")
 
+    _assert_exact_keys(data, _CATALOG_KEYS, "catalog")
+    if _contains_private(data):
+        raise CatalogFetchError("catalog contains private fields", code="schema_invalid")
     signature = data.get("signature")
     if signature is None:
         raise CatalogFetchError("catalog response carries no signature", code="signature_missing")
@@ -175,8 +284,12 @@ def parse_and_verify_catalog(raw: bytes | dict) -> CatalogSnapshot:
     issued_at = _parse_datetime(payload.get("issued_at"), name="issued_at")
     expires_at = _parse_datetime(payload.get("expires_at"), name="expires_at")
     now = datetime.now(timezone.utc)
+    if issued_at > now + timedelta(minutes=5):
+        raise CatalogFetchError("catalog issued_at is in the future", code="schema_invalid")
     if expires_at <= now:
         raise CatalogFetchError("catalog has expired", code="expired")
+    if expires_at <= issued_at:
+        raise CatalogFetchError("catalog expires_at must be after issued_at", code="schema_invalid")
 
     plugins: list[PluginDescriptor] = []
     for entry in payload["plugins"]:
