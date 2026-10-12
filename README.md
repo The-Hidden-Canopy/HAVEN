@@ -431,7 +431,7 @@ and does not exist there, including Linux/macOS.
   the same codes observed evidence already uses. A matched prediction is
   recorded on the receipt as `EvidenceStatus.DECLARED`, not observed fact.
   Nothing in this repo produces a `Prediction` yet; this is the contract a
-  prediction engine -- a world model, Ghost Teacher -- plugs into.
+  prediction engine -- for example, a world model -- plugs into.
 - `haven/alerts` is `AuthorityEngine`'s read-only sibling: `AlertEngine`
   never touches a device, rule, or the store, and only ever returns an
   `Alert` or `None`. An `AlertRule` correlates conditions -- presence,
@@ -707,7 +707,8 @@ itself -- that seam is the whole point of `haven/models` and
 HAVEN is intentionally independent of the existing repositories at this
 stage.
 
-**TraceGlass** is diagnostic, and has a real local integration point:
+The decision-chain diagnostic surface is diagnostic, and has a real local
+integration point:
 [`haven/trace/contracts.py`](haven/trace/contracts.py) defines
 `TraceAnalyzer`, a public Protocol -- HAVEN Core never imports an
 implementation -- for reconstructing a HAVEN receipt chain as
@@ -715,23 +716,15 @@ available-information -> inferred-belief -> candidate-action ->
 executed-action -> consequence, and finding the earliest point it broke.
 It runs locally, against the household's own full receipt chain; nothing
 is exported for this path, because nothing needs to leave the installation
-to explain what already happened. The actual analyzer is a private Hidden
-Canopy product with no implementation in this repository. TraceGlass is
-also a broader, portfolio-wide decision-chain diagnostic (it reconstructs
-breakpoints for other systems too, per its own engineering spec); this
-Protocol is specifically HAVEN's local application of it, not a claim
-about TraceGlass's only use.
+to explain what already happened. The implementation is not included in
+this repository, and no implementation is imported. This Protocol is
+specifically HAVEN's local application of the diagnostic contract.
 
-**Ghost Teacher is a separate, portfolio-wide adaptive evaluation and
-curriculum-generation system** (capability targets, adaptive probing of a
-model endpoint, TraceGlass breakpoint consumption, RegOS admission,
-IDA-TRAIN-V2 lesson compiling -- see its own engineering specification).
-It has no HAVEN-specific integration today, and does not have a local
-Protocol in this repository the way TraceGlass does; a prior draft of
-this document claimed otherwise and was wrong. If a HAVEN intelligence
-provider is ever adaptively evaluated by Ghost Teacher, that would happen
-through Ghost Teacher's own generic model-endpoint adapter, the same way
-it evaluates any other target -- not through a contract HAVEN hosts.
+Adaptive evaluation and curriculum generation are separate services. They
+have no HAVEN-specific integration today and no local Protocol in this
+repository. If a provider is ever evaluated by such a service, it must use
+that service's generic endpoint contract rather than a private contract
+hosted by HAVEN.
 
 Separately, the Hub also publishes a signed plugin catalog
 (`haven/plugins`, see [`docs/plugin-boundary.md`](docs/plugin-boundary.md))
@@ -764,7 +757,7 @@ deployment model.
 The project also follows the
 [Open Canopy Contract](OPEN_CANOPY_CONTRACT.md).
 
-The license covers this repository only. Hidden Canopy's premium model and
-provider implementations are separate products; the provider contracts in
+The license covers this repository only. Optional model and provider
+implementations may be separate products; the provider contracts in
 `haven/providers` exist so those can plug in without Haven depending on
 them, and so anyone else's providers can too.
