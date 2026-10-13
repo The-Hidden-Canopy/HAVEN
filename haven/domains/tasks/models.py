@@ -1,7 +1,7 @@
 """Tasks domain: the record HAVEN partitions commitments by.
 
 Design spec pages 26-27. States are the spec's objective-graph
-vocabulary; `revision` is revision-bound workflow-bound like projects. Completion
+vocabulary; `revision` is shared across revision-bound workflows. Completion
 keeps its evidence source (user-declared vs provider-observed) so a
 checked-off task can always answer "how do we know".
 """

@@ -78,16 +78,17 @@ the same failure mode `authoring-providers.md` warns providers away from,
 just approached from outside the process instead of inside it. Route around
 the urge, not around the boundary.
 
-## Reference plugin, and why it's listed here at all
+## Reference diagnostic plugin, and why it's listed here at all
 
-Diagnostic Adapter is listed in the Hub's catalog even though its primary
-integration against HAVEN is the **local analyzer** path above, not this
-one. It's there because the catalog is also where a future, narrower
-Hub-relayed variant would be discovered -- useful for a household that
-doesn't want to install an analyzer locally -- and because its closed
-capability value is defined once, here:
+A private diagnostic adapter may be listed in the Hub's catalog even though
+its primary integration against HAVEN is the **local analyzer** path above,
+not this one. The public contract names the capability without publishing a
+provider identity; a future, narrower Hub-relayed variant would be
+discovered through the private catalog boundary -- useful for a household
+that doesn't want to install an analyzer locally -- while the capability
+value remains bounded here:
 
-- **`decision_chain_reconstruction`** (Diagnostic Adapter, diagnostic) --
+- **`decision_chain_reconstruction`** (private diagnostic adapter) --
   reconstructs a receipt as
   available-information -> inferred-belief -> candidate-action ->
   executed-action -> consequence and identifies the earliest point that

@@ -2,7 +2,7 @@
 
 Design spec pages 26-27. A project is scope-keyed like every other life
 substrate record; `revision` increments on every accepted mutation so a
-stale model suggestion can never overwrite a newer user edit (revision-bound workflow
+stale model suggestion can never overwrite a newer user edit (revision-bound
 pattern, spec page 11). Deletion is archive/tombstone by default: the
 record stays readable (status ``archived``) and attached source resources
 are never touched.

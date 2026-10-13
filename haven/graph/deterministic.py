@@ -40,7 +40,7 @@ def assertion_id(subject: str, predicate: str, object_: str) -> str:
 class RelationshipProjector:
     """Writes the deterministic edge set into the OntologyStore.
 
-    `recompute_region(resource_id)` does the bounded revision-bound workflow wake-set:
+    `recompute_region(resource_id)` does the bounded revision wake-set:
     only the directly connected region (the resource, its 1-hop neighbors,
     and edges derived from them) is re-derived -- never the whole life.
     """
@@ -81,7 +81,7 @@ class RelationshipProjector:
         return written
 
     def recompute_region(self, resource_id: str, *, visible_scopes: tuple[str, ...]) -> int:
-        """Bounded wake-set around one changed resource (spec: revision-bound workflow)."""
+        """Bounded wake-set around one changed resource."""
 
         written = 0
         record = self._resources.get(resource_id)

@@ -4,7 +4,7 @@ The services are the only mutation path for projects and tasks; HTTP/IPC
 adapters stay thin over them so validation is never forked. Everything is
 scope-keyed and fail-closed: a mutation or read outside the principal's
 membership-derived visible scopes is refused, and every mutation is
-revision-bound (revision-bound workflow) so a stale suggestion cannot overwrite a
+revision-bound workflow so a stale suggestion cannot overwrite a
 newer user edit.
 """
 

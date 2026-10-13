@@ -62,4 +62,4 @@ def test_list_reflects_every_recorded_choice(tmp_path):
     registry.set_enabled("diagnostic-adapter", True)
     registry.set_enabled("ghost-teacher", False)
     ids = sorted(record.plugin_id for record in registry.list())
-    assert ids == ["ghost-teacher", "diagnostic-adapter"]
+    assert ids == ["diagnostic-adapter", "ghost-teacher"]
