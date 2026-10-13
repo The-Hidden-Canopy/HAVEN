@@ -42,6 +42,7 @@ public sealed partial class MainWindow
         MemoryPanel.Visibility = tag == "memory" ? Visibility.Visible : Visibility.Collapsed;
         ComputerPanel.Visibility = tag == "computer" ? Visibility.Visible : Visibility.Collapsed;
         CommunicationsPanel.Visibility = tag == "communications" ? Visibility.Visible : Visibility.Collapsed;
+        MarketplacePanel.Visibility = tag == "marketplace" ? Visibility.Visible : Visibility.Collapsed;
         HomePanel.Visibility = tag == "home" ? Visibility.Visible : Visibility.Collapsed;
         ModelsPanel.Visibility = tag == "models" ? Visibility.Visible : Visibility.Collapsed;
         SettingsPanel.Visibility = tag == "settings" ? Visibility.Visible : Visibility.Collapsed;
@@ -55,6 +56,7 @@ public sealed partial class MainWindow
             "memory" => ("Memory", "What HAVEN knows, where it came from, and how certain it is."),
             "computer" => ("Computer", "Your files, applications, windows and activity."),
             "communications" => ("Communications", "Email, messages and threads with their context."),
+            "marketplace" => ("Marketplace", "Curated products, experiences, and intelligence — discovery first, installation later."),
             "home" => ("Home", "Rooms, devices, automations and contexts. Rooms are yours even without a smart-home provider."),
             "models" => ("Models", "Local, downloaded and external intelligence. HAVEN runs on any mix of them."),
             "settings" => ("Settings", "Control boundaries: startup, storage, privacy, connections, about."),
@@ -94,6 +96,9 @@ public sealed partial class MainWindow
             case "communications":
                 CommsStatusText.Text = "Loading…";
                 _ = LoadCommsTabAsync();
+                break;
+            case "marketplace":
+                _ = LoadMarketplaceAsync();
                 break;
             case "home":
                 HomeStatusText.Text = "Loading…";

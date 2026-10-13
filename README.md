@@ -11,6 +11,22 @@ observe -> understand household state -> predict or interpret ->
 check authority -> act -> observe consequence -> remember
 ```
 
+## Start here
+
+New to HAVEN? Begin with the [getting started guide](docs/getting-started.md),
+then keep the [operating loop](docs/operating-loop.md) nearby as you make the
+installation your own. Connections are optional and can be started from the
+place where you need them; Settings is a control center, not a prerequisite for
+using HAVEN.
+
+The [Marketplace guide](docs/marketplace.md) explains the separate,
+discovery-first product catalog and why it does not install or grant authority.
+
+For deeper work, the repository also has an [authoring guide for providers](docs/authoring-providers.md),
+an [authoring guide for models](docs/authoring-models.md), the
+[feature-module boundary](docs/feature-modules.md), and the
+[native operational proof loop](docs/qa/native-proof-loop.md).
+
 The governing core started deliberately small and fixture-driven, to prove
 the control boundary before connecting to anything real. That boundary is
 still exactly as strict, but it is no longer fixture-only: HAVEN today
@@ -741,6 +757,11 @@ export to a subscribed plugin are not built yet, so enabling a plugin
 today records a household's choice and moves no data. See
 `haven/plugins/catalog_client.py` and `docs/plugin-boundary.md` for the
 exact contract that relay must satisfy when it exists.
+
+## Thank you
+
+Thank you for trying HAVEN. Start small, connect only what is useful to you,
+and have fun making it yours.
 
 ## License and ownership
 

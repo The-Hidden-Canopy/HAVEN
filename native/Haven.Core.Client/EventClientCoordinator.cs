@@ -23,6 +23,10 @@ public sealed class EventClientCoordinator : IAsyncDisposable
 
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private readonly CancellationTokenSource _lifecycleCts = new();
+    // Reconnect runs on a background task while the UI and watchdog read the
+    // current client on other threads. Volatile publication prevents a
+    // caller from observing the new attempt counter while still seeing the
+    // previous client reference.
     private HavenEventClient? _client;
     private Task? _reconnectTask;
     private bool _stopping;
@@ -47,9 +51,9 @@ public sealed class EventClientCoordinator : IAsyncDisposable
 
     /// <summary>The live client, if a reconnect has completed. Never assume
     /// this is connected -- check <see cref="IsConnectedAndFresh"/>.</summary>
-    public HavenEventClient? Client => _client;
+    public HavenEventClient? Client => Volatile.Read(ref _client);
 
-    public bool IsConnectedAndFresh => _client is { IsConnected: true, IsStalled: false };
+    public bool IsConnectedAndFresh => Volatile.Read(ref _client) is { IsConnected: true, IsStalled: false };
 
     /// <summary>True whenever a reconnect attempt is currently running.
     /// Exposed so a test can assert "only one attempt is ever in flight"
@@ -107,8 +111,8 @@ public sealed class EventClientCoordinator : IAsyncDisposable
                         return;
                     }
 
-                    var previous = _client;
-                    _client = null;
+                    var previous = Volatile.Read(ref _client);
+                    Volatile.Write(ref _client, null);
                     if (previous is not null)
                     {
                         await previous.DisposeAsync();
@@ -119,7 +123,7 @@ public sealed class EventClientCoordinator : IAsyncDisposable
                     client.EventReceived = (eventName, payload) => _onEvent(eventName, payload);
                     client.HeartbeatMissed = () => OnHeartbeatMissed(client);
                     client.ConnectionLost = () => _ = OnConnectionLostAsync(client, isOnline);
-                    _client = client;
+                    Volatile.Write(ref _client, client);
                     try
                     {
                         await client.ConnectAsync(_lifecycleCts.Token);
@@ -127,9 +131,9 @@ public sealed class EventClientCoordinator : IAsyncDisposable
                     }
                     catch (Exception)
                     {
-                        if (ReferenceEquals(_client, client))
+                        if (ReferenceEquals(Volatile.Read(ref _client), client))
                         {
-                            _client = null;
+                            Volatile.Write(ref _client, null);
                         }
                         await client.DisposeAsync();
                     }
@@ -162,7 +166,7 @@ public sealed class EventClientCoordinator : IAsyncDisposable
 
     private void OnHeartbeatMissed(HavenEventClient source)
     {
-        if (!ReferenceEquals(_client, source) || _stopping)
+        if (!ReferenceEquals(Volatile.Read(ref _client), source) || _stopping)
         {
             return;
         }
@@ -171,7 +175,7 @@ public sealed class EventClientCoordinator : IAsyncDisposable
 
     private async Task OnConnectionLostAsync(HavenEventClient source, Func<bool> isOnline)
     {
-        if (!ReferenceEquals(_client, source) || _stopping || !isOnline())
+        if (!ReferenceEquals(Volatile.Read(ref _client), source) || _stopping || !isOnline())
         {
             return;
         }
@@ -183,7 +187,7 @@ public sealed class EventClientCoordinator : IAsyncDisposable
         {
             return;
         }
-        if (!ReferenceEquals(_client, source) || _stopping || !isOnline())
+        if (!ReferenceEquals(Volatile.Read(ref _client), source) || _stopping || !isOnline())
         {
             return;
         }
@@ -215,8 +219,8 @@ public sealed class EventClientCoordinator : IAsyncDisposable
         await _lifecycleLock.WaitAsync();
         try
         {
-            var client = _client;
-            _client = null;
+            var client = Volatile.Read(ref _client);
+            Volatile.Write(ref _client, null);
             if (client is not null)
             {
                 await client.DisposeAsync();

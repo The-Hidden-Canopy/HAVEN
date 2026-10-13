@@ -98,6 +98,14 @@
                             <TextBlock Text="Communications" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
+                    <Button Tag="marketplace" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}"
+                            AutomationProperties.Name="Marketplace">
+
+                        <StackPanel Orientation="Horizontal" Spacing="11">
+                            <SymbolIcon Symbol="Shop" />
+                            <TextBlock Text="Marketplace" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
 
                     <Rectangle Height="1" Fill="{ThemeResource HavenStrokeBrush}" Margin="16,8" />
 
@@ -772,6 +780,39 @@
                         <TextBlock x:Name="DiscoveryStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
                         <StackPanel x:Name="DiscoveryCandidatesList" Spacing="8" />
                     </StackPanel>
+                </StackPanel>
+
+                <!-- Marketplace (docuseries phase 1/2): read-only product discovery. -->
+                <StackPanel x:Name="MarketplacePanel" Spacing="12" Visibility="Collapsed">
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Discover products, experiences, and intelligence from The Hidden Canopy."
+                                   Style="{StaticResource HavenBodyTextStyle}" TextWrapping="Wrap" />
+                        <Button Grid.Column="1" Content="Refresh catalog" Click="OnMarketplaceRefreshClicked"
+                                Style="{StaticResource HavenSecondaryButtonStyle}" />
+                    </Grid>
+                    <TextBlock x:Name="MarketplaceNoticeText" Style="{StaticResource HavenMetadataTextStyle}"
+                               TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBox x:Name="MarketplaceSearchBox" Width="280" PlaceholderText="Search products…"
+                                 TextChanged="OnMarketplaceSearchChanged" />
+                        <ComboBox x:Name="MarketplaceStateFilter" Width="190"
+                                  SelectionChanged="OnMarketplaceFilterChanged">
+                            <ComboBoxItem Content="All release states" Tag="" IsSelected="True" />
+                            <ComboBoxItem Content="Available" Tag="available" />
+                            <ComboBoxItem Content="Early Access" Tag="early_access" />
+                            <ComboBoxItem Content="Developer Preview" Tag="developer_preview" />
+                            <ComboBoxItem Content="Coming Soon" Tag="coming_soon" />
+                            <ComboBoxItem Content="Deprecated" Tag="deprecated" />
+                            <ComboBoxItem Content="Security Hold" Tag="security_hold" />
+                        </ComboBox>
+                    </StackPanel>
+                    <TextBlock x:Name="MarketplaceErrorText" TextWrapping="Wrap"
+                               Foreground="{ThemeResource HavenWarningBrush}" />
+                    <StackPanel x:Name="MarketplaceList" Spacing="10" />
                 </StackPanel>
 
                 <!-- Models (spec 38): Local / Downloaded / External / Downloads. -->

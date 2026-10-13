@@ -26,6 +26,7 @@ from ..ipc import IpcDispatcher, request_message
 from ..ipc.events_pipe import EventPublisher
 from ..models.jobs import DownloadJobManager, job_to_dict
 from ..models.storage import default_models_root
+from ..marketplace import MarketplaceCatalogClient
 from ..core.correlation import bind as bind_correlation, current as current_correlation, new_id as new_correlation_id
 from ..core.consequence import ConsequenceClass
 from ..core.domain import Principal, RoleTier
@@ -41,6 +42,10 @@ from .models_api import (
     models_payload,
     overview_payload,
     scan_payload,
+)
+from .marketplace_api import (
+    current_payload as marketplace_current_payload,
+    refresh_payload as marketplace_refresh_payload,
 )
 from ..plugins import PluginManager, PluginRegistry
 from .plugins_api import (
@@ -328,6 +333,28 @@ class HavenWebServer(ThreadingHTTPServer):
         # from the Hub on demand, never at boot, so a network hiccup can
         # never block startup.
         self.plugins = PluginManager(PluginRegistry(Path(resolved_data_dir) / "plugins.json"), clock=clock)
+        marketplace_keys: dict[str, str] = {}
+        raw_marketplace_keys = os.environ.get("HAVEN_MARKETPLACE_TRUSTED_KEYS_JSON")
+        if raw_marketplace_keys:
+            try:
+                decoded_keys = json.loads(raw_marketplace_keys)
+                if isinstance(decoded_keys, dict):
+                    marketplace_keys = {
+                        str(key): value
+                        for key, value in decoded_keys.items()
+                        if isinstance(key, str) and isinstance(value, str)
+                    }
+            except json.JSONDecodeError:
+                # A malformed optional trust configuration fails closed at
+                # refresh time; it must not prevent HAVEN from booting.
+                marketplace_keys = {}
+        self.marketplace = MarketplaceCatalogClient(
+            Path(resolved_data_dir) / "marketplace-cache.json",
+            catalog_url=os.environ.get("HAVEN_MARKETPLACE_CATALOG_URL"),
+            trusted_keys=marketplace_keys,
+            bundled_catalog_path=Path(__file__).resolve().parents[1] / "marketplace" / "starter_catalog.json",
+            clock=clock,
+        )
         # The application factory always builds the real installation on a
         # normal boot. Only an explicit --demo constructor flag creates the
         # simulated household; a fresh install is a real, empty HAVEN world.
@@ -2686,6 +2713,13 @@ class HavenWebServer(ThreadingHTTPServer):
                     provider_id=params.get("provider_id")
                 ),
                 "models.overview": lambda _params: overview_payload(self.models),
+                "marketplace.list": lambda params: marketplace_current_payload(
+                    self.marketplace,
+                    query=params.get("query"),
+                    category=params.get("category"),
+                    release_state=params.get("release_state"),
+                ),
+                "marketplace.refresh": lambda _params: marketplace_refresh_payload(self.marketplace),
                 "search.query": _search,
                 "knowledge.claims": _knowledge_claims,
                 "knowledge.claim": _knowledge_claim,
@@ -3204,6 +3238,17 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, overview_payload(self.models))
         elif path == "/api/models/jobs":
             self._send_json(200, {"ok": True, "jobs": [job_to_dict(job) for job in self.model_jobs.list()]})
+        elif path == "/api/marketplace":
+            query = parse_qs(urlsplit(self.path).query)
+            self._send_json(
+                200,
+                marketplace_current_payload(
+                    self.server.marketplace,
+                    query=query.get("query", [None])[0],
+                    category=query.get("category", [None])[0],
+                    release_state=query.get("release_state", [None])[0],
+                ),
+            )
         elif path == "/api/plugins":
             self._send_json(200, plugins_current_payload(self.plugins))
         elif path == "/api/setup":
@@ -3443,6 +3488,9 @@ class _Handler(BaseHTTPRequestHandler):
             if role is None:
                 return
             self._send_json(200, assign_payload(self.models, role, body.get("id")))
+            return
+        if path == "/api/marketplace/refresh":
+            self._send_json(200, marketplace_refresh_payload(self.server.marketplace))
             return
         if path == "/api/models" or path.startswith("/api/models/"):
             self._handle_models_post(path)
