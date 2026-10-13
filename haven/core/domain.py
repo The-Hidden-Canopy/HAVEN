@@ -358,7 +358,7 @@ class Prediction:
     """A declared, explainable forecast from a prediction provider.
 
     Nothing in Haven Core produces predictions; this is the contract a
-    prediction engine (a world model, Ghost Teacher) plugs into. A
+    prediction engine (for example, a world model) plugs into. A
     prediction is not an observation -- it can only authorize an action
     through a rule that explicitly declared a `PredictionTrigger` for it,
     and the receipt records it as DECLARED evidence rather than observed

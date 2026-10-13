@@ -1,12 +1,11 @@
 """`TraceAnalyzer`: deeper analysis over a receipt chain, layered on top.
 
 Contract only -- no `BasicTraceAnalyzer` implementation yet. A private
-analyzer (TraceGlass's available-evidence -> belief -> candidate-action ->
-executed-action -> consequence reconstruction) depends on this Protocol and
-on `haven.audit.receipts.ActionReceipt`; HAVEN Core never imports the
-analyzer. The receipt chain itself (`haven/audit/receipts.py`) is unchanged
-and stays public regardless of which analyzer, if any, a household runs
-over it.
+analyzer (available-evidence -> belief -> candidate-action -> executed-action
+-> consequence reconstruction) depends on this Protocol and on
+`haven.audit.receipts.ActionReceipt`; HAVEN Core never imports the analyzer.
+The receipt chain itself (`haven/audit/receipts.py`) is unchanged and stays
+public regardless of which analyzer, if any, a household runs over it.
 """
 
 from __future__ import annotations

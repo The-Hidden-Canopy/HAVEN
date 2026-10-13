@@ -29,8 +29,8 @@ TRACEGLASS = PluginDescriptor(
     description="Reconstructs decision chains from exported receipts.",
 )
 GHOST_TEACHER = PluginDescriptor(
-    plugin_id="ghost-teacher",
-    display_name="Ghost Teacher",
+        plugin_id="adaptive-evaluator",
+        display_name="Adaptive Evaluator",
     publisher="The Hidden Canopy LLC",
     capability=PluginCapability.ADAPTIVE_CURRICULUM_EVALUATION,
     status=PluginStatus.CATALOG_ONLY,
@@ -72,7 +72,7 @@ def test_view_before_any_fetch_is_empty_with_no_error(tmp_path, monkeypatch):
 def test_refresh_populates_entries_with_local_enablement_joined_in(tmp_path, monkeypatch):
     manager = _manager(tmp_path, monkeypatch)
     view = manager.refresh_catalog()
-    assert {e.descriptor.plugin_id for e in view.entries} == {"traceglass", "ghost-teacher"}
+    assert {e.descriptor.plugin_id for e in view.entries} == {"traceglass", "adaptive-evaluator"}
     assert all(e.enabled is False for e in view.entries)
     assert view.catalog_version == "test-1"
     assert view.catalog_error is None
@@ -96,7 +96,7 @@ def test_enable_then_view_reflects_the_choice(tmp_path, monkeypatch):
     manager.refresh_catalog()
     view = manager.enable("traceglass")
     by_id = {e.descriptor.plugin_id: e.enabled for e in view.entries}
-    assert by_id == {"traceglass": True, "ghost-teacher": False}
+    assert by_id == {"traceglass": True, "adaptive-evaluator": False}
 
 
 def test_disable_never_requires_a_fetch_and_is_idempotent(tmp_path, monkeypatch):
@@ -118,7 +118,7 @@ def test_a_failed_refresh_keeps_the_previous_successful_snapshot_but_reports_the
     )
     view = manager.refresh_catalog()
     assert view.catalog_error == "unreachable"
-    assert {e.descriptor.plugin_id for e in view.entries} == {"traceglass", "ghost-teacher"}
+    assert {e.descriptor.plugin_id for e in view.entries} == {"traceglass", "adaptive-evaluator"}
 
 
 def test_a_never_successful_catalog_reports_the_error_with_empty_entries(tmp_path, monkeypatch):
@@ -137,4 +137,4 @@ def test_enablement_survives_a_catalog_entry_disappearing_on_refresh(tmp_path, m
     # traceglass is no longer in the catalog, so it no longer appears — but
     # the local choice was never silently dropped or errored; the registry
     # still has it, it simply has nothing to join against right now.
-    assert {e.descriptor.plugin_id for e in view.entries} == {"ghost-teacher"}
+    assert {e.descriptor.plugin_id for e in view.entries} == {"adaptive-evaluator"}

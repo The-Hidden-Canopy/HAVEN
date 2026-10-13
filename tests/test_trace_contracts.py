@@ -1,4 +1,4 @@
-"""haven/trace: TraceGlass's public contract, no implementation in this repo.
+"""haven/trace: public analyzer contract, no implementation in this repo.
 
 `TraceAnalyzer` is a local Protocol over `haven.audit.receipts.ActionReceipt`
 -- HAVEN Core never imports an implementation, and the actual analyzer is a

@@ -48,8 +48,8 @@ def _base_catalog(*, issued=None, expires=None) -> dict:
                 "description": "Reconstructs decision chains from exported receipts.",
             },
             {
-                "plugin_id": "ghost-teacher",
-                "display_name": "Ghost Teacher",
+                "plugin_id": "adaptive-evaluator",
+                "display_name": "Adaptive Evaluator",
                 "publisher": "The Hidden Canopy LLC",
                 "capability": "adaptive_curriculum_evaluation",
                 "status": "catalog_only",
@@ -91,7 +91,7 @@ def test_verifies_a_genuinely_signed_catalog(keypair):
     signed = _sign(_base_catalog(), private_key)
     snapshot = parse_and_verify_catalog(json.dumps(signed).encode("utf-8"))
     ids = sorted(p.plugin_id for p in snapshot.plugins)
-    assert ids == ["ghost-teacher", "traceglass"]
+    assert ids == ["adaptive-evaluator", "traceglass"]
     assert snapshot.catalog_version == "test-1"
 
 
@@ -187,6 +187,56 @@ def test_rejects_an_entry_with_an_unknown_capability(keypair):
     private_key, _ = keypair
     catalog = _base_catalog()
     catalog["plugins"][0]["capability"] = "arbitrary_capability"
+    signed = _sign(catalog, private_key)
+    with pytest.raises(CatalogFetchError) as exc:
+        parse_and_verify_catalog(signed)
+    assert exc.value.code == "schema_invalid"
+
+
+def test_rejects_an_unknown_catalog_field_even_when_signed(keypair):
+    private_key, _ = keypair
+    catalog = _base_catalog()
+    catalog["endpoint"] = "https://private.example.test/catalog"
+    signed = _sign(catalog, private_key)
+    with pytest.raises(CatalogFetchError) as exc:
+        parse_and_verify_catalog(signed)
+    assert exc.value.code == "schema_invalid"
+
+
+def test_rejects_an_unknown_plugin_field_even_when_signed(keypair):
+    private_key, _ = keypair
+    catalog = _base_catalog()
+    catalog["plugins"][0]["install_url"] = "https://private.example.test/plugin.zip"
+    signed = _sign(catalog, private_key)
+    with pytest.raises(CatalogFetchError) as exc:
+        parse_and_verify_catalog(signed)
+    assert exc.value.code == "schema_invalid"
+
+
+def test_rejects_private_field_aliases_even_when_signed(keypair):
+    private_key, _ = keypair
+    catalog = _base_catalog()
+    catalog["plugins"][0]["householdId"] = "household-private"
+    signed = _sign(catalog, private_key)
+    with pytest.raises(CatalogFetchError) as exc:
+        parse_and_verify_catalog(signed)
+    assert exc.value.code == "schema_invalid"
+
+
+def test_rejects_naive_catalog_timestamps(keypair):
+    private_key, _ = keypair
+    catalog = _base_catalog()
+    catalog["issued_at"] = "2026-09-22T00:00:00"
+    signed = _sign(catalog, private_key)
+    with pytest.raises(CatalogFetchError) as exc:
+        parse_and_verify_catalog(signed)
+    assert exc.value.code == "schema_invalid"
+
+
+def test_rejects_duplicate_plugin_ids_even_when_signed(keypair):
+    private_key, _ = keypair
+    catalog = _base_catalog()
+    catalog["plugins"].append(dict(catalog["plugins"][0]))
     signed = _sign(catalog, private_key)
     with pytest.raises(CatalogFetchError) as exc:
         parse_and_verify_catalog(signed)
