@@ -13,10 +13,12 @@ public sealed partial class MainWindow : Window
     private HavenCoreClient? _client;
     private string? _selectedClaimId;
     private string _currentTag = "today";
+    private bool _viewsInitialized;
 
     public MainWindow()
     {
         InitializeComponent();
+        _viewsInitialized = true;
         _themeService.Load();
         // Defer the first apply until the window is loaded: swapping merged
         // dictionaries during InitializeComponent breaks the framework's

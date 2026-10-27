@@ -28,3 +28,5 @@ The support export uses schema 2 and an explicit allowlist: software version/com
 Tests inject temporary MCP settings paths and isolate Python home/data/model defaults. Packaged UI verification must additionally set fresh home, desktop, model, temp and Core data roots. It must not read an existing installation or use real credentials/memberships. Build caches and SDK first-run setup are separately controlled; application state isolation is not an operating-system sandbox.
 
 When the Core selected the desktop state root, a confirmed installation move reroutes subsequent native settings writes to the new installation. Native writes pause until the authenticated Core confirms that directory. An explicit independent desktop override remains independent.
+
+`python scripts/smoke_native_startup.py --native-exe <path>` checks the real native process for XAML construction failures using a fresh temporary home and settings directory. It intentionally supplies no Core connection and stops only its own disposable process. This startup regression is separate from interactive memory, feature and product acceptance.

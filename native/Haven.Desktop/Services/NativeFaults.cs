@@ -22,10 +22,10 @@ public static class NativeFaults
         return "[HAVEN.UNKNOWN.UNEXPECTED] The operation could not complete. Inspect local diagnostics.";
     }
 
-    public static string Message(Exception exception)
+    public static string Message(Exception exception, string operation = "desktop.request")
     {
         if (exception is ReportedFaultException) return exception.Message;
-        var code = exception is ArgumentException ? "HAVEN.CONFIG.INVALID" :
+        var code = operation == "core.startup" ? "HAVEN.CORE.STARTUP_FAILED" : exception is ArgumentException ? "HAVEN.CONFIG.INVALID" :
             exception is IOException or TimeoutException ? "HAVEN.IPC.UNAVAILABLE" : "HAVEN.UNKNOWN.UNEXPECTED";
         var correlation = Guid.NewGuid().ToString("N");
         try
@@ -38,10 +38,17 @@ public static class NativeFaults
                 var rows = File.Exists(path)
                     ? JsonSerializer.Deserialize<Dictionary<string, Incident>>(File.ReadAllText(path)) ?? new()
                     : new Dictionary<string, Incident>();
-                if (!rows.TryGetValue(code, out var row)) rows[code] = row = new Incident();
+                var key = code + ":" + operation;
+                if (!rows.TryGetValue(key, out var row)) rows[key] = row = new Incident
+                {
+                    Code = code, Operation = operation,
+                    Subsystem = code.Contains(".CONFIG.") ? "config" : code.Contains(".IPC.") ? "ipc" : "core",
+                };
                 row.Count++;
                 row.FirstSeen ??= DateTimeOffset.UtcNow.ToString("O");
                 row.LastSeen = DateTimeOffset.UtcNow.ToString("O");
+                row.FirstCorrelation ??= correlation;
+                row.LastCorrelation = correlation;
                 row.Correlations = row.Correlations.Append(correlation).TakeLast(16).ToList();
                 File.WriteAllText(path, JsonSerializer.Serialize(rows));
                 var evidence = Path.Combine(root, "native-private-evidence.log");
@@ -55,9 +62,22 @@ public static class NativeFaults
 
     public sealed class Incident
     {
+        public int SchemaVersion { get; set; } = 1;
+        public string Code { get; set; } = "HAVEN.UNKNOWN.UNEXPECTED";
+        public string Subsystem { get; set; } = "core";
+        public string Operation { get; set; } = "desktop.request";
+        public string Severity { get; set; } = "error";
+        public bool Retryable { get; set; }
+        public string Message { get; set; } = "The operation could not complete.";
+        public string RecoveryAction { get; set; } = "Inspect the private diagnostic record and current state before retrying.";
+        public string ConfirmedEvidence { get; set; } = "operation_failed";
+        public string ProbableCause { get; set; } = "The underlying cause has not been confirmed.";
+        public string Confidence { get; set; } = "possible";
         public long Count { get; set; }
         public string? FirstSeen { get; set; }
         public string? LastSeen { get; set; }
+        public string? FirstCorrelation { get; set; }
+        public string? LastCorrelation { get; set; }
         public List<string> Correlations { get; set; } = new();
     }
 

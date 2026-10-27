@@ -71,6 +71,8 @@ _register("STORAGE.IO_FAILED", "storage", "A local persistence operation failed.
 _register("RECOVERY.PENDING", "recovery", "Recovery requires an explicit current decision.", "Preserve existing files and review the recovery checkpoint before changing data.")
 _register("PROVIDERS.UNAVAILABLE", "providers", "The provider did not produce a usable result.", "Review provider health and its current connection configuration.", True, "The provider or its transport may be unavailable.")
 _register("PLUGINS.POLICY_DENIED", "plugins", "The extension cannot execute under the current host policy.", "Review static metadata and host support; browsing metadata must not import extension code.")
+_register("PLUGINS.UNAVAILABLE", "plugins", "The local feature lifecycle service is unavailable.", "Preserve its state and inspect the private diagnostic record before attempting repair.")
+_register("MARKETPLACE.UNAVAILABLE", "marketplace", "The local product lifecycle service is unavailable.", "Preserve the registry and inspect the private diagnostic record before attempting repair.")
 _register("MARKETPLACE.VERIFICATION_FAILED", "marketplace", "The catalog or artifact did not pass verification.", "Review the pinned catalog, current trusted public keys and artifact digest; do not install it.")
 _register("MARKETPLACE.ACQUISITION_FAILED", "marketplace", "The local product acquisition could not complete.", "Inspect the acquisition checkpoint and selected release before retrying.")
 _register("DESKTOP.ACCESS_DENIED", "desktop", "Windows did not permit the startup configuration change.", "Review operating-system permissions; do not bypass the restriction.")
@@ -100,10 +102,10 @@ ALIASES = {
     "document_changed": "MEMORY.SOURCE_CHANGED", "source_changed": "MEMORY.SOURCE_CHANGED",
     "outcome_uncertain": "CORE.OUTCOME_UNCERTAIN", "service_replaced": "IPC.UNAVAILABLE",
     "in-process provider loading blocked": "PLUGINS.POLICY_DENIED",
-    "feature_lifecycle_unavailable": "PLUGINS.POLICY_DENIED", "policy_denied": "PLUGINS.POLICY_DENIED",
+    "feature_lifecycle_unavailable": "PLUGINS.UNAVAILABLE", "policy_denied": "PLUGINS.POLICY_DENIED",
     "signature_invalid": "MARKETPLACE.VERIFICATION_FAILED", "fixture_catalog_invalid": "MARKETPLACE.VERIFICATION_FAILED",
     "digest_mismatch": "MARKETPLACE.VERIFICATION_FAILED", "catalog_expired": "MARKETPLACE.VERIFICATION_FAILED",
-    "download_failed": "MARKETPLACE.ACQUISITION_FAILED", "product_lifecycle_unavailable": "MARKETPLACE.ACQUISITION_FAILED",
+    "download_failed": "MARKETPLACE.ACQUISITION_FAILED", "product_lifecycle_unavailable": "MARKETPLACE.UNAVAILABLE",
     "no provider attached": "PROVIDERS.UNAVAILABLE", "provider_unavailable": "PROVIDERS.UNAVAILABLE",
     "backup_invalid": "BACKUP.VALIDATION_FAILED", "recovery_pending": "RECOVERY.PENDING",
     "core_startup_failed": "CORE.STARTUP_FAILED",
@@ -411,7 +413,7 @@ def subsystem_for(operation: str) -> str:
         return "export"
     if "backups" in parts or "backup" in parts:
         return "backup"
-    names = {"features": "plugins", "decisions": "memory", "computer": "resources", "external-agents": "authority", "external_agents": "authority", "relationships": "graph", "composer": "intelligence", "requests": "authority", "service": "desktop", "calendar": "comms", "email": "comms", "host": "ipc", "setup": "config"}
+    names = {"features": "plugins", "products": "marketplace", "decisions": "memory", "computer": "resources", "external-agents": "authority", "external_agents": "authority", "relationships": "graph", "composer": "intelligence", "requests": "authority", "service": "desktop", "calendar": "comms", "email": "comms", "host": "ipc", "setup": "config"}
     for part in parts:
         part = names.get(part, part)
         if part in SUBSYSTEMS and part not in {"web", "core", "application"}:

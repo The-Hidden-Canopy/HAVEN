@@ -59,6 +59,9 @@ def test_equivalent_http_and_ipc_failures_share_canonical_codes():
     b = public_failure({"ok": False, "error": "scope_denied"}, "decisions.review", correlation_id="b")
     assert a["fault"]["code"] == b["fault"]["code"] == "HAVEN.AUTHORITY.SCOPE_DENIED"
     assert a["fault"]["operation"] == b["fault"]["operation"]
+    product_http = public_failure({"ok": False, "error": "storage_unavailable"}, "/api/marketplace/products/download")
+    product_history = public_failure({"ok": False, "error": "storage_unavailable"}, "products.download")
+    assert product_http["fault"]["operation"] == product_history["fault"]["operation"] == "marketplace.download"
     unknown = describe("unknown private text", "unrecognized/private/id", exception=RuntimeError())
     assert unknown["code"] == "HAVEN.UNKNOWN.UNEXPECTED"
     assert "unrecognized/private/id" not in json.dumps(unknown)
@@ -140,5 +143,49 @@ def test_receipt_view_rechecks_current_household_visibility(tmp_path):
             scope_id=server.director.household_id, role="member", capabilities=("write",),
             valid_from=now - timedelta(days=2), valid_until=now - timedelta(days=1)))
         assert server.diagnostics.receipts() == {"ok": False, "error": "scope_denied"}
+    finally:
+        server.server_close()
+
+
+@pytest.mark.parametrize("lane", ["features", "marketplace", "history"])
+def test_lifecycle_failures_keep_original_evidence_private_and_do_not_repeat_effects(tmp_path, monkeypatch, lane):
+    server, _ = make_server(0, data_dir=tmp_path / "data", models_root=tmp_path / "models")
+    marker = "PRIVATE-SYNTHETIC-IO-DETAIL"
+    try:
+        assert server.setup.declare_person(name="Synthetic Owner", role="owner")["ok"]
+        def unavailable(*_args, **_kwargs):
+            raise OSError(marker)
+        if lane == "features":
+            monkeypatch.setattr(server.local_workflows.features, "_save", unavailable)
+            method, params = "features.action", {"action": "stage", "feature_id": "haven.decision-context", "version": "1.0.0"}
+        elif lane == "marketplace":
+            monkeypatch.setattr(server.local_workflows.products, "download", unavailable)
+            method, params = "marketplace.product", {"action": "download", "product_id": "haven-welcome", "version": "1.0.0", "operation_id": "synthetic-io"}
+        else:
+            monkeypatch.setattr(server.local_workflows, "record", unavailable)
+            method, params = "decisions.propose", {"expected_generation": 0, "problem": "Choose a format", "options": [["plain", "Text"]], "rationale": "Readable"}
+        result = server.build_ipc_dispatcher()(request_message("private-io", method, params))["result"]
+        expected = "HAVEN.STORAGE.IO_FAILED" if lane == "marketplace" else "HAVEN.CORE.OUTCOME_UNCERTAIN"
+        assert result["fault"]["code"] == expected
+        assert marker not in json.dumps(result)
+        evidence = (server.faults.root / "private-evidence.json").read_text(encoding="utf-8")
+        assert marker in evidence
+        assert marker not in json.dumps(server.diagnostics.export())
+        assert server.decisions.snapshot(server.identity.personal_scope_id).generation == (1 if lane == "history" else 0)
+    finally:
+        server.server_close()
+
+
+def test_unavailable_feature_service_is_not_misreported_as_an_authority_denial(tmp_path, monkeypatch):
+    from haven.web import local_workflows
+    def unavailable(*_args, **_kwargs):
+        raise OSError("PRIVATE-SYNTHETIC-INITIALIZATION-DETAIL")
+    monkeypatch.setattr(local_workflows, "FeatureLifecycle", unavailable)
+    server, _ = make_server(0, data_dir=tmp_path / "data", models_root=tmp_path / "models")
+    try:
+        result = server.build_ipc_dispatcher()(request_message("unavailable", "features.list", {}))["result"]
+        assert result["fault"]["code"] == "HAVEN.PLUGINS.UNAVAILABLE"
+        assert "PRIVATE-SYNTHETIC" not in json.dumps(result)
+        assert "PRIVATE-SYNTHETIC-INITIALIZATION-DETAIL" in (server.faults.root / "private-evidence.json").read_text()
     finally:
         server.server_close()

@@ -7,7 +7,7 @@ from typing import Any, Mapping
 from ..marketplace.lifecycle import LocalProductManager, ProductError
 
 
-def product_action(manager: LocalProductManager, action: str, params: Mapping[str, Any], *, principal_id: str) -> dict[str, Any]:
+def product_action(manager: LocalProductManager, action: str, params: Mapping[str, Any], *, principal_id: str, on_failure=None) -> dict[str, Any]:
     """The caller supplies authenticated identity; request identity is ignored."""
     try:
         product_id = params.get("product_id")
@@ -31,8 +31,10 @@ def product_action(manager: LocalProductManager, action: str, params: Mapping[st
         return {"ok": False, "error": exc.code, "message": str(exc)}
     except (TypeError, ValueError):
         return {"ok": False, "error": "request_invalid", "message": "invalid local product request"}
-    except OSError:
-        return {"ok": False, "error": "storage_unavailable", "message": "local product storage is unavailable; previous installation is preserved"}
+    except OSError as exc:
+        if on_failure is not None:
+            return on_failure("storage_unavailable", "Local product storage is unavailable; inspect current state before retrying.", exc)
+        return {"ok": False, "error": "storage_unavailable", "message": "local product storage is unavailable; inspect current state before retrying"}
 
 
 __all__ = ["product_action"]

@@ -11,7 +11,10 @@ public partial class App : Application
     {
         UnhandledException += (_, e) =>
         {
-            DesktopPaths.AppendDiagnostic("UNHANDLED: " + e.Exception + System.Environment.NewLine);
+            var operation = _window is null ? "core.startup" : "desktop.request";
+            var report = NativeFaults.Message(e.Exception, operation);
+            try { DesktopPaths.AppendDiagnostic("UNHANDLED: " + report + System.Environment.NewLine); }
+            catch { /* Original evidence stays at the selected root; no fallback. */ }
         };
         InitializeComponent();
     }

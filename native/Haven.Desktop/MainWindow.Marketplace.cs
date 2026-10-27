@@ -46,6 +46,10 @@ public sealed partial class MainWindow
 
     private void RenderMarketplace()
     {
+        // XAML can raise the default selection event while later controls
+        // are still being constructed. The normal page load renders once
+        // InitializeComponent has completed.
+        if (!_viewsInitialized) return;
         MarketplaceList.Children.Clear();
         MarketplaceErrorText.Text = "";
         RenderLocalProducts();

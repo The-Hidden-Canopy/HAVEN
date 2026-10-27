@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
+import traceback
 
 from haven.core.correlation import current, new_id
 from haven.core.domain import DomainEvent, EventType, RoleTier
@@ -17,6 +18,7 @@ from haven.decisions import DecisionService, DecisionStore
 from haven.decisions.api import DecisionAPI
 from haven.decisions.models import DecisionContext
 from haven.extensions import FeatureContext, FeatureLifecycle, FeatureLifecycleError, bundled_feature_releases
+from haven.faults import public_failure
 from haven.marketplace import ProductError, create_local_fixture_manager
 from haven.web.marketplace_lifecycle_api import product_action
 
@@ -36,16 +38,30 @@ class LocalWorkflows:
                 data_dir / "features.json", releases=bundled_feature_releases(), authorize=self.authorize,
                 service_operations={"decisions.context": self.decision_context},
             )
-        except (FeatureLifecycleError, OSError):
+        except (FeatureLifecycleError, OSError) as exc:
             self.features = None
+            self._failure("feature_lifecycle_unavailable", "features.install", exc, "Feature lifecycle initialization failed.")
         try:
             self.products = create_local_fixture_manager(
                 data_dir / "marketplace-products",
                 authorize=lambda principal_id, operation: self.authorize(
                     principal_id, host.identity.personal_scope_id, f"products.{operation}"),
             )
-        except (ProductError, OSError):
+        except (ProductError, OSError) as exc:
             self.products = None
+            self._failure("product_lifecycle_unavailable", "marketplace.install", exc, "Product lifecycle initialization failed.")
+
+    def _failure(self, error, operation, exception, message):
+        # Mint the safe envelope here so original exceptions reach the private
+        # journal without becoming fields a downstream transport could expose.
+        return public_failure(
+            {"ok": False, "error": error, "message": message,
+             "_private_evidence": {"type": type(exception).__name__, "message": str(exception),
+                                   "errno": getattr(exception, "errno", None), "winerror": getattr(exception, "winerror", None),
+                                   "traceback": "".join(traceback.format_exception(exception))}}, operation,
+            journal=getattr(self.host, "faults", None), exception=exception,
+            correlation_id=current() or new_id(),
+        )
 
     def authorize(self, principal_id, scope_id, operation):
         if self._closed:
@@ -101,10 +117,11 @@ class LocalWorkflows:
         if result.get("ok"):
             try:
                 self.record(operation, params)
-            except Exception:
+            except Exception as exc:
                 # The domain has already committed. Do not imply rollback
                 # or invite a blind retry when its history projection fails.
-                return {"ok": False, "error": "outcome_uncertain", "message": "The change completed, but history publication failed. Inspect current state before retrying."}
+                return self._failure("outcome_uncertain", operation, exc,
+                                     "The change completed, but history publication failed. Inspect current state before retrying.")
         return result
 
     def feature_action(self, params):
@@ -131,14 +148,17 @@ class LocalWorkflows:
             return {"ok": False, "error": exc.code, "message": str(exc)}
         except (ValueError, KeyError, TypeError):
             return {"ok": False, "error": "request_invalid", "message": "invalid feature request"}
-        except OSError:
-            return {"ok": False, "error": "outcome_uncertain", "message": "Inspect feature state before retrying this operation."}
+        except OSError as exc:
+            return self._failure("outcome_uncertain", "features." + str(params.get("action")), exc,
+                                 "Inspect feature state before retrying this operation.")
 
     def products_action(self, params):
         if self.products is None or self._closed:
             return {"ok": False, "error": "product_lifecycle_unavailable"}
         result = product_action(self.products, params.get("action"), params,
-                                principal_id=self.host.identity.current_principal().actor_id)
+                                principal_id=self.host.identity.current_principal().actor_id,
+                                on_failure=lambda error, message, exc: self._failure(
+                                    error, "marketplace." + str(params.get("action")), exc, message))
         return self._with_receipt(f"products.{params.get('action')}", params, result)
 
     def feature_catalog(self, params):
