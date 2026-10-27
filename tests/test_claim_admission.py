@@ -96,7 +96,7 @@ def test_forget_creates_a_suppression_tombstone_that_survives_rescan():
         store = ClaimStore(Path(tmp) / "claims.db")
         admission = ClaimAdmissionService(store)
         first = admission.admit(_candidate("candidate-1"))
-        store.forget(first.claim, forgotten_at=NOW, forgotten_by="gerron")
+        store.forget(first.claim, forgotten_at=NOW, forgotten_by="sample_owner")
 
         result = admission.admit(_candidate("candidate-new"))
 
@@ -112,7 +112,7 @@ def test_correction_supersedes_without_rewriting_the_old_claim():
         correction = admission.correct(
             first.claim,
             proposition="the launch date is October 2",
-            actor="gerron",
+            actor="sample_owner",
             now=NOW,
         )
 
@@ -121,7 +121,7 @@ def test_correction_supersedes_without_rewriting_the_old_claim():
         assert correction.claim.source_refs == first.claim.source_refs
         assert correction.claim.source_refs == ("file:proposal.md",)
         assert all(not ref.startswith("claim:") for ref in correction.claim.source_refs)
-        assert correction.claim.evidence_refs == (first.claim.claim_id, "user:gerron")
+        assert correction.claim.evidence_refs == (first.claim.claim_id, "user:sample_owner")
         assert store.get(first.claim.claim_id).state is ClaimState.STALE
         assert correction.claim.state is ClaimState.REPORTED
 

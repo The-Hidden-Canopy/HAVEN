@@ -18,7 +18,7 @@ def _resource(resource_id="file:C:/Docs/proposal.md", content_hash="hash-1", loc
     return ResourceRecord(
         resource_id=resource_id,
         resource_type="file",
-        scope_id="personal:gerron",
+        scope_id="personal:sample_owner",
         provider_id="local_filesystem",
         title="proposal.md",
         locator=locator,

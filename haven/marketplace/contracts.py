@@ -40,6 +40,7 @@ class MarketplaceExecution(str, Enum):
 
 
 class MarketplaceDistributionKind(str, Enum):
+    LOCAL_CONTENT = "local_content"
     INSTALLER = "installer"
     PORTABLE_ARCHIVE = "portable_archive"
     SOURCE = "source"

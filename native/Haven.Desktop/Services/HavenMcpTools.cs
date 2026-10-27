@@ -87,7 +87,7 @@ public sealed class HavenMcpTools
         {
             // Transport-level failure (pipe down, core restarting): a protocol
             // error, not a governed answer.
-            throw new McpException($"HAVEN core is unreachable: {ex.Message}", ex);
+            throw new McpException($"HAVEN core is unreachable: {NativeFaults.Message(ex)}", ex);
         }
         // Gateway denials (typed external.* codes) and executor refusals are
         // both reported as tool errors with the full envelope as content, so

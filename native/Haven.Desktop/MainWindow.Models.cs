@@ -80,7 +80,7 @@ public sealed partial class MainWindow
         {
             if (!silent)
             {
-                ModelsErrorText.Text = ex.Message;
+                ModelsErrorText.Text = NativeFaults.Message(ex);
             }
         }
     }
@@ -331,7 +331,7 @@ public sealed partial class MainWindow
                     }
                     catch (Exception ex)
                     {
-                        ModelsErrorText.Text = ex.Message;
+                        ModelsErrorText.Text = NativeFaults.Message(ex);
                     }
                 };
                 card.Children.Add(cancel);
@@ -406,7 +406,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ModelsErrorText.Text = ex.Message;
+            ModelsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -466,7 +466,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ModelsErrorText.Text = ex.Message;
+            ModelsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -556,7 +556,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ModelsErrorText.Text = ex.Message;
+            ModelsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 

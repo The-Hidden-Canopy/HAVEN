@@ -82,7 +82,7 @@ def main():
          "attributes": {}, "last_changed": changed},
         {"entity_id": "sensor.temp", "state": "21.5",
          "attributes": {}, "last_changed": changed},
-        {"entity_id": "binary_sensor.gerron_office_occupancy", "state": "on",
+        {"entity_id": "binary_sensor.sample_owner_office_occupancy", "state": "on",
          "attributes": {}, "last_changed": changed},
         {"entity_id": "input_boolean.working_late", "state": "on",
          "attributes": {}, "last_changed": changed},
@@ -113,8 +113,8 @@ def main():
         (root / "ha_token.txt").write_text("stub-token")
         (root / "household.json").write_text(json.dumps({
             "version": 1,
-            "people": [{"person_id": "gerron", "name": "Gerron", "sources": [
-                {"entity_id": "binary_sensor.gerron_office_occupancy", "room_id": "office"}]}],
+            "people": [{"person_id": "sample_owner", "name": "Sample Owner", "sources": [
+                {"entity_id": "binary_sensor.sample_owner_office_occupancy", "room_id": "office"}]}],
             "contexts": [{"context_id": "working_late", "label": "Working late",
                           "entity_id": "input_boolean.working_late"}],
         }))
@@ -156,7 +156,7 @@ def main():
             ctxs = {c["id"]: c["active"] for c in st.get("contexts", [])}
             print("5. declared presence: people =", people,
                   "| working_late active =", ctxs.get("working_late"))
-            assert any(p["name"] == "Gerron" and p["room"] == "office" for p in people)
+            assert any(p["name"] == "Sample Owner" and p["room"] == "office" for p in people)
 
             # 6. trust chain on the executed action
             acts = [a for a in st["activity"] if a.get("event_type") == "action_executed"]

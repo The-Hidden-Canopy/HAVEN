@@ -59,9 +59,9 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             AutomationsStatusText.Text = "";
-            AutomationsErrorText.Text = $"Could not load automations: {ex.Message} Use Refresh to retry.";
+            AutomationsErrorText.Text = $"Could not load automations: {NativeFaults.Message(ex)} Use Refresh to retry.";
             ResourceAutomationsStatusText.Text = "";
-            ResourceAutomationsErrorText.Text = $"Could not load cross-domain automations: {ex.Message} Use Refresh to retry.";
+            ResourceAutomationsErrorText.Text = $"Could not load cross-domain automations: {NativeFaults.Message(ex)} Use Refresh to retry.";
         }
     }
 
@@ -333,7 +333,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ResourceAutomationsErrorText.Text = ex.Message;
+            ResourceAutomationsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -478,7 +478,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ResourceAutomationsErrorText.Text = ex.Message;
+            ResourceAutomationsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -678,7 +678,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            AutomationsErrorText.Text = ex.Message;
+            AutomationsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -965,7 +965,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            AutomationsErrorText.Text = ex.Message;
+            AutomationsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 

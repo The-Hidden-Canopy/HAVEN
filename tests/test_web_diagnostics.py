@@ -1,3 +1,4 @@
+from conftest import assert_fault
 """System diagnostics and backup/restore over the web surface.
 
 Diagnostics are a network-free snapshot of one installation (world mode,
@@ -48,7 +49,7 @@ class _RaisingStatesSource:
 LIVE_STATES = (
     {"entity_id": "light.office_desk", "state": "on", "attributes": {}, "last_changed": _CHANGED},
     {
-        "entity_id": "binary_sensor.gerron_office_occupancy",
+        "entity_id": "binary_sensor.sample_office_occupancy",
         "state": "on",
         "attributes": {},
         "last_changed": _CHANGED,
@@ -140,8 +141,8 @@ def test_diagnostics_shape_in_real_mode() -> None:
                 port,
                 "/api/setup/household/people",
                 {
-                    "name": "Gerron Smith",
-                    "entity_id": "binary_sensor.gerron_office_occupancy",
+                    "name": "Sample Owner",
+                    "entity_id": "binary_sensor.sample_office_occupancy",
                     "room_id": "office",
                     "role": "owner",
                 },
@@ -250,7 +251,8 @@ def test_probe_provider_reachable_unreachable_and_demo() -> None:
             assert status == 200
             assert body["ok"] is True
             assert body["reachable"] is False
-            assert "ConnectionError" in body["detail"]
+            assert body["fault"]["code"] == "HAVEN.PROVIDERS.UNAVAILABLE"
+            assert "ConnectionError" not in body["detail"]
 
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp) / "data"
@@ -258,7 +260,7 @@ def test_probe_provider_reachable_unreachable_and_demo() -> None:
         with _boot(data_dir) as (_, _, port):
             status, body = _post(port, "/api/system/diagnostics/probe")
             assert status == 400
-            assert body == {"ok": False, "error": "no provider attached"}
+            assert_fault(body, 'HAVEN.PROVIDERS.UNAVAILABLE', error='no provider attached')
 
 
 def test_backup_lifecycle_create_list_restore_delete() -> None:
@@ -272,7 +274,7 @@ def test_backup_lifecycle_create_list_restore_delete() -> None:
             status, body = _post(
                 port,
                 "/api/setup/household/people",
-                {"name": "Gerron Smith", "entity_id": "binary_sensor.gerron_office_occupancy", "room_id": "office"},
+                {"name": "Sample Owner", "entity_id": "binary_sensor.sample_office_occupancy", "room_id": "office"},
             )
             assert status == 200
             status, body = _post(port, "/api/system/backup")
@@ -297,6 +299,8 @@ def test_backup_lifecycle_create_list_restore_delete() -> None:
                 "identity.json",
                 "projects.db",
                 "tasks.db",
+                "decisions.db",
+                "features.json",
             }
 
             # Era two: voice off.

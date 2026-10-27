@@ -30,7 +30,7 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             HomeStatusText.Text = "";
-            RoomsErrorText.Text = $"Could not load home state: {ex.Message} Use Refresh to retry.";
+            RoomsErrorText.Text = $"Could not load home state: {NativeFaults.Message(ex)} Use Refresh to retry.";
         }
     }
 
@@ -234,7 +234,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            RoomsErrorText.Text = ex.Message;
+            RoomsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -274,7 +274,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            RoomsErrorText.Text = ex.Message;
+            RoomsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -318,7 +318,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            RoomsErrorText.Text = ex.Message;
+            RoomsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -337,7 +337,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            RoomsErrorText.Text = ex.Message;
+            RoomsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -556,7 +556,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            RoomsErrorText.Text = ex.Message;
+            RoomsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 

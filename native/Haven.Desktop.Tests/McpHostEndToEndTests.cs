@@ -21,7 +21,7 @@ public sealed class McpHostEndToEndTests
 
         await using var host = new Haven.Desktop.McpHostService(() => (pipeName, "core-token"));
         var port = FreePort();
-        var settings = new Haven.Desktop.McpSettings();
+        var settings = new Haven.Desktop.McpSettings(Path.Combine(Path.GetTempPath(), "haven-mcp-settings-" + Guid.NewGuid().ToString("N"), "mcp.json"));
         settings.Save(enabled: true, port: port);
         await host.ApplyAsync(settings);
 
@@ -118,7 +118,7 @@ public sealed class McpHostEndToEndTests
 
         await using var host = new Haven.Desktop.McpHostService(() => (pipeName, "core-token"));
         var port = FreePort();
-        var settings = new Haven.Desktop.McpSettings();
+        var settings = new Haven.Desktop.McpSettings(Path.Combine(Path.GetTempPath(), "haven-mcp-settings-" + Guid.NewGuid().ToString("N"), "mcp.json"));
         settings.Save(enabled: true, port: port);
         await host.ApplyAsync(settings);
 
@@ -128,6 +128,8 @@ public sealed class McpHostEndToEndTests
             new StringContent("{}", Encoding.UTF8, "application/json"));
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        using var denial = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("HAVEN.AUTHORITY.UNAUTHENTICATED", denial.RootElement.GetProperty("fault").GetProperty("code").GetString());
         Assert.Equal(0, core.ToolCallCount);
     }
 

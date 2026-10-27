@@ -106,7 +106,7 @@ def test_reused_confirmation_token_fails_closed() -> None:
         expires_at=NOW + timedelta(minutes=5),
     )
     principal = Principal(
-        actor_id="gerron", household_id=director.store.household_id, role_tier=RoleTier.MEMBER
+        actor_id="sample_owner", household_id=director.store.household_id, role_tier=RoleTier.MEMBER
     )
 
     first = director.runtime.run_rule(
@@ -230,7 +230,7 @@ def test_chat_who_is_home_answers_from_presence() -> None:
 
     state = director.chat("who is home?")
 
-    assert state["conversation"][-1] == {"from": "haven", "text": "Gerron is home."}
+    assert state["conversation"][-1] == {"from": "haven", "text": "Sample Owner is home."}
 
 
 def test_chat_unanswerable_question_without_model_is_honest() -> None:
@@ -465,7 +465,7 @@ def test_activity_and_memory_surface_the_store() -> None:
     assert "action_executed" in event_types
     first = state["activity"][0]
     assert set(first) == {"event_id", "event_type", "actor_id", "occurred_at", "summary"}
-    assert "Rule approved: close the garage by gerron" in {row["summary"] for row in state["activity"]}
+    assert "Rule approved: close the garage by sample_owner" in {row["summary"] for row in state["activity"]}
 
     assert len(state["memory"]) == 3
     entry = state["memory"][0]

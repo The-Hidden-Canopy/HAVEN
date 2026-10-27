@@ -24,6 +24,7 @@ from uuid import uuid4
 
 from haven.core.domain import ActionKind, AuthorityDecision, Principal, RuleDraft
 from haven.core.time import require_aware_utc
+from haven.decisions.models import DecisionContext
 
 from .intents import Intent
 from .worldview import WorldView
@@ -39,8 +40,8 @@ class AgentContext:
 
     Deliberately minimal and serializable: a household, an actor summary, an
     optional room focus, recent conversation lines, and an optional
-    `WorldView` -- the bounded, serializable projection of observed world
-    state (see `haven.intelligence.worldview`). Providers must never receive
+    `WorldView` and `DecisionContext` -- bounded, serializable projections
+    of current observations and reviewed decisions. Providers must never receive
     the store, world internals, or device internals through this object: the
     world view is already-projected evidence with freshness and confidence
     attached, not a window into the snapshot or the device registry.
@@ -52,6 +53,7 @@ class AgentContext:
     room_focus: str | None = None
     recent_lines: tuple[str, ...] = ()
     world: WorldView | None = None
+    decision_memory: DecisionContext | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("household_id", "actor_id", "actor_role"):
@@ -66,6 +68,8 @@ class AgentContext:
         )
         if self.world is not None and not isinstance(self.world, WorldView):
             raise ValueError("world must be a WorldView or None")
+        if self.decision_memory is not None and not isinstance(self.decision_memory, DecisionContext):
+            raise ValueError("decision_memory must be bounded DecisionContext evidence")
 
     def to_dict(self) -> dict:
         """Serialize to a JSON-safe dict; providers receive this across process boundaries."""
@@ -77,6 +81,7 @@ class AgentContext:
             "room_focus": self.room_focus,
             "recent_lines": list(self.recent_lines),
             "world": self.world.to_dict() if self.world is not None else None,
+            "decision_memory": self.decision_memory.to_dict() if self.decision_memory is not None else None,
         }
 
     @classmethod
@@ -89,6 +94,7 @@ class AgentContext:
             room_focus=data.get("room_focus"),
             recent_lines=tuple(data.get("recent_lines", ())),
             world=WorldView.from_dict(world) if world is not None else None,
+            decision_memory=DecisionContext.from_dict(data["decision_memory"]) if data.get("decision_memory") is not None else None,
         )
 
 

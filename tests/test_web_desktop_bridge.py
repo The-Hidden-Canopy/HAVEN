@@ -44,7 +44,7 @@ def test_native_folder_picker_bridge_returns_selected_path():
             0,
             data_dir=Path(tmp) / "data",
             demo=True,
-            folder_picker=lambda: "C:/Users/Gerron/Documents",
+            folder_picker=lambda: "C:/Users/Sample Owner/Documents",
         )
         thread = threading.Thread(target=instance.serve_forever, daemon=True)
         thread.start()
@@ -56,7 +56,7 @@ def test_native_folder_picker_bridge_returns_selected_path():
 
             status, body = _post(port, "/api/host/pick-folder")
             assert status == 200
-            assert body == {"ok": True, "path": "C:/Users/Gerron/Documents"}
+            assert body == {"ok": True, "path": "C:/Users/Sample Owner/Documents"}
         finally:
             instance.shutdown()
             instance.server_close()
@@ -69,14 +69,14 @@ def test_legacy_desktop_folder_picker_alias_remains_compatible():
             0,
             data_dir=Path(tmp) / "data",
             demo=True,
-            folder_picker=lambda: "C:/Users/Gerron/Documents",
+            folder_picker=lambda: "C:/Users/Sample Owner/Documents",
         )
         thread = threading.Thread(target=instance.serve_forever, daemon=True)
         thread.start()
         try:
             status, body = _post(instance.server_address[1], "/api/desktop/pick-folder")
             assert status == 200
-            assert body == {"ok": True, "path": "C:/Users/Gerron/Documents"}
+            assert body == {"ok": True, "path": "C:/Users/Sample Owner/Documents"}
         finally:
             instance.shutdown()
             instance.server_close()

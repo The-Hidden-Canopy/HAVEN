@@ -38,7 +38,7 @@ def _seed_installation(data_dir: Path) -> None:
                 "version": 1,
                 "rooms": [],
                 "people": [
-                    {"person_id": "gerron", "name": "Gerron", "role": "owner", "sources": []}
+                    {"person_id": "sample_owner", "name": "Sample Owner", "role": "owner", "sources": []}
                 ],
                 "contexts": [],
             }
@@ -127,7 +127,7 @@ def test_proposed_rule_is_editable_then_freezes_on_approval(server) -> None:
     assert approved["ok"] is True
     assert approved["result"]["ok"] is True
     assert approved["result"]["automation"]["status"] == "approved"
-    assert approved["result"]["automation"]["approved_by"] == "gerron"
+    assert approved["result"]["automation"]["approved_by"] == "sample_owner"
 
     frozen = _dispatch(
         server,
@@ -207,7 +207,7 @@ def test_revoke_requires_a_justification_and_is_fail_closed(server) -> None:
     assert revoked["ok"] is True
     assert revoked["result"]["ok"] is True
     assert revoked["result"]["automation"]["status"] == "revoked"
-    assert revoked["result"]["automation"]["revoked_by"] == "gerron"
+    assert revoked["result"]["automation"]["revoked_by"] == "sample_owner"
     assert any(
         row["event_type"] == "rule_revoked" for row in revoked["result"]["state"]["activity"]
     )

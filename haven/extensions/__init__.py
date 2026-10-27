@@ -29,8 +29,22 @@ from .taxonomy import (
     ExtensionDescriptor,
     ExtensionRegistry,
 )
+from .lifecycle import (
+    BundledFeatureRelease,
+    DecisionContextInspector,
+    FeatureContext,
+    FeatureLifecycle,
+    FeatureLifecycleError,
+    bundled_feature_releases,
+)
 
 __all__ = [
+    "BundledFeatureRelease",
+    "DecisionContextInspector",
+    "FeatureContext",
+    "FeatureLifecycle",
+    "FeatureLifecycleError",
+    "bundled_feature_releases",
     "CLASS_BOUNDARIES",
     "DiscoveredFeatureModule",
     "BoundedContext",

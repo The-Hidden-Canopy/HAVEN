@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from conftest import assert_fault
+
 import json
 import socket
 import tempfile
@@ -152,7 +154,8 @@ def test_scan_classifies_candidates_and_register_is_the_activation_gate(server) 
 
     refused = _dispatch(instance, "models.register", {"path": str(bad)})
     assert refused["result"]["ok"] is False
-    assert "weights.bin" in refused["result"]["error"]
+    assert refused["result"]["fault"]["code"].startswith("HAVEN.MODELS.")
+    assert "weights.bin" not in refused["result"]["error"]
 
 
 def test_load_failure_is_recorded_and_remove_clears_it(server) -> None:
@@ -162,7 +165,8 @@ def test_load_failure_is_recorded_and_remove_clears_it(server) -> None:
 
     failed = _dispatch(instance, "models.load", {"id": "nobackend"})
     assert failed["result"]["ok"] is False
-    assert "unregistered-backend" in failed["result"]["error"]
+    assert failed["result"]["fault"]["code"] == "HAVEN.MODELS.BACKEND_UNAVAILABLE"
+    assert "unregistered-backend" not in failed["result"]["error"]
     # the failure is recorded on the record and carried in the envelope
     assert _row(failed["result"], "nobackend")["state"] == "backend_missing"
     assert failed["result"]["roots"] == []
@@ -262,7 +266,7 @@ def test_download_resolution_failure_and_cancel_and_unknown_job(server) -> None:
     assert job["error"] == failed["result"]["error"]
 
     unknown_cancel = _dispatch(instance, "models.job.cancel", {"job_id": "nope"})
-    assert unknown_cancel["result"] == {"ok": False, "error": "unknown job: nope"}
+    assert_fault(unknown_cancel["result"], 'HAVEN.MODELS.NOT_FOUND', error='unknown job')
 
     stub, url = _serve_model("ipc-job-cancel", slow=True)
     try:

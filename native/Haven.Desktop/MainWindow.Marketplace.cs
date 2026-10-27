@@ -19,11 +19,12 @@ public sealed partial class MainWindow
             _marketplaceResult = refresh
                 ? await _client.RefreshMarketplaceAsync()
                 : await _client.GetMarketplaceAsync();
+            _localProducts = await _client.LocalWorkflowAsync("marketplace.products", new { });
             RenderMarketplace();
         }
         catch (Exception ex)
         {
-            MarketplaceErrorText.Text = $"Could not load Marketplace: {ex.Message}";
+            MarketplaceErrorText.Text = $"Could not load Marketplace: {NativeFaults.Message(ex)}";
             MarketplaceList.Children.Clear();
         }
     }
@@ -47,6 +48,7 @@ public sealed partial class MainWindow
     {
         MarketplaceList.Children.Clear();
         MarketplaceErrorText.Text = "";
+        RenderLocalProducts();
         if (_marketplaceResult.ValueKind != JsonValueKind.Object
             || !_marketplaceResult.TryGetProperty("items", out var items)
             || items.ValueKind != JsonValueKind.Array)
@@ -67,10 +69,10 @@ public sealed partial class MainWindow
         var verified = _marketplaceResult.TryGetProperty("signature_verified", out var verifiedValue)
             && verifiedValue.ValueKind == JsonValueKind.True;
         MarketplaceNoticeText.Text = source == "bundled_preview"
-            ? "Draft catalog preview — it is not a signed Hub catalog, and this discovery slice does not install products."
+            ? "Draft catalog preview. Available local releases can be managed above."
             : verified
                 ? "Signed catalog verified. Marketplace discovery is separate from installation and HAVEN authority."
-                : "Catalog metadata is not verified. No install or execution action is available.";
+                : "Catalog metadata is not verified. These catalog entries cannot be installed.";
         if (stale)
         {
             MarketplaceNoticeText.Text += " The last known catalog is stale; refresh when a trusted catalog is available.";
@@ -171,7 +173,7 @@ public sealed partial class MainWindow
         });
         content.Children.Add(new TextBlock
         {
-            Text = "Discovery only — installation, updates, and product launch are not enabled in this slice.",
+            Text = "Catalog entry. Local releases have separate installation and launch controls.",
             Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
             TextWrapping = TextWrapping.Wrap,
             Opacity = 0.78,

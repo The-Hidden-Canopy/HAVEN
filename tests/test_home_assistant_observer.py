@@ -103,9 +103,9 @@ def test_presence_sources_map_home_not_home_and_unavailable():
     observer = _observer(
         client,
         presence_sources=(
-            PresenceSource(entity_id="binary_sensor.bedroom_occupancy", person_id="gerron", room_id="bedroom"),
-            PresenceSource(entity_id="binary_sensor.office_occupancy", person_id="gerron", room_id="office"),
-            PresenceSource(entity_id="binary_sensor.kitchen_occupancy", person_id="gerron", room_id="kitchen"),
+            PresenceSource(entity_id="binary_sensor.bedroom_occupancy", person_id="sample_owner", room_id="bedroom"),
+            PresenceSource(entity_id="binary_sensor.office_occupancy", person_id="sample_owner", room_id="office"),
+            PresenceSource(entity_id="binary_sensor.kitchen_occupancy", person_id="sample_owner", room_id="kitchen"),
         ),
     )
     snapshot = observer.observe(now=NOW)
@@ -121,15 +121,15 @@ def test_presence_sources_map_home_not_home_and_unavailable():
 def test_uninterpretable_presence_state_and_bad_time_are_dropped():
     client = _FakeClient(
         [
-            _entity("person.gerron", "work"),  # custom zone name: not taught, not guessed
+            _entity("person.sample_owner", "work"),  # custom zone name: not taught, not guessed
             _entity("binary_sensor.bedroom_occupancy", "on", last_changed="not-a-timestamp"),
         ]
     )
     observer = _observer(
         client,
         presence_sources=(
-            PresenceSource(entity_id="person.gerron", person_id="gerron", room_id="home"),
-            PresenceSource(entity_id="binary_sensor.bedroom_occupancy", person_id="gerron", room_id="bedroom"),
+            PresenceSource(entity_id="person.sample_owner", person_id="sample_owner", room_id="home"),
+            PresenceSource(entity_id="binary_sensor.bedroom_occupancy", person_id="sample_owner", room_id="bedroom"),
         ),
     )
     snapshot = observer.observe(now=NOW)
@@ -189,7 +189,7 @@ def test_snapshot_ttl_must_be_positive():
 
 def test_observed_snapshot_drives_a_rule_through_the_authority_path():
     """Close the loop: observe -> approve -> run_rule -> fixture execution."""
-    resident = _principal(actor_id="gerron")
+    resident = _principal(actor_id="sample_owner")
     owner = _principal(actor_id="owner-1", role=RoleTier.OWNER)
     client = _FakeClient(
         [
@@ -201,7 +201,7 @@ def test_observed_snapshot_drives_a_rule_through_the_authority_path():
     observer = _observer(
         client,
         presence_sources=(
-            PresenceSource(entity_id="binary_sensor.bedroom_occupancy", person_id="gerron", room_id="bedroom"),
+            PresenceSource(entity_id="binary_sensor.bedroom_occupancy", person_id="sample_owner", room_id="bedroom"),
         ),
         context_sources=(ContextSource(entity_id="binary_sensor.working_late", context_id="working_late"),),
     )
@@ -212,10 +212,10 @@ def test_observed_snapshot_drives_a_rule_through_the_authority_path():
     draft = RuleDraft(
         draft_id="draft-observed",
         household_id="household-a",
-        proposed_by="gerron",
+        proposed_by="sample_owner",
         source_text="cap bedroom lights at 20% when I'm working late",
-        interpretation="Set bedroom lights to 20 percent when gerron is present and working_late is active.",
-        trigger_person_id="gerron",
+        interpretation="Set bedroom lights to 20 percent when sample_owner is present and working_late is active.",
+        trigger_person_id="sample_owner",
         trigger_room_id="bedroom",
         required_context="working_late",
         action_kind=ActionKind.SET_LIGHT_BRIGHTNESS,

@@ -55,7 +55,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ComposerStatus.Text = $"Could not reach HAVEN: {ex.Message}";
+            ComposerStatus.Text = $"Could not reach HAVEN: {NativeFaults.Message(ex)}";
         }
         finally
         {

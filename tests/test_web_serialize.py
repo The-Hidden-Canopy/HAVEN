@@ -96,7 +96,7 @@ def test_room_person_context_and_status_dicts_are_lists() -> None:
         room_id="office",
         name="Office",
         devices=[serialize.device_to_dict(_device(), role="light")],
-        people=["Gerron"],
+        people=["Sample Owner"],
         camera=None,
     )
     assert room["devices"][0]["id"] == "office_light"
@@ -109,8 +109,8 @@ def test_room_person_context_and_status_dicts_are_lists() -> None:
     offline = serialize.camera_to_dict(camera_id="driveway_cam", label="Driveway", motion=False, online=False)
     assert offline["online"] is False
 
-    person = serialize.person_to_dict(person_id="gerron", name="Gerron", room="office")
-    assert person == {"id": "gerron", "name": "Gerron", "room": "office"}
+    person = serialize.person_to_dict(person_id="sample_owner", name="Sample Owner", room="office")
+    assert person == {"id": "sample_owner", "name": "Sample Owner", "room": "office"}
 
     context = serialize.context_to_dict(context_id="working_late", label="Working late", active=True)
     assert context == {"id": "working_late", "label": "Working late", "active": True}
@@ -146,15 +146,15 @@ def test_message_and_state_dicts_match_the_wire_shape() -> None:
                 room_id="office",
                 name="Office",
                 devices=[serialize.device_to_dict(_device(), role="light")],
-                people=["Gerron"],
+                people=["Sample Owner"],
                 camera=None,
             )
         ],
         contexts=[serialize.context_to_dict(context_id="working_late", label="Working late", active=True)],
-        people=[serialize.person_to_dict(person_id="gerron", name="Gerron", room="office")],
+        people=[serialize.person_to_dict(person_id="sample_owner", name="Sample Owner", room="office")],
         pending=[],
         conversation=[message],
-        activity=[{"event_id": "event-1", "event_type": "rule_approved", "actor_id": "gerron", "occurred_at": NOW.isoformat(), "summary": "Rule approved: close the garage by gerron"}],
+        activity=[{"event_id": "event-1", "event_type": "rule_approved", "actor_id": "sample_owner", "occurred_at": NOW.isoformat(), "summary": "Rule approved: close the garage by sample_owner"}],
         memory=[{"entry_id": "memory-1", "kind": "approved_rule", "content": "close the garage", "recorded_at": NOW.isoformat()}],
         status=serialize.status_to_dict(devices=5, people=1, line="HAVEN needs your attention"),
     )
@@ -163,7 +163,7 @@ def test_message_and_state_dicts_match_the_wire_shape() -> None:
     assert state["revision"] == 3
     for key in ("rooms", "contexts", "people", "pending", "conversation", "activity", "memory"):
         assert isinstance(state[key], list)
-    assert state["activity"][0]["summary"] == "Rule approved: close the garage by gerron"
+    assert state["activity"][0]["summary"] == "Rule approved: close the garage by sample_owner"
     assert state["memory"][0]["kind"] == "approved_rule"
     assert state["status"]["line"] == "HAVEN needs your attention"
 
@@ -173,7 +173,7 @@ def _event(event_type: EventType, payload: tuple[tuple[str, object], ...]) -> Do
         event_id="event-1",
         household_id="household-demo",
         event_type=event_type,
-        actor_id="gerron",
+        actor_id="sample_owner",
         occurred_at=NOW,
         payload=payload,
         correlation_id="rule-1",
@@ -183,22 +183,22 @@ def _event(event_type: EventType, payload: tuple[tuple[str, object], ...]) -> Do
 
 def test_event_to_dict_renders_a_one_line_summary() -> None:
     approved = serialize.event_to_dict(
-        _event(EventType.RULE_APPROVED, (("approved_by", "gerron"), ("justification", "ok"), ("rule_id", "rule-1"))),
+        _event(EventType.RULE_APPROVED, (("approved_by", "sample_owner"), ("justification", "ok"), ("rule_id", "rule-1"))),
         rule_label="close the garage",
     )
     assert approved == {
         "event_id": "event-1",
         "event_type": "rule_approved",
-        "actor_id": "gerron",
+        "actor_id": "sample_owner",
         "occurred_at": NOW.isoformat(),
-        "summary": "Rule approved: close the garage by gerron",
+        "summary": "Rule approved: close the garage by sample_owner",
     }
 
     paused = serialize.event_to_dict(
         _event(EventType.RULE_SCHEDULER_CHANGED, (("enabled", False), ("rule_id", "rule-1"))),
         rule_label="close the garage",
     )
-    assert paused["summary"] == "Rule paused: close the garage by gerron"
+    assert paused["summary"] == "Rule paused: close the garage by sample_owner"
 
     executed = serialize.event_to_dict(
         _event(
@@ -240,7 +240,7 @@ def _draft(**overrides: object) -> RuleDraft:
     values: dict[str, object] = {
         "draft_id": "draft-1",
         "household_id": "household-demo",
-        "proposed_by": "gerron",
+        "proposed_by": "sample_owner",
         "source_text": "close the garage",
         "interpretation": "When the garage door has been open a while with no nearby motion, ask to close it.",
         "action_kind": ActionKind.CLOSE_GARAGE,
@@ -257,7 +257,7 @@ def _rule(**overrides: object) -> Rule:
         "rule_id": "rule-1",
         "draft": _draft(),
         "status": RuleStatus.APPROVED,
-        "approved_by": "gerron",
+        "approved_by": "sample_owner",
         "approved_by_role": RoleTier.OWNER,
         "approved_at": NOW,
     }
@@ -280,7 +280,7 @@ def test_rule_to_dict_resolves_room_and_names_the_capability() -> None:
         "schedule": {"time_of_day": "20:00:00", "weekdays": []},
         "status": "approved",
         "approved_at": NOW.isoformat(),
-        "approved_by": "gerron",
+        "approved_by": "sample_owner",
         "revoked_at": None,
         "revoked_by": None,
     }

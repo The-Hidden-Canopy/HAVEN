@@ -1,0 +1,2 @@
+# Signature-envelope and artifact digests pin the exact distributed bytes.
+*.json -text

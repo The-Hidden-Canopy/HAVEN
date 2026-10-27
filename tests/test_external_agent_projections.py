@@ -22,12 +22,12 @@ def test_world_projection_keeps_only_observational_fields():
                         "raw_state": {"secret": "drop-me"},
                     }
                 ],
-                "people": ["Gerron"],
+                "people": ["Sample Owner"],
                 "camera": {"id": "office_cam", "online": True, "stream_url": "drop-me"},
                 "internal_note": "drop-me",
             }
         ],
-        "people": [{"id": "gerron", "name": "Gerron", "room": "office", "email": "drop-me"}],
+        "people": [{"id": "sample_owner", "name": "Sample Owner", "room": "office", "email": "drop-me"}],
         "contexts": [{"id": "quiet", "label": "Quiet", "active": True, "secret": "drop-me"}],
         "memory": [{"content": "drop-me"}],
         "activity": [{"summary": "drop-me"}],
@@ -61,11 +61,11 @@ def test_world_projection_keeps_only_observational_fields():
                     "confidence": 1.0,
                 }
             ],
-            "people": ["Gerron"],
+            "people": ["Sample Owner"],
             "camera": {"id": "office_cam", "online": True},
         }
     ]
-    assert projection["presence"] == [{"id": "gerron", "name": "Gerron", "room": "office"}]
+    assert projection["presence"] == [{"id": "sample_owner", "name": "Sample Owner", "room": "office"}]
     assert projection["contexts"] == [{"id": "quiet", "label": "Quiet", "active": True}]
     assert projection["devices"] == [
         {"id": "lamp", "role": "light", "is_on": True, "status": "fresh", "confidence": 1.0}

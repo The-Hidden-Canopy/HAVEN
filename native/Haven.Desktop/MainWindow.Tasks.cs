@@ -34,7 +34,7 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             TasksStatusText.Text = "";
-            TasksErrorText.Text = $"Could not load tasks: {ex.Message} Use Refresh to retry.";
+            TasksErrorText.Text = $"Could not load tasks: {NativeFaults.Message(ex)} Use Refresh to retry.";
         }
     }
 
@@ -139,7 +139,7 @@ public sealed partial class MainWindow
             }
             catch (Exception ex)
             {
-                TasksErrorText.Text = ex.Message;
+                TasksErrorText.Text = NativeFaults.Message(ex);
             }
         };
         card.Children.Add(complete);

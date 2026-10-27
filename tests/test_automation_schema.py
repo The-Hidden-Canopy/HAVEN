@@ -67,11 +67,11 @@ def test_automation_spec_composes_trigger_selector_and_action():
             domain="home", action="device.turn_off", consequence_class=ConsequenceClass.REVERSIBLE_LOCAL
         ),
         source_text="turn off the office lamp every night at 9pm",
-        created_by="gerron",
+        created_by="sample_owner",
     )
     assert spec.trigger.kind is TriggerKind.TIME
     assert spec.action.domain == "home"
-    assert spec.created_by == "gerron"
+    assert spec.created_by == "sample_owner"
 
 
 def test_automation_spec_rejects_wrong_component_types():
@@ -122,7 +122,7 @@ def test_the_schema_grants_no_execution_capability_of_its_own():
         selector=Selector(),
         action=ActionTarget(domain="tasks", action="task.escalate", consequence_class=ConsequenceClass.REVERSIBLE_LOCAL),
         source_text="escalate overdue tasks",
-        created_by="gerron",
+        created_by="sample_owner",
     )
     assert not hasattr(spec, "run")
     assert not hasattr(spec, "execute")

@@ -1,3 +1,4 @@
+from conftest import assert_fault
 """Logon-startup management (Task Scheduler) over the web surface.
 
 The ServiceManager talks to `schtasks.exe` through an injectable runner, so
@@ -211,7 +212,7 @@ def test_install_route_failure_is_400() -> None:
         with _boot(data_dir, runner) as (_, port):
             status, body = _post(port, "/api/system/service/install")
             assert status == 400
-            assert body == {"ok": False, "error": "ERROR: Access is denied."}
+            assert_fault(body, 'HAVEN.DESKTOP.ACCESS_DENIED', error='startup_access_denied')
 
 
 def test_uninstall_route_over_http() -> None:

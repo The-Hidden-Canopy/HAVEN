@@ -21,8 +21,11 @@ the restore response says so.
 from __future__ import annotations
 
 import shutil
+import os
 import subprocess
 import time
+import re
+import json
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import PackageNotFoundError, version as _package_version_lookup
 from pathlib import Path
@@ -38,6 +41,19 @@ _ONE_SECOND = timedelta(seconds=1)
 _RECEIPT_EXPORT_LIMIT = 20
 
 
+def _copy_file(source: Path, destination: Path) -> None:
+    # CopyFile2 otherwise rejects deeply nested local product backups even
+    # when Python successfully created their directories.
+    def native(path):
+        value = str(path.absolute())
+        if os.name != "nt" or value.startswith("\\\\?\\"):
+            return value
+        if value.startswith("\\\\"):
+            return "\\\\?\\UNC\\" + value[2:]
+        return "\\\\?\\" + value
+    shutil.copy2(native(source), native(destination))
+
+
 def _package_version() -> str | None:
     try:
         return _package_version_lookup("haven-household")
@@ -49,6 +65,16 @@ def _git_commit(repo_root: Path) -> str | None:
     """Best-effort only: a packaged/non-git install has no `.git` to ask,
     and that is not a diagnostic failure worth surfacing as one."""
 
+    manifest = repo_root / "bundle-manifest.json"
+    if manifest.is_file():
+        try:
+            commit = json.loads(manifest.read_text(encoding="utf-8"))["source_commit"]
+            return commit if isinstance(commit, str) and re.fullmatch(r"[a-f0-9]{40}", commit) else None
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+    # A package nested inside a checkout must never inherit its parent's SHA.
+    if not (repo_root / ".git").exists():
+        return None
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -143,77 +169,79 @@ class SystemDiagnostics:
             },
         }
 
-    def export(self) -> dict:
-        """A support-safe snapshot beyond the System page's own summary
-        (native product-consolidation plan, P0 "Runtime": a diagnostic
-        export covering version, commit, installation id, provider state,
-        model assignments, event-channel state, pending confirmations,
-        scheduler state, and the last N receipts -- never secrets).
-
-        Every field here already crosses a UI surface today (the System
-        page, the pending-confirmation banner, `computer.action.history`) --
-        this only collects them into one bundle so a household doesn't have
-        to reconstruct one from several screenshots when asking for help.
-        """
+    def receipts(self) -> dict:
+        """Private owner view, separate from the shareable support projection."""
+        from ..core.domain import RoleTier
 
         server = self._server
+        if not server.director.has_declared_owner or server.identity.current_principal().role_tier is not RoleTier.OWNER:
+            return {"ok": False, "error": "owner_required"}
+        if server.director.household_id not in server.identity.visible_scope_ids():
+            return {"ok": False, "error": "scope_denied"}
+        home = [from_action_receipt(row).to_dict() for row in getattr(server.director, "receipts", ())]
+        resource = [from_ledger_entry(row, domain="resource").to_dict()
+                    for row in server.action_ledger.list_by_household(
+                        server.director.household_id, limit=_RECEIPT_EXPORT_LIMIT)]
+        rows = sorted(home + resource, key=lambda row: row.get("recorded_at", ""), reverse=True)
+        return {"ok": True, "unified_receipts": rows[:_RECEIPT_EXPORT_LIMIT]}
+
+    def export(self) -> dict:
+        """Allowlisted support summary. Local visibility is not export consent.
+
+        Never serialize IDs, paths, endpoint/config strings, assignments or
+        receipt fields. The separate owner receipts view retains local detail.
+        Unknown fields and future domain additions are omitted by construction.
+        """
         base = self.collect()["diagnostics"]
-        data_dir = Path(base["data_dir"])
 
+        def count(value):
+            return min(value, 2**31 - 1) if type(value) is int and value >= 0 else 0
+
+        def counts(section, keys):
+            row = base.get(section, {})
+            return {key: count(row.get(key)) for key in keys}
+
+        mode = base.get("world", {}).get("mode")
+        mode = mode if mode in {"local", "demo", "home_assistant"} else "unknown"
+        version = _package_version()
+        if not isinstance(version, str) or not re.fullmatch(r"[0-9]+(?:[.][0-9]+){1,3}(?:[-+][A-Za-z0-9.]+)?", version):
+            version = None
+        commit = _git_commit(Path(__file__).resolve().parents[2])
+        if not isinstance(commit, str) or not re.fullmatch(r"[a-f0-9]{40,64}", commit):
+            commit = None
+        receipts = self.receipts().get("unified_receipts", [])
+        summary = {"total": len(receipts), "executed": 0, "failed": 0, "not_executed": 0}
+        for row in receipts:
+            key = "executed" if row.get("execution_success") is True else (
+                "failed" if row.get("execution_success") is False else "not_executed")
+            summary[key] += 1
         try:
-            pending = server.director.state().get("pending", [])
-            pending_count = len(pending) if isinstance(pending, list) else 0
-        except Exception:
-            pending_count = None
-
-        try:
-            model_assignments = dict(server.models.assignments())
-        except Exception:
-            model_assignments = {}
-
-        try:
-            recent_receipts = server.computer_actions.history(limit=_RECEIPT_EXPORT_LIMIT)["entries"]
-        except Exception:
-            recent_receipts = []
-
-        try:
-            home_receipts = [
-                from_action_receipt(receipt).to_dict()
-                for receipt in list(getattr(server.director, "receipts", ()))
-            ]
-            resource_receipts = [
-                from_ledger_entry(entry, domain="resource").to_dict()
-                for entry in server.action_ledger.list_by_household(
-                    server.director.household_id, limit=_RECEIPT_EXPORT_LIMIT
-                )
-            ]
-            unified_receipts = sorted(
-                home_receipts + resource_receipts,
-                key=lambda item: item.get("recorded_at", ""),
-                reverse=True,
-            )[:_RECEIPT_EXPORT_LIMIT]
-        except Exception:
-            unified_receipts = []
-
-        return {
-            "ok": True,
-            "export": {
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "version": _package_version(),
-                "commit": _git_commit(Path(__file__).resolve().parents[2]),
-                "installation_id": installation_id_for_data_dir(data_dir),
-                "diagnostics": base,
-                "pending_confirmations": pending_count,
-                "model_assignments": model_assignments,
-                # Native client reports its own live RPC/event-channel state
-                # (Settings -> channel health, EventChannelStatusText) -- Core
-                # has no server-side view of a specific client's pipe, so
-                # this export deliberately does not fabricate one.
-                "event_channel": "reported client-side only; see Settings > channel health",
-                "recent_receipts": recent_receipts,
-                "unified_receipts": unified_receipts,
+            incidents = self._server.faults.summary()
+        except (OSError, ValueError, KeyError, TypeError):
+            from ..faults import public_failure
+            return public_failure({"ok": False, "error": "export_redaction_failed"}, "system.diagnostics.export")
+        return {"ok": True, "export": {
+            "schema_version": 2,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "version": version, "commit": commit,
+            "diagnostics": {
+                "world": {"mode": mode},
+                "config_valid": base.get("config_error") is None,
+                "provider": {"configured": base.get("provider", {}).get("configured") is True},
+                "household": counts("household", ("people", "contexts")),
+                "devices": counts("devices", ("enrolled", "registered")),
+                "rules": counts("rules", ("total", "approved", "proposed")),
+                "scheduler": counts("scheduler", ("entries", "enabled")),
+                "events": count(base.get("events")),
+                "knowledge": counts("knowledge", ("total", "current", "disputed", "stale")),
+                "models": counts("models", ("registered", "loaded", "assigned_roles")),
+                "voice": {"enabled": base.get("voice", {}).get("enabled") is True},
             },
-        }
+            "receipt_summary": summary,
+            "error_schema_version": 1,
+            "incidents": incidents,
+            "event_channel": "reported client-side only",
+        }}
 
     def probe_provider(self) -> dict:
         source = self._server.director.ha_states_source
@@ -232,11 +260,11 @@ class SystemDiagnostics:
                     )
                 except Exception:
                     pass
-            return {
-                "ok": True,
-                "reachable": False,
-                "detail": f"{type(exc).__name__}: {exc}",
-            }
+            from ..faults import public_failure
+            failure = public_failure({"ok": False, "error": "provider_unavailable", "detail": str(exc)},
+                                     "providers.probe", journal=self._server.faults)
+            return {"ok": True, "reachable": False, "detail": failure["fault"]["message"], "fault": failure["fault"]}
+
         if self._provider_health_listener is not None:
             try:
                 self._provider_health_listener(
@@ -282,7 +310,8 @@ class BackupManager:
             source = self._data_dir / name
             if not source.exists():
                 continue
-            shutil.copy2(source, target / name)
+            (target / name).parent.mkdir(parents=True, exist_ok=True)
+            _copy_file(source, target / name)
             files.append(name)
         return {"id": backup_id, "created_at": now.isoformat(), "files": files}
 
@@ -323,11 +352,14 @@ class BackupManager:
         # today may not be what was present when this backup was taken (a
         # provider installed since, or uninstalled since), and the backup
         # snapshot itself is the authority on what it contains.
-        for candidate in sorted(source.iterdir()):
+        for name in installation_file_names(source):
+            candidate = source / name
             if not candidate.is_file():
                 continue
-            shutil.copy2(candidate, self._data_dir / candidate.name)
-            restored.append(candidate.name)
+            destination = self._data_dir / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            _copy_file(candidate, destination)
+            restored.append(name)
         return {"restored": restored, "restart_required": True}
 
     def delete(self, backup_id: str) -> dict:

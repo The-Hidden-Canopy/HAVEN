@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from conftest import assert_fault
+
 import json
 import tempfile
 from pathlib import Path
@@ -111,7 +113,8 @@ def test_probe_provider_reachable_unreachable_and_absent(real_server) -> None:
             unreachable = _dispatch(down, "system.probe", {})
             assert unreachable["result"]["ok"] is True
             assert unreachable["result"]["reachable"] is False
-            assert "ConnectionError" in unreachable["result"]["detail"]
+            assert unreachable["result"]["fault"]["code"] == "HAVEN.PROVIDERS.UNAVAILABLE"
+            assert "ConnectionError" not in unreachable["result"]["detail"]
         finally:
             down.server_close()
 
@@ -119,7 +122,7 @@ def test_probe_provider_reachable_unreachable_and_absent(real_server) -> None:
         bare, _ = make_server(0, data_dir=Path(tmp) / "data")
         try:
             absent = _dispatch(bare, "system.probe", {})
-            assert absent["result"] == {"ok": False, "error": "no provider attached"}
+            assert_fault(absent["result"], 'HAVEN.PROVIDERS.UNAVAILABLE', error='no provider attached')
         finally:
             bare.server_close()
 
@@ -129,8 +132,8 @@ def test_backup_lifecycle_create_list_restore_delete(real_server) -> None:
     preferences = instance.setup.set_preferences(voice=True, intelligence=False)
     assert preferences["ok"] is True
     instance.setup.declare_person(
-        name="Gerron Smith",
-        entity_id="binary_sensor.gerron_office_occupancy",
+        name="Sample Owner Smith",
+        entity_id="binary_sensor.sample_owner_office_occupancy",
         room_id="office",
     )
 
@@ -215,7 +218,7 @@ def test_service_status_install_and_uninstall(real_server) -> None:
 
     swap(FakeRunner(_Completed(1, stderr="ERROR: Access is denied.\n")))
     refused = _dispatch(instance, "system.service.install", {})
-    assert refused["result"] == {"ok": False, "error": "ERROR: Access is denied."}
+    assert_fault(refused["result"], 'HAVEN.DESKTOP.ACCESS_DENIED', error='startup_access_denied')
 
     swap(recording_runner)
     removed = _dispatch(instance, "system.service.uninstall", {})

@@ -7,8 +7,8 @@ no polling loop lives here. A deployment calls `observe()` on whatever
 cadence it wants -- Haven Core still has no scheduler.
 
 Presence and context meaning is household-specific, so it is declared, not
-inferred: a deployment says "binary_sensor.gerron_bedroom_occupancy tells me
-whether gerron is in the bedroom" by registering a `PresenceSource`, and
+inferred: a deployment says "binary_sensor.sample_owner_bedroom_occupancy tells me
+whether sample_owner is in the bedroom" by registering a `PresenceSource`, and
 Haven never guesses which entities carry which meaning.
 """
 

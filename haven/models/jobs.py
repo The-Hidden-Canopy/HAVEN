@@ -61,6 +61,7 @@ class DownloadJob:
     manifest_id: str | None
     created_at: datetime
     updated_at: datetime
+    error_correlation_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "created_at", require_aware_utc(self.created_at, name="created_at"))
@@ -70,18 +71,23 @@ class DownloadJob:
 def job_to_dict(job: DownloadJob) -> dict[str, Any]:
     """The wire shape for API envelopes and SSE payloads."""
 
-    return {
+    payload = {
         "job_id": job.job_id,
         "url": job.url,
         "state": job.state.value,
         "received_bytes": job.received_bytes,
         "total_bytes": job.total_bytes,
         "current_file": job.current_file,
-        "error": job.error,
+        "error": None,
         "manifest_id": job.manifest_id,
         "created_at": job.created_at.isoformat(),
         "updated_at": job.updated_at.isoformat(),
     }
+    if job.error:
+        from haven.faults import describe, public_error_name
+        payload["error"] = public_error_name(job.error)
+        payload["fault"] = describe(payload["error"], "models.download", correlation_id=job.error_correlation_id)
+    return payload
 
 
 class DownloadJobManager:
@@ -252,6 +258,8 @@ class DownloadJobManager:
     def _transition(self, job_id: str, **changes) -> DownloadJob:
         with self._lock:
             job = self._jobs[job_id]
+            if changes.get("error") and not changes.get("error_correlation_id"):
+                changes["error_correlation_id"] = uuid.uuid4().hex
             updated = replace(job, updated_at=datetime.now(timezone.utc), **changes)
             self._jobs[job_id] = updated
             callbacks = tuple(self._callbacks)

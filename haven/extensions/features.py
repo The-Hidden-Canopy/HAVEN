@@ -14,6 +14,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol
 
 from .taxonomy import ExtensionClass, ExtensionDescriptor
+from .static_metadata import entry_metadata
 
 
 _ENTRY_POINT_GROUP = "haven.features"
@@ -78,7 +79,9 @@ class DiscoveredFeatureModule:
     distribution_version: str | None
     _entry_point: metadata.EntryPoint = field(repr=False, compare=False)
 
-    def load_plugin(self) -> FeatureModulePlugin:
+    def load_plugin(self, *, trusted_in_process: bool = False) -> FeatureModulePlugin:
+        if trusted_in_process is not True:
+            raise FeatureLoadError("in-process feature loading blocked: explicit host review or isolation required")
         try:
             target = self._entry_point.load()
         except Exception as exc:
@@ -127,17 +130,30 @@ def _descriptor(discovered: DiscoveredFeatureModule, plugin: FeatureModulePlugin
 
 
 def inspect_feature_module(discovered: DiscoveredFeatureModule) -> ExtensionDescriptor:
-    """Import a discovered module only to inspect its declared boundary."""
-
-    return _descriptor(discovered, discovered.load_plugin())
+    """Inspect static dist-info JSON; never import the discovered package."""
+    try:
+        row = entry_metadata(discovered._entry_point, "haven-feature.json", "haven-feature.v1")
+        if row.get("class") != "feature":
+            raise ValueError("expected 'feature' extension class")
+        return ExtensionDescriptor(
+            extension_id=row["extension_id"], display_name=row["display_name"],
+            extension_class=ExtensionClass.FEATURE,
+            source=discovered.distribution_name or discovered.entry_point_name,
+            detail=str(row.get("detail", "")),
+        )
+    except (ValueError, KeyError, TypeError) as exc:
+        raise FeatureLoadError(str(exc)) from exc
 
 
 def build_feature_module(
-    discovered: DiscoveredFeatureModule, *, services: FeatureServiceCatalog
+    discovered: DiscoveredFeatureModule, *, services: FeatureServiceCatalog,
+    trusted_in_process: bool = False,
 ) -> tuple[ExtensionDescriptor, FeatureModule]:
     """Build and attach one approved feature through explicit service calls."""
 
-    plugin = discovered.load_plugin()
+    if trusted_in_process is not True:
+        raise FeatureLoadError("in-process feature loading blocked: explicit host review or isolation required")
+    plugin = discovered.load_plugin(trusted_in_process=True)
     descriptor = _descriptor(discovered, plugin)
     try:
         module = plugin.build()

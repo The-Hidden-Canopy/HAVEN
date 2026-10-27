@@ -14,6 +14,7 @@ from typing import Any
 
 from ..core import correlation
 from .protocol import IpcProtocolError, response_message
+from ..faults import public_failure, PUBLIC_ACTIONS
 
 Handler = Callable[[Mapping[str, Any]], Any]
 
@@ -21,8 +22,12 @@ Handler = Callable[[Mapping[str, Any]], Any]
 class IpcDispatcher:
     """Turn one authenticated request into one correlated response."""
 
-    def __init__(self, handlers: Mapping[str, Handler]) -> None:
+    def __init__(self, handlers: Mapping[str, Handler], *, fault_journal=None) -> None:
         self._handlers = dict(handlers)
+        self._fault_journal = fault_journal
+
+    def _journal(self):
+        return self._fault_journal() if callable(self._fault_journal) else self._fault_journal
 
     def __call__(self, message: Mapping[str, Any]) -> dict[str, Any]:
         if message.get("kind") != "request":
@@ -36,9 +41,15 @@ class IpcDispatcher:
             raise IpcProtocolError("method is required")
         if not isinstance(params, Mapping):
             raise IpcProtocolError("request params must be an object")
+        operation = method
+        if method in {"features.action", "marketplace.product"} and isinstance(params.get("action"), str) and params["action"] in PUBLIC_ACTIONS:
+            operation = method + "." + params["action"]
         handler = self._handlers.get(method)
         if handler is None:
-            return response_message(request_id, ok=False, error=f"unknown IPC method: {method}")
+            result = public_failure({"ok": False, "error": "unknown IPC method"}, "ipc.request", journal=self._journal(), correlation_id=request_id)
+            response = response_message(request_id, ok=False, error=result["error"])
+            response["fault"] = result["fault"]
+            return response
         try:
             # The wire's own request_id doubles as the correlation id: it is
             # already unique per call and already crosses the native
@@ -49,12 +60,15 @@ class IpcDispatcher:
             # parameter.
             with correlation.bind(request_id):
                 result = handler(dict(params))
-        except (ValueError, KeyError, TypeError) as exc:
-            # Input failures are safe to explain to the client.  Unexpected
-            # exceptions are handled by the transport with a generic error so
-            # implementation details never cross the native boundary.
-            return response_message(request_id, ok=False, error=str(exc) or "invalid IPC request")
+        except Exception as exc:
+            result = public_failure({"ok": False, "error": str(exc)}, operation,
+                                    journal=self._journal(), exception=exc, correlation_id=request_id)
+            response = response_message(request_id, ok=False, error=result["error"])
+            response["fault"] = result["fault"]
+            return response
+        result = public_failure(result, operation, journal=self._journal(), correlation_id=request_id)
         return response_message(request_id, ok=True, result=result)
+
 
 
 __all__ = ["Handler", "IpcDispatcher"]

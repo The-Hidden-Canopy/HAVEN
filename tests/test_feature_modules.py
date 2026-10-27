@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from importlib import metadata
+import json
 
 import pytest
 
@@ -67,11 +68,18 @@ def _entry_point(name: str, attr: str) -> metadata.EntryPoint:
 
 
 def _discovered(name: str, attr: str) -> DiscoveredFeatureModule:
+    class StaticDistribution:
+        def read_text(self, filename):
+            assert filename == "haven-feature.json"
+            return json.dumps({"schema": "haven-feature.v1", "entries": {name: {
+                "extension_id": "feature.test", "display_name": "Test feature",
+                "class": "intelligence" if attr == "WrongClassPlugin" else "feature",
+            }}})
     return DiscoveredFeatureModule(
         entry_point_name=name,
         distribution_name="haven-feature-test",
         distribution_version="1.0.0",
-        _entry_point=_entry_point(name, attr),
+        _entry_point=_entry_point(name, attr)._for(StaticDistribution()),
     )
 
 
@@ -98,7 +106,7 @@ def test_feature_build_receives_only_explicit_application_operations():
         }
     )
     descriptor, module = build_feature_module(
-        _discovered("test_feature", "FEATURE_PLUGIN"), services=services
+        _discovered("test_feature", "FEATURE_PLUGIN"), services=services, trusted_in_process=True
     )
     assert descriptor.extension_id == "feature.test"
     assert module.services is services
@@ -116,7 +124,8 @@ def test_feature_service_catalog_rejects_unknown_operations_and_non_callables():
 
 def test_malformed_feature_plugin_is_rejected():
     with pytest.raises(FeatureLoadError, match=r"missing describe\(\)/build\(\)"):
-        inspect_feature_module(_discovered("malformed", "MalformedPlugin"))
+        build_feature_module(_discovered("malformed", "MalformedPlugin"),
+                             services=FeatureServiceCatalog(), trusted_in_process=True)
 
 
 def test_unimportable_feature_module_is_rejected():
@@ -131,3 +140,13 @@ def test_unimportable_feature_module_is_rejected():
     )
     with pytest.raises(FeatureLoadError):
         inspect_feature_module(discovered)
+
+
+def test_feature_inspection_never_loads_installed_code(monkeypatch):
+    monkeypatch.setattr(metadata.EntryPoint, "load", lambda self: pytest.fail("inspection imported package code"))
+    assert inspect_feature_module(_discovered("test", "FEATURE_PLUGIN")).extension_id == "feature.test"
+
+
+def test_unknown_feature_cannot_load_without_host_review():
+    with pytest.raises(FeatureLoadError, match="explicit host review"):
+        build_feature_module(_discovered("test", "FEATURE_PLUGIN"), services=FeatureServiceCatalog())

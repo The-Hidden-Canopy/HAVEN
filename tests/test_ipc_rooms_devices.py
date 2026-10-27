@@ -6,6 +6,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from conftest import assert_fault
+
 import pytest
 
 from haven.ipc import request_message
@@ -282,8 +284,8 @@ def test_room_authoring_validation_and_idempotency(real_server) -> None:
         request_message("req-rename-unknown", "rooms.rename", {"room_id": "attic", "name": "Attic"})
     )
     assert renamed["result"]["ok"] is False
-    assert renamed["result"]["error"] == "unknown room: attic"
+    assert_fault(renamed["result"], "HAVEN.ROOMS.NOT_FOUND", error="unknown room")
 
     removed = dispatcher(request_message("req-remove-unknown", "rooms.remove", {"room_id": "attic"}))
     assert removed["result"]["ok"] is False
-    assert removed["result"]["error"] == "unknown room: attic"
+    assert_fault(removed["result"], "HAVEN.ROOMS.NOT_FOUND", error="unknown room")

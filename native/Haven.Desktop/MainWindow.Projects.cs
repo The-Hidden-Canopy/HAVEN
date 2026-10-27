@@ -45,7 +45,7 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             ProjectsStatusText.Text = "";
-            ProjectsErrorText.Text = $"Could not load projects: {ex.Message} Use Refresh to retry.";
+            ProjectsErrorText.Text = $"Could not load projects: {NativeFaults.Message(ex)} Use Refresh to retry.";
         }
     }
 
@@ -266,7 +266,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ProjectsErrorText.Text = ex.Message;
+            ProjectsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -432,8 +432,8 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ProjectsErrorText.Text = ex.Message;
-            TasksErrorText.Text = ex.Message;
+            ProjectsErrorText.Text = NativeFaults.Message(ex);
+            TasksErrorText.Text = NativeFaults.Message(ex);
         }
     }
 

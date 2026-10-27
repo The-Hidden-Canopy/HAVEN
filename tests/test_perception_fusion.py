@@ -12,11 +12,11 @@ BASE_TIME = datetime(2026, 9, 16, 20, 0, tzinfo=timezone.utc)
 
 def test_noisy_or_combines_two_agreeing_sources_above_either_alone():
     camera = PresenceState(
-        person_id="gerron", room_id="living_room", present=True, observed_at=BASE_TIME, source="vision.cam",
+        person_id="sample_owner", room_id="living_room", present=True, observed_at=BASE_TIME, source="vision.cam",
         confidence=0.7,
     )
     thermal = PresenceState(
-        person_id="gerron", room_id="living_room", present=True, observed_at=BASE_TIME + timedelta(seconds=1),
+        person_id="sample_owner", room_id="living_room", present=True, observed_at=BASE_TIME + timedelta(seconds=1),
         source="thermal.sensor", confidence=0.7,
     )
 
@@ -30,7 +30,7 @@ def test_noisy_or_combines_two_agreeing_sources_above_either_alone():
 
 def test_single_source_passes_through_unchanged_confidence():
     only = PresenceState(
-        person_id="gerron", room_id="kitchen", present=True, observed_at=BASE_TIME, source="vision.cam",
+        person_id="sample_owner", room_id="kitchen", present=True, observed_at=BASE_TIME, source="vision.cam",
         confidence=0.6,
     )
 
@@ -41,10 +41,10 @@ def test_single_source_passes_through_unchanged_confidence():
 
 def test_disagreeing_sources_raise_instead_of_picking_a_winner():
     present = PresenceState(
-        person_id="gerron", room_id="office", present=True, observed_at=BASE_TIME, source="vision.cam", confidence=0.9
+        person_id="sample_owner", room_id="office", present=True, observed_at=BASE_TIME, source="vision.cam", confidence=0.9
     )
     absent = PresenceState(
-        person_id="gerron", room_id="office", present=False, observed_at=BASE_TIME, source="thermal.sensor",
+        person_id="sample_owner", room_id="office", present=False, observed_at=BASE_TIME, source="thermal.sensor",
         confidence=0.9,
     )
 
@@ -54,7 +54,7 @@ def test_disagreeing_sources_raise_instead_of_picking_a_winner():
 
 def test_mismatched_person_or_room_is_rejected():
     a = PresenceState(
-        person_id="gerron", room_id="office", present=True, observed_at=BASE_TIME, source="vision.cam", confidence=0.9
+        person_id="sample_owner", room_id="office", present=True, observed_at=BASE_TIME, source="vision.cam", confidence=0.9
     )
     b = PresenceState(
         person_id="guest", room_id="office", present=True, observed_at=BASE_TIME, source="thermal.sensor",

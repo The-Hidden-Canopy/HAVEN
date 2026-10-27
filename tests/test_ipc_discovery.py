@@ -8,6 +8,8 @@ validation, event emission, response shape), not about any real transport.
 
 from __future__ import annotations
 
+from conftest import assert_fault
+
 import json
 import tempfile
 from datetime import datetime, timezone
@@ -203,7 +205,7 @@ def test_discovery_verify_rejects_an_unknown_candidate(server) -> None:
     response = _dispatch(instance, "discovery.verify", {"candidate_id": "missing"})
 
     assert response["ok"] is True
-    assert response["result"] == {"ok": False, "error": "candidate is not enrolled: missing"}
+    assert_fault(response["result"], 'HAVEN.DISCOVERY.NOT_FOUND', error='candidate is not enrolled')
 
 
 def test_discovery_enrollment_survives_a_real_server_restart() -> None:

@@ -50,7 +50,7 @@ class _StubStatesSource:
 LIVE_STATES = (
     {"entity_id": "light.office_desk", "state": "on", "attributes": {}, "last_changed": _CHANGED},
     {
-        "entity_id": "binary_sensor.gerron_office_occupancy",
+        "entity_id": "binary_sensor.sample_owner_office_occupancy",
         "state": "on",
         "attributes": {},
         "last_changed": _CHANGED,
@@ -133,54 +133,54 @@ def test_declare_person_creates_with_derived_id_and_persists() -> None:
         data_dir = Path(tmp) / "data"
         service = _service(data_dir)
         result = service.declare_person(
-            name="Gerron Smith", entity_id="binary_sensor.gerron_office_occupancy", room_id="office"
+            name="Sample Owner Smith", entity_id="binary_sensor.sample_owner_office_occupancy", room_id="office"
         )
         assert result["ok"] is True
         person = result["setup"]["household"]["people"][0]
         assert person == {
-            "person_id": "gerron_smith",
-            "name": "Gerron Smith",
+            "person_id": "sample_owner_smith",
+            "name": "Sample Owner Smith",
             "role": "member",
-            "sources": [{"entity_id": "binary_sensor.gerron_office_occupancy", "room_id": "office"}],
+            "sources": [{"entity_id": "binary_sensor.sample_owner_office_occupancy", "room_id": "office"}],
         }
 
         # A second SetupService over the same dir sees the declaration.
         second = _service(data_dir)
-        assert second.status()["setup"]["household"]["people"][0]["person_id"] == "gerron_smith"
+        assert second.status()["setup"]["household"]["people"][0]["person_id"] == "sample_owner_smith"
 
 
 def test_declare_person_is_idempotent_and_conflicts_on_a_different_name() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         service = _service(Path(tmp) / "data")
-        result = service.declare_person(name="Gerron Smith", entity_id="binary_sensor.gerron_office", room_id="office")
+        result = service.declare_person(name="Sample Owner Smith", entity_id="binary_sensor.sample_owner_office", room_id="office")
         assert result["ok"] is True
 
-        again = service.declare_person(name="Gerron Smith", entity_id="binary_sensor.gerron_office", room_id="office")
+        again = service.declare_person(name="Sample Owner Smith", entity_id="binary_sensor.sample_owner_office", room_id="office")
         assert again["ok"] is True
         assert len(again["setup"]["household"]["people"]) == 1
         assert len(again["setup"]["household"]["people"][0]["sources"]) == 1
 
         # The same derived id under a different spelling is a conflict.
-        conflict = service.declare_person(name="gerron-smith", entity_id="binary_sensor.gerron_bed", room_id="bedroom")
+        conflict = service.declare_person(name="sample_owner-smith", entity_id="binary_sensor.sample_owner_bed", room_id="bedroom")
         assert conflict["ok"] is False
         assert "different name" in conflict["error"]
 
         # A new entity for the same person accumulates as another source.
-        extra = service.declare_person(name="Gerron Smith", entity_id="binary_sensor.gerron_bed", room_id="bedroom")
+        extra = service.declare_person(name="Sample Owner Smith", entity_id="binary_sensor.sample_owner_bed", room_id="bedroom")
         assert extra["ok"] is True
         sources = extra["setup"]["household"]["people"][0]["sources"]
         assert sources == [
-            {"entity_id": "binary_sensor.gerron_office", "room_id": "office"},
-            {"entity_id": "binary_sensor.gerron_bed", "room_id": "bedroom"},
+            {"entity_id": "binary_sensor.sample_owner_office", "room_id": "office"},
+            {"entity_id": "binary_sensor.sample_owner_bed", "room_id": "bedroom"},
         ]
 
 
 def test_declare_person_rejects_blank_fields() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         service = _service(Path(tmp) / "data")
-        result = service.declare_person(name="  ", entity_id="binary_sensor.gerron_office", room_id="office")
+        result = service.declare_person(name="  ", entity_id="binary_sensor.sample_owner_office", room_id="office")
         assert result["ok"] is False
-        result = service.declare_person(name="Gerron", entity_id="binary_sensor.gerron_office", room_id="")
+        result = service.declare_person(name="Sample Owner", entity_id="binary_sensor.sample_owner_office", room_id="")
         assert result["ok"] is False
 
 
@@ -191,32 +191,32 @@ def test_declare_person_with_no_presence_sensor_yet() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         service = _service(Path(tmp) / "data")
-        result = service.declare_person(name="Gerron Smith", role="owner")
+        result = service.declare_person(name="Sample Owner Smith", role="owner")
         assert result["ok"] is True
         person = result["setup"]["household"]["people"][0]
-        assert person == {"person_id": "gerron_smith", "name": "Gerron Smith", "role": "owner", "sources": []}
+        assert person == {"person_id": "sample_owner_smith", "name": "Sample Owner Smith", "role": "owner", "sources": []}
 
 
 def test_declare_person_can_add_a_sensor_to_an_already_declared_person() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         service = _service(Path(tmp) / "data")
-        service.declare_person(name="Gerron Smith", role="owner")
+        service.declare_person(name="Sample Owner Smith", role="owner")
         result = service.declare_person(
-            name="Gerron Smith", entity_id="binary_sensor.gerron_office_occupancy", room_id="office", role="owner"
+            name="Sample Owner Smith", entity_id="binary_sensor.sample_owner_office_occupancy", room_id="office", role="owner"
         )
         assert result["ok"] is True
         person = result["setup"]["household"]["people"][0]
         assert person["role"] == "owner"
-        assert person["sources"] == [{"entity_id": "binary_sensor.gerron_office_occupancy", "room_id": "office"}]
+        assert person["sources"] == [{"entity_id": "binary_sensor.sample_owner_office_occupancy", "room_id": "office"}]
 
 
 def test_declare_person_requires_entity_id_and_room_id_together() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         service = _service(Path(tmp) / "data")
-        result = service.declare_person(name="Gerron Smith", entity_id="binary_sensor.gerron_office")
+        result = service.declare_person(name="Sample Owner Smith", entity_id="binary_sensor.sample_owner_office")
         assert result["ok"] is False
         assert "together" in result["error"]
-        result = service.declare_person(name="Gerron Smith", room_id="office")
+        result = service.declare_person(name="Sample Owner Smith", room_id="office")
         assert result["ok"] is False
         assert "together" in result["error"]
 
@@ -254,7 +254,7 @@ def test_declare_context_rules_and_shared_entities() -> None:
 def test_remove_person_and_context() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         service = _service(Path(tmp) / "data")
-        service.declare_person(name="Gerron", entity_id="binary_sensor.gerron_office", room_id="office")
+        service.declare_person(name="Sample Owner", entity_id="binary_sensor.sample_owner_office", room_id="office")
         service.declare_context(label="Working late", entity_id="input_boolean.working_late")
 
         unknown = service.remove_person(person_id="nobody")
@@ -262,7 +262,7 @@ def test_remove_person_and_context() -> None:
         unknown = service.remove_context(context_id="nothing")
         assert unknown["ok"] is False
 
-        result = service.remove_person(person_id="gerron")
+        result = service.remove_person(person_id="sample_owner")
         assert result["ok"] is True
         assert result["setup"]["household"]["people"] == []
         result = service.remove_context(context_id="working_late")
@@ -320,17 +320,17 @@ def test_complete_without_a_provider_never_requires_an_owner() -> None:
 def test_status_envelope_carries_the_household_key() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         service = _service(Path(tmp) / "data")
-        service.declare_person(name="Gerron", entity_id="binary_sensor.gerron_office", room_id="office")
+        service.declare_person(name="Sample Owner", entity_id="binary_sensor.sample_owner_office", room_id="office")
         service.declare_context(label="Working late", entity_id="input_boolean.working_late")
         household = service.status()["setup"]["household"]
         assert household == {
             "rooms": [],
             "people": [
                 {
-                    "person_id": "gerron",
-                    "name": "Gerron",
+                    "person_id": "sample_owner",
+                    "name": "Sample Owner",
                     "role": "member",
-                    "sources": [{"entity_id": "binary_sensor.gerron_office", "room_id": "office"}],
+                    "sources": [{"entity_id": "binary_sensor.sample_owner_office", "room_id": "office"}],
                 }
             ],
             "contexts": [
@@ -345,10 +345,10 @@ def test_household_routes_round_trip_through_the_api() -> None:
             status, body = _post(
                 port,
                 "/api/setup/household/people",
-                {"name": "Gerron Smith", "entity_id": "binary_sensor.gerron_office_occupancy", "room_id": "office"},
+                {"name": "Sample Owner Smith", "entity_id": "binary_sensor.sample_owner_office_occupancy", "room_id": "office"},
             )
             assert status == 200
-            assert body["setup"]["household"]["people"][0]["person_id"] == "gerron_smith"
+            assert body["setup"]["household"]["people"][0]["person_id"] == "sample_owner_smith"
 
             status, body = _post(port, "/api/setup/household/contexts", {"label": "Working late", "entity_id": "input_boolean.working_late"})
             assert status == 200
@@ -359,7 +359,7 @@ def test_household_routes_round_trip_through_the_api() -> None:
             assert len(body["setup"]["household"]["people"]) == 1
             assert len(body["setup"]["household"]["contexts"]) == 1
 
-            status, body = _post(port, "/api/setup/household/people/remove", {"person_id": "gerron_smith"})
+            status, body = _post(port, "/api/setup/household/people/remove", {"person_id": "sample_owner_smith"})
             assert status == 200
             assert body["setup"]["household"]["people"] == []
             status, body = _post(port, "/api/setup/household/contexts/remove", {"context_id": "working_late"})
@@ -402,10 +402,10 @@ def test_declared_presence_reaches_state_through_the_real_composition_path() -> 
                 "version": 1,
                 "people": [
                     {
-                        "person_id": "gerron",
-                        "name": "Gerron",
+                        "person_id": "sample_owner",
+                        "name": "Sample Owner",
                         "sources": [
-                            {"entity_id": "binary_sensor.gerron_office_occupancy", "room_id": "office"}
+                            {"entity_id": "binary_sensor.sample_owner_office_occupancy", "room_id": "office"}
                         ],
                     }
                 ],
@@ -418,15 +418,15 @@ def test_declared_presence_reaches_state_through_the_real_composition_path() -> 
             status, body = _get_json(port, "/api/state")
             assert status == 200
             # The declared person is present in the office, by declared name.
-            assert body["people"] == [{"id": "gerron", "name": "Gerron", "room": "office"}]
+            assert body["people"] == [{"id": "sample_owner", "name": "Sample Owner", "room": "office"}]
             office = next(room for room in body["rooms"] if room["id"] == "office")
-            assert office["people"] == ["Gerron"]
+            assert office["people"] == ["Sample Owner"]
             # The declared context is active, with its declared label.
             assert {"id": "working_late", "label": "Working late", "active": True} in body["contexts"]
 
             # The setup status exposes the same declarations.
             _, setup_body = _get_json(port, "/api/setup")
-            assert setup_body["setup"]["household"]["people"][0]["person_id"] == "gerron"
+            assert setup_body["setup"]["household"]["people"][0]["person_id"] == "sample_owner"
 
 
 def test_malformed_household_file_boots_without_people() -> None:

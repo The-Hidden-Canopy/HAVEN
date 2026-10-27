@@ -134,7 +134,7 @@ def test_binding_upsert_requires_a_known_household_principal() -> None:
             f"/api/external-agents/connections/{created['connection_id']}/bindings",
             {
                 "subject_key": "subj-1",
-                "subject_label": "Gerron's voice",
+                "subject_label": "Sample Owner's voice",
                 "principal_id": "not-a-real-person",
                 "scopes": ["world.read"],
             },

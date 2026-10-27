@@ -30,7 +30,7 @@ def _dispatch(instance, method: str, params: dict) -> dict:
 
 
 def _seed(instance, tmp_path: Path) -> None:
-    instance.setup.declare_person(name="Gerron Smith", role="owner")
+    instance.setup.declare_person(name="Sample Owner Smith", role="owner")
     dispatcher = instance.build_ipc_dispatcher()
     project = dispatcher(request_message("p", "projects.create", {"title": "Lunar proposal"}))[
         "result"

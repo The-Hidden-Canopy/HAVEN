@@ -1,7 +1,6 @@
 """Diagnostic export (native product-consolidation plan, P0 "Runtime"): a
-support-safe bundle covering version/commit/installation id, provider
-state, model assignments, pending confirmations, scheduler state, and
-recent receipts -- reachable over both IPC and HTTP, never carrying secrets."""
+support-safe allowlisted summary; private identifiers and receipt details
+remain in the owner-only local view, reachable over both IPC and HTTP."""
 
 from __future__ import annotations
 
@@ -70,23 +69,10 @@ def test_export_shape_and_no_secrets_over_http() -> None:
             assert status == 200
             assert body["ok"] is True
             export = body["export"]
-            assert set(export) == {
-                "generated_at",
-                "version",
-                "commit",
-                "installation_id",
-                "diagnostics",
-                "pending_confirmations",
-                "model_assignments",
-                "event_channel",
-                "recent_receipts",
-                "unified_receipts",
-            }
-            assert isinstance(export["installation_id"], str) and export["installation_id"]
-            assert export["pending_confirmations"] == 0
-            assert all(value is None for value in export["model_assignments"].values())
-            assert export["recent_receipts"] == []
-            assert export["unified_receipts"] == []
+            assert set(export) == {"schema_version", "generated_at", "version", "commit", "diagnostics", "receipt_summary", "event_channel", "error_schema_version", "incidents"}
+            assert export["schema_version"] == 2
+            assert export["receipt_summary"] == {"total": 0, "executed": 0, "failed": 0, "not_executed": 0}
+            assert str(data_dir) not in json.dumps(export)
             _assert_no_secret_looking_keys(export)
 
 
@@ -110,8 +96,8 @@ def test_configured_home_assistant_export_keeps_operational_metadata_secret_free
             assert status == 200
             export = body["export"]
             provider = export["diagnostics"]["provider"]
-            assert provider["operational"]["mutation"] is True
-            assert provider["operational"]["required_credential_scopes"] == []
+            assert provider == {"configured": True}
+            assert "ha.local" not in json.dumps(export)
             assert secret not in json.dumps(export, sort_keys=True)
             _assert_no_secret_looking_keys(export)
             backup = BackupManager(data_dir=data_dir).create()
@@ -119,7 +105,7 @@ def test_configured_home_assistant_export_keeps_operational_metadata_secret_free
             assert all(secret.encode("utf-8") not in path.read_bytes() for path in backup_dir.iterdir() if path.is_file())
 
 
-def test_export_reachable_over_ipc_and_matches_installation_id() -> None:
+def test_export_reachable_over_ipc_and_omits_installation_id() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp) / "data"
         instance, _director = make_server(0, data_dir=data_dir, clock=lambda: NOW)
@@ -130,6 +116,7 @@ def test_export_reachable_over_ipc_and_matches_installation_id() -> None:
 
             from haven.ipc.named_pipe import installation_id_for_data_dir
 
-            assert result["export"]["installation_id"] == installation_id_for_data_dir(data_dir)
+            assert "installation_id" not in result["export"]
+            assert installation_id_for_data_dir(data_dir) not in json.dumps(result)
         finally:
             instance.server_close()

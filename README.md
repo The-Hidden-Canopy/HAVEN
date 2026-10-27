@@ -758,6 +758,20 @@ today records a household's choice and moves no data. See
 `haven/plugins/catalog_client.py` and `docs/plugin-boundary.md` for the
 exact contract that relay must satisfy when it exists.
 
+## Decision memory and local lifecycle controls
+
+Memory now includes a scoped decision register with retained revisions,
+source evidence, documentation follow-up and explicit human review. The
+bounded current view reaches intelligence providers as evidence and carries
+no action authority. See [Decision memory](docs/decision-memory.md).
+
+The native Marketplace manages the bundled local welcome card through
+download, installation, enablement, open, update, rollback and removal.
+Settings manages the bundled read-only decision inspector. Unknown provider
+and feature packages remain blocked from in-process activation; browsing
+their static metadata does not import package code. See
+[Marketplace](docs/marketplace.md) and [Feature modules](docs/feature-modules.md).
+
 ## Thank you
 
 Thank you for trying HAVEN. Start small, connect only what is useful to you,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from conftest import assert_fault
+
 import json
 import tempfile
 from datetime import datetime, timezone
@@ -28,7 +30,7 @@ def pair():
             data = root / name / "data"
             data.mkdir(parents=True)
             server, _ = make_server(0, data_dir=data, clock=lambda: NOW)
-            server.setup.declare_person(name="Gerron Smith", role="owner")
+            server.setup.declare_person(name="Sample Owner Smith", role="owner")
             return server
 
         a, b = boot("a"), boot("b")
@@ -75,7 +77,7 @@ def test_sync_disabled_by_default_and_single_device_functional() -> None:
             assert server.sync_engine.push() == {"ok": False, "error": "sync is disabled"}
             assert server.sync_engine.pull() == {"ok": False, "error": "sync is disabled"}
             # Producers still work; mutations just are not recorded.
-            server.setup.declare_person(name="Gerron Smith", role="owner")
+            server.setup.declare_person(name="Sample Owner Smith", role="owner")
             dispatcher = server.build_ipc_dispatcher()
             created = _call(dispatcher, "projects.create", {"title": "Local only"})
             assert created["ok"] is True
@@ -299,10 +301,7 @@ def test_conflict_requires_review_and_resolution(pair) -> None:
     missing_justification = _call(db, "sync.resolve", {
         "conflict_id": conflicts[0]["conflict_id"], "choice": "remote",
     })
-    assert missing_justification == {
-        "ok": False,
-        "error": "conflict resolution requires a non-empty justification",
-    }
+    assert_fault(missing_justification, 'HAVEN.SYNC.INVALID_INPUT', error='conflict resolution requires a non-empty justification')
 
     resolved = _call(db, "sync.resolve", {
         "conflict_id": conflicts[0]["conflict_id"], "choice": "remote",

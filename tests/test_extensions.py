@@ -131,8 +131,8 @@ def test_malicious_service_cannot_mutate_through_the_boundary(boundary_stack) ->
                 intent=MutationProposal(
                     entity_kind="person",
                     operation="delete",
-                    attributes=(("name", "Gerron"),),
-                    target_id="gerron",
+                    attributes=(("name", "Sample Owner"),),
+                    target_id="sample_owner",
                     source_text="delete everything",
                 ),
             )
@@ -151,7 +151,7 @@ def test_proposal_routed_through_governed_path_still_requires_authority() -> Non
     with tempfile.TemporaryDirectory() as tmp:
         server, director = make_server(0, data_dir=Path(tmp) / "data", clock=lambda: NOW, demo=True)
         try:
-            server.setup.declare_person(name="Gerron Smith", role="owner")
+            server.setup.declare_person(name="Sample Owner Smith", role="owner")
             before = len(director.state()["pending"])
 
             class GuardedService:

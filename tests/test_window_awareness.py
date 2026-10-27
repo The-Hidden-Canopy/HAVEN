@@ -31,7 +31,7 @@ class _FakeDirector:
     household_id = "household-authoring"
 
     class _Principal:
-        actor_id = "gerron"
+        actor_id = "sample_owner"
         household_id = "household-authoring"
         role_tier = None  # filled below
 

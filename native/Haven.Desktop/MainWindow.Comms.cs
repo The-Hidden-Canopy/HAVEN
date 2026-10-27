@@ -179,7 +179,7 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             CommsStatusText.Text = "";
-            CommsErrorText.Text = $"Could not load communications state: {ex.Message} Use Refresh to retry.";
+            CommsErrorText.Text = $"Could not load communications state: {NativeFaults.Message(ex)} Use Refresh to retry.";
         }
     }
 
@@ -207,7 +207,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            CommsErrorText.Text = ex.Message;
+            CommsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -283,7 +283,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            CommsErrorText.Text = $"Could not load email: {ex.Message} Use Refresh to retry.";
+            CommsErrorText.Text = $"Could not load email: {NativeFaults.Message(ex)} Use Refresh to retry.";
         }
     }
 
@@ -423,7 +423,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            CommsErrorText.Text = ex.Message;
+            CommsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -466,7 +466,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            CommsErrorText.Text = ex.Message;
+            CommsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -604,7 +604,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            CommsErrorText.Text = $"Could not load calendar: {ex.Message} Use Refresh to retry.";
+            CommsErrorText.Text = $"Could not load calendar: {NativeFaults.Message(ex)} Use Refresh to retry.";
         }
     }
 

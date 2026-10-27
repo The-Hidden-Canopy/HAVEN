@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from conftest import assert_fault
+
 import json
 import tempfile
 from datetime import datetime, timezone
@@ -27,7 +29,7 @@ def _seed_installation(data_dir: Path) -> None:
                 "version": 1,
                 "rooms": [],
                 "people": [
-                    {"person_id": "gerron", "name": "Gerron", "role": "owner", "sources": []}
+                    {"person_id": "sample_owner", "name": "Sample Owner", "role": "owner", "sources": []}
                 ],
                 "contexts": [],
             }
@@ -57,9 +59,9 @@ def test_people_list_mirrors_the_web_directory_shape(server) -> None:
 
     assert response["ok"] is True
     people = response["result"]["people"]
-    assert [person["person_id"] for person in people] == ["gerron"]
+    assert [person["person_id"] for person in people] == ["sample_owner"]
     row = people[0]
-    assert row["name"] == "Gerron"
+    assert row["name"] == "Sample Owner"
     assert row["role"] == "owner"
     # A declaration without an occupancy source is configuration, not
     # fabricated live presence -- same rule the web directory applies.
@@ -85,7 +87,7 @@ def test_people_add_update_remove_round_trip(server) -> None:
     assert removed["ok"] is True
     assert [
         person["person_id"] for person in removed["result"]["setup"]["household"]["people"]
-    ] == ["gerron"]
+    ] == ["sample_owner"]
 
 
 def test_people_add_validation_errors_match_the_web_surface(server) -> None:
@@ -104,7 +106,7 @@ def test_people_add_validation_errors_match_the_web_surface(server) -> None:
 
     bad_role = _dispatch(server, "people.add", {"name": "Ada", "role": "admin"})
     assert bad_role["result"]["ok"] is False
-    assert "role must be one of" in bad_role["result"]["error"]
+    assert_fault(bad_role["result"], "HAVEN.PEOPLE.INVALID_INPUT", error="role is invalid")
 
     # The web defaults an absent/blank role to "member".
     defaulted = _dispatch(server, "people.add", {"name": "Grace Hopper", "role": "  "})
@@ -126,12 +128,12 @@ def test_people_update_and_remove_refuse_unknown_ids(server) -> None:
     updated = _dispatch(server, "people.update", {"person_id": "ada", "name": "Ada"})
     assert updated["ok"] is True
     assert updated["result"]["ok"] is False
-    assert updated["result"]["error"] == "unknown person: ada"
+    assert_fault(updated["result"], 'HAVEN.PEOPLE.NOT_FOUND', error='unknown person')
 
     removed = _dispatch(server, "people.remove", {"person_id": "ada"})
     assert removed["ok"] is True
     assert removed["result"]["ok"] is False
-    assert removed["result"]["error"] == "unknown person: ada"
+    assert_fault(removed["result"], 'HAVEN.PEOPLE.NOT_FOUND', error='unknown person')
 
 
 def test_contexts_list_starts_empty_and_mirrors_the_web_shape(server) -> None:
@@ -195,8 +197,8 @@ def test_contexts_validation_errors_match_the_web_surface(server) -> None:
         server, "contexts.update", {"context_id": "night", "label": "Night"}
     )
     assert updated["result"]["ok"] is False
-    assert updated["result"]["error"] == "unknown context: night"
+    assert_fault(updated["result"], 'HAVEN.CONTEXTS.NOT_FOUND', error='unknown context')
 
     removed = _dispatch(server, "contexts.remove", {"context_id": "night"})
     assert removed["result"]["ok"] is False
-    assert removed["result"]["error"] == "unknown context: night"
+    assert_fault(removed["result"], 'HAVEN.CONTEXTS.NOT_FOUND', error='unknown context')

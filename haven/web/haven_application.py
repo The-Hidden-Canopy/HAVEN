@@ -10,7 +10,7 @@ outcomes.
 
 ``HavenApplication`` imports no simulated-house assumptions, fixture
 identities, or demo scenario -- it never constructs a ``SimulatedHouse``,
-never defaults a household to the literal ``"household-demo"``/``"gerron"``
+never defaults a household to the literal ``"household-demo"``/``"sample_owner"``
 ids, and never seeds a scripted automation. ``DemoDirector``
 (``haven.web.demo``) is the thin subclass that adds exactly those things for
 the local fixture household; the real-mode composition root
@@ -373,6 +373,7 @@ class HavenApplication:
         self._glow = GLOW_IDLE
         self._glow_target: str | None = None
         self._conversation: list[dict[str, Any]] = []
+        self._decision_context_provider = None
         self._pending: dict[str, PendingRequest] = {}
         self._direct_actions: dict[str, ActionProposal] = {}
         self._auto_allow: set[str] = set()
@@ -1506,6 +1507,12 @@ class HavenApplication:
         )
 
     def _agent_context(self, *, focus: str | None, now: datetime) -> AgentContext:
+        decision_memory = None
+        if self._decision_context_provider is not None:
+            try:
+                decision_memory = self._decision_context_provider()
+            except PermissionError:
+                pass  # Revocation removes evidence; it never widens context.
         return AgentContext(
             household_id=self.household_id,
             actor_id=self.resident.actor_id,
@@ -1513,7 +1520,11 @@ class HavenApplication:
             room_focus=focus,
             recent_lines=tuple(entry["text"] for entry in self._conversation[-6:]),
             world=self._world_view(now),
+            decision_memory=decision_memory,
         )
+
+    def set_decision_context_provider(self, provider) -> None:
+        self._decision_context_provider = provider
 
     def _world_names(self) -> dict[str, str]:
         names: dict[str, str] = {}

@@ -34,9 +34,9 @@ HTML = """<html><head><title>t</title><style>body { color: red }</style>
 <script>var secret = 1;</script></head>
 <body><h1>UNLV Proposal</h1><p>The review board meets on Friday.</p></body></html>"""
 
-JSON_DOC = '{"project": {"name": "UNLV Proposal", "budget": 120000, "lead": "Gerron"}}'
+JSON_DOC = '{"project": {"name": "UNLV Proposal", "budget": 120000, "lead": "Sample Owner"}}'
 TOML_DOC = '[project]\nname = "VANTA Engine"\nbudget = 90000\n'
-CSV_DOC = "name,role\nGerron,lead\nAda,reviewer\n"
+CSV_DOC = "name,role\nSample Owner,lead\nAda,reviewer\n"
 
 
 def _docx_bytes() -> bytes:

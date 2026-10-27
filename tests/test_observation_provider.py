@@ -11,7 +11,7 @@ BASE_TIME = datetime(2026, 9, 16, 20, 0, tzinfo=timezone.utc)
 
 def test_returns_whatever_observations_it_was_given():
     presence = PresenceState(
-        person_id="gerron", room_id="bedroom", present=True, observed_at=BASE_TIME, source="ble.proximity",
+        person_id="sample_owner", room_id="bedroom", present=True, observed_at=BASE_TIME, source="ble.proximity",
         confidence=0.72,
     )
     context = ContextState(context_id="working_late", active=True, observed_at=BASE_TIME, source="wifi.mdns")

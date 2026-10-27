@@ -184,7 +184,7 @@ def test_action_request_reaches_the_executor_as_the_admitted_principal(store):
     assert result == {"ok": True, "status": "executed"}
     (kind, principal, device_id, service, connection_id, external_source) = executor.calls[0]
     assert kind == "request"
-    assert principal.actor_id == "person-gerron"
+    assert principal.actor_id == "person-sample_owner"
     assert (device_id, service) == ("light.office", "light.turn_off")
     assert connection_id == "extconn-1"
     assert ("provider", "mcp_client") in external_source
@@ -237,15 +237,15 @@ def _bound_bridge(store, executor: _StubExecutor) -> TransportBridge:
             binding_id="bind-1",
             connection_id="extconn-1",
             subject_key="subj-1",
-            subject_label="Gerron's voice",
-            principal_id="person-gerron",
+            subject_label="Sample Owner's voice",
+            principal_id="person-sample_owner",
             scopes=frozenset({ExternalScope.ACTIONS_REQUEST}),
             created_by="owner-1",
             created_at=NOW,
         )
     )
-    resident = Principal(actor_id="person-gerron", household_id=HOUSEHOLD, role_tier=RoleTier.OWNER)
-    return _bridge(store, executor=executor, resolve_principal={"person-gerron": resident}.get)
+    resident = Principal(actor_id="person-sample_owner", household_id=HOUSEHOLD, role_tier=RoleTier.OWNER)
+    return _bridge(store, executor=executor, resolve_principal={"person-sample_owner": resident}.get)
 
 
 def test_action_request_validates_arguments_before_dispatch(store):

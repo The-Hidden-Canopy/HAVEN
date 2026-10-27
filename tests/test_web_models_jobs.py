@@ -1,3 +1,4 @@
+from conftest import assert_fault
 """HTTP contract for background model-download jobs: the /api/models/download
 start endpoint, job list/detail/cancel envelopes, the /api/models/events SSE
 stream (initial jobs list + model_job transitions), resolution-failure
@@ -118,11 +119,11 @@ def test_unknown_job_detail_and_cancel_return_ok_false(server) -> None:
 
     status, body = _get_json(port, "/api/models/jobs/nope")
     assert status == 200
-    assert body == {"ok": False, "error": "unknown job: nope"}
+    assert_fault(body, 'HAVEN.MODELS.NOT_FOUND', error='unknown job')
 
     status, body = _post(port, "/api/models/jobs/nope/cancel", {})
     assert status == 200
-    assert body == {"ok": False, "error": "unknown job: nope"}
+    assert_fault(body, 'HAVEN.MODELS.NOT_FOUND', error='unknown job')
 
 
 def test_cancel_endpoint_cancels_a_running_job(server) -> None:

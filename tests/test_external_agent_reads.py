@@ -41,8 +41,8 @@ class _StubReader:
     def state(self):
         self.calls += 1
         return {
-            "rooms": [{"id": "office", "devices": [], "people": ["Gerron"]}],
-            "people": [{"person_id": "gerron", "room": "office"}],
+            "rooms": [{"id": "office", "devices": [], "people": ["Sample Owner"]}],
+            "people": [{"person_id": "sample_owner", "room": "office"}],
         }
 
 
@@ -129,7 +129,7 @@ def test_rooms_list_returns_only_the_rooms(store):
 
     result = tools.rooms_list(_admitted_with_scopes(store, frozenset({ExternalScope.WORLD_READ})))
 
-    assert result == {"ok": True, "rooms": [{"id": "office", "devices": [], "people": ["Gerron"]}]}
+    assert result == {"ok": True, "rooms": [{"id": "office", "devices": [], "people": ["Sample Owner"]}]}
 
 
 def test_a_read_without_world_read_scope_never_touches_the_reader(store):
@@ -173,15 +173,15 @@ def test_call_with_a_bound_subject_reads_as_that_principal(store):
             binding_id="bind-1",
             connection_id="extconn-1",
             subject_key="subj-1",
-            subject_label="Gerron's voice",
-            principal_id="person-gerron",
+            subject_label="Sample Owner's voice",
+            principal_id="person-sample_owner",
             scopes=frozenset({ExternalScope.WORLD_READ}),
             created_by="owner-1",
             created_at=NOW,
         )
     )
-    resident = Principal(actor_id="person-gerron", household_id=HOUSEHOLD, role_tier=RoleTier.OWNER)
-    gateway = _gateway(store, resolve_principal={"person-gerron": resident}.get)
+    resident = Principal(actor_id="person-sample_owner", household_id=HOUSEHOLD, role_tier=RoleTier.OWNER)
+    gateway = _gateway(store, resolve_principal={"person-sample_owner": resident}.get)
     tools = ExternalReadTools(gateway=gateway, reader=_StubReader())
 
     result = tools.call(_request(subject="subj-1"))

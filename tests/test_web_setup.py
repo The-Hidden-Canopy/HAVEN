@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 
 from haven.web.server import make_server
-from haven.web.setup_config import default_data_dir
 
 UTC = timezone.utc
 FIXED_NOW = datetime(2026, 9, 16, 20, 0, tzinfo=UTC)
@@ -51,15 +50,17 @@ def _post(port: int, path: str, payload: dict | None = None) -> tuple[int, dict]
     return response.status, json.loads(raw) if raw else {}
 
 
-def test_initial_status_is_default_then_empty_data_dir_flips_source() -> None:
+def test_initial_status_is_default_then_empty_data_dir_flips_source(monkeypatch) -> None:
     with tempfile.TemporaryDirectory() as tmp:
+        default_dir = Path(tmp) / "default-data"
+        monkeypatch.setattr("haven.web.setup_service.default_data_dir", lambda: default_dir)
         with _boot(str(Path(tmp) / "data")) as (_, _, port):
             status, body = _get_json(port, "/api/setup")
             assert status == 200
             assert body["ok"] is True
             setup = body["setup"]
             assert setup["completed"] is False
-            assert setup["data_dir"] == {"source": "default", "resolved": str(default_data_dir())}
+            assert setup["data_dir"] == {"source": "default", "resolved": str(default_dir)}
             assert setup["provider"] == {"configured": False, "kind": None, "base_url": None}
             assert setup["discovery"] == {"candidates": [], "enrolled": []}
             assert setup["preferences"] == {"voice": False, "intelligence": False}
@@ -70,7 +71,7 @@ def test_initial_status_is_default_then_empty_data_dir_flips_source() -> None:
             assert status == 200
             assert body["ok"] is True
             assert body["setup"]["data_dir"]["source"] == "chosen"
-            assert Path(body["setup"]["data_dir"]["resolved"]) == default_data_dir()
+            assert Path(body["setup"]["data_dir"]["resolved"]) == default_dir
 
 
 def test_provider_operational_metadata_is_rendered_by_the_web_system_surface() -> None:
@@ -252,12 +253,12 @@ def test_declaring_a_person_forwards_the_chosen_role() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with _boot(str(Path(tmp) / "data")) as (_, _, port):
             status, body = _post(
-                port, "/api/setup/household/people", {"name": "Gerron Smith", "role": "owner"}
+                port, "/api/setup/household/people", {"name": "Sample Owner", "role": "owner"}
             )
             assert status == 200
             assert body["ok"] is True
             people = body["setup"]["household"]["people"]
-            assert any(p["name"] == "Gerron Smith" and p["role"] == "owner" for p in people)
+            assert any(p["name"] == "Sample Owner" and p["role"] == "owner" for p in people)
 
 
 def test_declaring_a_person_without_a_role_defaults_to_member() -> None:

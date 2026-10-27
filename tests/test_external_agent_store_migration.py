@@ -43,8 +43,8 @@ def _binding(**overrides) -> PrincipalBinding:
         binding_id="bind-1",
         connection_id="extconn-1",
         subject_key="subj-hash-1",
-        subject_label="Gerron's voice profile",
-        principal_id="person-gerron",
+        subject_label="Sample Owner's voice profile",
+        principal_id="person-sample_owner",
         scopes=frozenset({ExternalScope.WORLD_READ, ExternalScope.ACTIONS_REQUEST}),
         created_by="owner-1",
         created_at=NOW,
@@ -60,7 +60,7 @@ def _populate(store: ExternalAgentStore) -> None:
     store.save_connection(_connection(connection_id="extconn-2", credential_hash=None, revoked_at=NOW))
     store.save_binding(_binding())
     store.save_binding(_binding(binding_id="bind-2", subject_key="subj-hash-2", revoked_at=NOW))
-    store.observe_subject("extconn-1", "subj-hash-1", "Gerron's voice profile", NOW)
+    store.observe_subject("extconn-1", "subj-hash-1", "Sample Owner's voice profile", NOW)
     store.append_audit(
         audit_id="a1",
         household_id="household-1",

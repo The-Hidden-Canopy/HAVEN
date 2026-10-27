@@ -15,7 +15,7 @@ UTC = timezone.utc
 NOW = datetime(2026, 9, 18, 12, 0, tzinfo=UTC)
 
 
-def _presence(person="gerron", room="office", present=True, confidence=1.0, source="ble") -> PresenceState:
+def _presence(person="sample_owner", room="office", present=True, confidence=1.0, source="ble") -> PresenceState:
     return PresenceState(
         person_id=person, room_id=room, present=present, observed_at=NOW, source=source, confidence=confidence
     )
@@ -51,7 +51,7 @@ def test_a_single_providers_readings_pass_through_fused():
     observer = CompositeObserver(providers=(provider,), household_id="house-1")
     snapshot = observer.observe(now=NOW)
     assert len(snapshot.presence) == 1
-    assert snapshot.presence[0].person_id == "gerron"
+    assert snapshot.presence[0].person_id == "sample_owner"
     assert snapshot.presence[0].source == "composite.fused"
     assert len(snapshot.contexts) == 1
     assert len(snapshot.devices) == 1
@@ -85,7 +85,7 @@ def test_disagreeing_context_is_dropped_not_guessed():
 
 def test_unavailable_presence_is_excluded_from_fusion():
     unavailable = PresenceState(
-        person_id="gerron",
+        person_id="sample_owner",
         room_id="office",
         present=False,
         observed_at=NOW,

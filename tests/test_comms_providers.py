@@ -42,7 +42,7 @@ END:VCALENDAR
 
 EML = """Message-ID: <msg-1@example.org>
 From: Bryan <bryan@example.org>
-To: gerron@example.org
+To: sample_owner@example.org
 Subject: UNLV proposal draft
 Date: Wed, 24 Sep 2026 08:30:00 +0000
 X-Labels: work, unlv
@@ -114,7 +114,7 @@ def test_local_eml_provider_reads_bounded_snippet() -> None:
         (message,) = provider.messages()
         assert message.sender.startswith("Bryan")
         assert message.subject == "UNLV proposal draft"
-        assert message.recipients == ("gerron@example.org",)
+        assert message.recipients == ("sample_owner@example.org",)
         assert message.labels == ("work", "unlv")
         assert "draft reads well" in message.snippet
         assert len(message.snippet) <= 240

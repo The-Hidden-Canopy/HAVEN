@@ -137,7 +137,7 @@ public sealed partial class SetupWizardView : UserControl
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
+            _error = NativeFaults.Message(ex);
             Render();
             return (false, default);
         }
@@ -444,7 +444,7 @@ public sealed partial class SetupWizardView : UserControl
                 personBox.Items.Add(item);
             }
             personBox.SelectedIndex = 0;
-            var entityBox = new TextBox { PlaceholderText = "occupancy sensor entity id, e.g. binary_sensor.gerron_office_occupancy", MinWidth = 340 };
+            var entityBox = new TextBox { PlaceholderText = "occupancy sensor entity id, e.g. binary_sensor.sample_owner_office_occupancy", MinWidth = 340 };
             var roomBox = new TextBox { PlaceholderText = "room", MinWidth = 140 };
             var addSensor = new Button { Content = "Add sensor" };
             addSensor.Click += async (_, _) =>

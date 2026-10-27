@@ -31,3 +31,6 @@ addopts = "-q"
 
 [tool.setuptools.packages.find]
 include = ["haven*"]
+
+[tool.setuptools.package-data]
+"haven.marketplace" = ["starter_catalog.json", "fixtures/*.json"]

@@ -11,14 +11,11 @@ level singleton, or a zero-argument class -- implementing `describe()`/
 group (see `haven/providers/loader.py` for how HAVEN finds it, and
 `docs/authoring-providers.md` for the publishing walkthrough).
 
-Two methods, deliberately not one: `describe()` is always safe to call --
-it returns static metadata a household can review (what this needs, what
-it can do) without constructing anything or touching a network, config
-file, or credential. `build()` is the point a household has actually
-consented -- it may open a connection, read a token, or fail if
-`config` is missing something it required. This is the same
-inspect-before-install shape `haven/models` already uses (a manifest is
-read before any weights download), applied to providers instead of models.
+Two methods, deliberately not one: trusted implementations use `describe()`
+for declarations and `build()` for construction. Neither Python method is
+safe to execute merely because its author claims it is. Browsing reads
+static dist-info metadata; importing/building unknown Python requires host
+review or isolation. Descriptors do not grant permissions or credentials.
 """
 
 from __future__ import annotations

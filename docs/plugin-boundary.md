@@ -123,3 +123,19 @@ The receipt-export path from an installation to the Hub, and the Hub-side
 relay from an export to a subscribed plugin, are still integration surfaces
 to be built. This document defines the contract they must satisfy when they
 exist; it is not a claim that they are live today.
+
+## Local projection guard
+
+`haven.plugins.exports.authorized_receipt_projection` defines a small local
+allowlist: schema version, outcome, authority status, whether execution was
+attempted and whether it succeeded. It accepts an `ActionReceipt`, not arbitrary
+dictionaries. Cross-scope receipts fail, and every call requires fresh host
+authorization for the exact principal, scope and consumer. Consumer enablement
+and product installation are not export authorization.
+
+The projection excludes all household/person/receipt/device IDs, free text,
+parameters, timestamps, capability names, evidence, correlation and external
+source fields. Raw `ActionReceipt.to_dict()` remains local-only. No sender, Hub
+relay, automatic consent or UI export action is connected to this guard.
+Provenance, transport consent and relay acceptance remain blocked until their
+separate contracts are implemented and reviewed.

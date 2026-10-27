@@ -35,6 +35,7 @@ from typing import Callable
 from urllib.parse import quote
 
 from haven.web.server import make_server
+from haven.faults import FaultJournal, public_failure
 from haven.web.setup_config import default_data_dir
 from haven.ipc.named_pipe import installation_id_for_data_dir, installation_pipe_name
 
@@ -867,6 +868,9 @@ class DesktopShell:
                 "--ipc-token-stdin",
             ],
             stdin=subprocess.PIPE,
+            env={**os.environ, "HAVEN_DATA_DIR": str(self.data_dir),
+                 "HAVEN_DESKTOP_DATA_DIR": os.environ.get("HAVEN_DESKTOP_DATA_DIR") or str(self.data_dir / "desktop"),
+                 "HAVEN_DESKTOP_STATE_POLICY": "explicit" if os.environ.get("HAVEN_DESKTOP_DATA_DIR") else "installation"},
         )
         self.process = process
         token_stream = getattr(process, "stdin", None)
@@ -938,7 +942,7 @@ class DesktopShell:
                 # named pipe.  Do not leave the compatibility HTTP socket
                 # listening just because the transitional composition object
                 # is still a HavenWebServer instance.
-                self.server.server_close()
+                self.server.close_http_listener()
             else:
                 self.server_thread = Thread(
                     target=self.server.serve_forever,
@@ -1143,8 +1147,11 @@ def main(argv: list[str] | None = None) -> int:
     except DesktopShellAlreadyRunning:
         return 0
     except DesktopShellError as exc:
-        logging.getLogger("haven.desktop").error("HAVEN Desktop: %s", exc)
-        print(f"HAVEN Desktop: {exc}", file=sys.stderr)
+        failure = public_failure({"ok": False, "error": "core_startup_failed", "detail": str(exc)},
+                                 "core.startup", journal=FaultJournal(_resolved_data_dir(args.data_dir) / "diagnostics"))
+        fault = failure["fault"]
+        logging.getLogger("haven.desktop").error("[%s] startup failed; reference %s", fault["code"], fault["correlation_id"])
+        print(f"[{fault['code']}] {fault['message']} Reference: {fault['correlation_id']}", file=sys.stderr)
         return 2
 
 

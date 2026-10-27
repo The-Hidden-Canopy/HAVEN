@@ -188,7 +188,7 @@ class DiscoveryService:
             # `approved_by` must name a real person: a real household with
             # nobody declared yet has no one to attribute enrollment to, and
             # falling back to a fixture identity is exactly the silent
-            # gerron-as-default this refuses.
+            # sample_owner-as-default this refuses.
             return {"ok": False, "error": "declare a household owner before enrolling devices"}
         candidate = self._lookup_candidate(candidate_id)
         if candidate is None:

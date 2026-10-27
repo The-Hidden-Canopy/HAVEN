@@ -112,9 +112,10 @@ def test_native_activity_renders_recent_work_evidence():
     assert "GetComputerActivityAsync" in client
 
 
-def test_native_settings_projects_the_support_safe_unified_receipt_export():
+def test_native_settings_keeps_private_receipts_separate_from_support_export():
     system = (NATIVE / "MainWindow.System.cs").read_text(encoding="utf-8")
     xaml = (NATIVE / "MainWindow.xaml").read_text(encoding="utf-8")
+    assert "GetPrivateReceiptsAsync" in system
     assert "ExportDiagnosticsAsync" in system
     assert "RenderUnifiedReceipts" in system
     assert '"unified_receipts"' in system

@@ -47,7 +47,7 @@ def test_ipc_request_id_reaches_the_computer_action_ledger_as_correlation_id(ser
     dispatcher = server.build_ipc_dispatcher()
     dispatcher(request_message("setup-root", "setup.computer.roots.add", {"path": str(allowed)}))
     dispatcher(request_message("setup-enable", "setup.computer", {"enabled": True, "read_only": False}))
-    dispatcher(request_message("setup-owner", "setup.household.people.add", {"name": "Gerron Smith", "role": "owner"}))
+    dispatcher(request_message("setup-owner", "setup.household.people.add", {"name": "Sample Owner Smith", "role": "owner"}))
 
     my_request_id = "req-correlate-me-123"
     result = dispatcher(
@@ -74,7 +74,7 @@ def test_correlation_id_is_not_leaked_across_unrelated_requests(server, tmp_path
     dispatcher = server.build_ipc_dispatcher()
     dispatcher(request_message("setup-root", "setup.computer.roots.add", {"path": str(allowed)}))
     dispatcher(request_message("setup-enable", "setup.computer", {"enabled": True, "read_only": False}))
-    dispatcher(request_message("setup-owner", "setup.household.people.add", {"name": "Gerron Smith", "role": "owner"}))
+    dispatcher(request_message("setup-owner", "setup.household.people.add", {"name": "Sample Owner Smith", "role": "owner"}))
 
     dispatcher(
         request_message(

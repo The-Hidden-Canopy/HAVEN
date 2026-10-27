@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from conftest import assert_fault
+
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -113,7 +115,7 @@ def test_validation_and_fail_closed_paths(server) -> None:
 
     ghost = _dispatch(instance, "projects.get", {"project_id": "project:ghost"})
     assert ghost["result"]["ok"] is False
-    assert ghost["result"]["error"] == "unknown project: project:ghost"
+    assert_fault(ghost["result"], 'HAVEN.PROJECTS.NOT_FOUND', error='unknown project')
 
     created = _dispatch(instance, "projects.create", {"title": "Wildlife Research"})
     project = created["result"]["project"]

@@ -13,6 +13,7 @@ machinery itself -- exercising the real mechanism end to end.
 from __future__ import annotations
 
 from importlib import metadata
+import json
 from typing import Mapping
 
 import pytest
@@ -79,11 +80,22 @@ def _entry_point(name: str, attr: str) -> metadata.EntryPoint:
 def _discovered(name: str, attr: str):
     from haven.providers.loader import DiscoveredProviderPackage
 
+    class StaticDistribution:
+        def read_text(self, filename):
+            assert filename == "haven-provider.json"
+            return json.dumps({"schema": "haven-provider.v1", "entries": {name: {
+                "provider_id": "philips_hue", "kind": "execution",
+                "capabilities": ["light.turn_on", "light.turn_off"],
+                "display_name": "Philips Hue", "description": "Local lights",
+                "config_fields": [{"name": "bridge_ip", "label": "Bridge IP address"},
+                                  {"name": "api_key", "label": "Bridge API key", "secret": True}],
+            }}})
+
     return DiscoveredProviderPackage(
         entry_point_name=name,
         distribution_name="haven-philips-hue",
         distribution_version="1.0.0",
-        _entry_point=_entry_point(name, attr),
+        _entry_point=_entry_point(name, attr)._for(StaticDistribution()),
     )
 
 
@@ -113,7 +125,7 @@ def test_inspect_provider_package_returns_the_manifest_without_building():
 
 def test_build_provider_constructs_the_real_instance_with_config():
     discovered = _discovered("philips_hue", "FAKE_HUE_PLUGIN_INSTANCE")
-    manifest, instance = build_provider(discovered, config={"bridge_ip": "10.0.0.5", "api_key": "secret"})
+    manifest, instance = build_provider(discovered, config={"bridge_ip": "10.0.0.5", "api_key": "secret"}, trusted_in_process=True)
     assert manifest.provider_id == "philips_hue"
     assert isinstance(instance, _FakeHueProvider)
     assert instance.config == {"bridge_ip": "10.0.0.5", "api_key": "secret"}
@@ -122,31 +134,31 @@ def test_build_provider_constructs_the_real_instance_with_config():
 def test_build_provider_propagates_a_provider_specific_config_error():
     discovered = _discovered("philips_hue", "FAKE_HUE_PLUGIN_INSTANCE")
     with pytest.raises(ValueError, match="bridge_ip"):
-        build_provider(discovered, config={})
+        build_provider(discovered, config={}, trusted_in_process=True)
 
 
 def test_build_provider_defaults_to_empty_config():
     discovered = _discovered("philips_hue", "FAKE_HUE_PLUGIN_INSTANCE")
     with pytest.raises(ValueError):
-        build_provider(discovered)
+        build_provider(discovered, trusted_in_process=True)
 
 
 def test_entry_point_resolving_to_a_class_is_instantiated():
     discovered = _discovered("philips_hue", "FakeHuePlugin")
-    manifest = inspect_provider_package(discovered)
+    manifest, _ = build_provider(discovered, config={"bridge_ip": "10.0.0.5"}, trusted_in_process=True)
     assert manifest.provider_id == "philips_hue"
 
 
 def test_malformed_plugin_missing_describe_or_build_raises_provider_load_error():
     discovered = _discovered("broken", "_NotAPlugin")
     with pytest.raises(ProviderLoadError, match="describe"):
-        inspect_provider_package(discovered)
+        build_provider(discovered, trusted_in_process=True)
 
 
 def test_plugin_that_does_not_return_a_manifest_raises_provider_load_error():
     discovered = _discovered("broken", "_BrokenDescribePlugin")
     with pytest.raises(ProviderLoadError, match="ProviderManifest"):
-        inspect_provider_package(discovered)
+        build_provider(discovered, trusted_in_process=True)
 
 
 def test_unimportable_module_raises_provider_load_error():
@@ -163,3 +175,14 @@ def test_unimportable_module_raises_provider_load_error():
     )
     with pytest.raises(ProviderLoadError):
         inspect_provider_package(discovered)
+
+
+def test_inspection_does_not_execute_installed_package(monkeypatch):
+    monkeypatch.setattr(metadata.EntryPoint, "load", lambda self: pytest.fail("metadata inspection executed installed code"))
+    assert inspect_provider_package(_discovered("philips_hue", "FAKE_HUE_PLUGIN_INSTANCE")).provider_id == "philips_hue"
+
+
+def test_build_blocks_unreviewed_in_process_provider_before_import(monkeypatch):
+    monkeypatch.setattr(metadata.EntryPoint, "load", lambda self: pytest.fail("untrusted package executed"))
+    with pytest.raises(ProviderLoadError, match="explicit host review"):
+        build_provider(_discovered("philips_hue", "FAKE_HUE_PLUGIN_INSTANCE"))

@@ -191,6 +191,7 @@ class EventType(str, Enum):
     RULE_REVOKED = "rule_revoked"
     RULE_SCHEDULER_CHANGED = "rule_scheduler_changed"
     RELATIONSHIP_ADMITTED = "relationship_admitted"
+    LOCAL_LIFECYCLE_CHANGED = "local_lifecycle_changed"
     RULE_APPROVAL_BLOCKED = "rule_approval_blocked"
     RULE_CLARIFICATION_BLOCKED = "rule_clarification_blocked"
     RULE_REVOCATION_BLOCKED = "rule_revocation_blocked"

@@ -14,25 +14,27 @@ public sealed class McpSettings
 {
     public const int DefaultPort = 8741;
 
-    private static string SettingsPath =>
-        Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Haven.Desktop",
-            "mcp.json");
+    private readonly string? _settingsPathOverride;
+    private string _settingsPath => _settingsPathOverride ?? DesktopPaths.File("mcp.json");
+
+    public McpSettings(string? settingsPath = null)
+    {
+        _settingsPathOverride = settingsPath;
+    }
 
     public bool Enabled { get; private set; }
     public int Port { get; private set; } = DefaultPort;
 
-    public static McpSettings Load()
+    public static McpSettings Load(string? settingsPath = null)
     {
-        var settings = new McpSettings();
+        var settings = new McpSettings(settingsPath);
         try
         {
-            if (!File.Exists(SettingsPath))
+            if (!File.Exists(settings._settingsPath))
             {
                 return settings;
             }
-            using var document = JsonDocument.Parse(File.ReadAllText(SettingsPath));
+            using var document = JsonDocument.Parse(File.ReadAllText(settings._settingsPath));
             var root = document.RootElement;
             if (root.TryGetProperty("enabled", out var enabled) && enabled.ValueKind is JsonValueKind.True or JsonValueKind.False)
             {
@@ -46,7 +48,7 @@ public sealed class McpSettings
         catch (Exception)
         {
             // Fail closed: a corrupt settings file means "endpoint off".
-            return new McpSettings();
+            return new McpSettings(settingsPath);
         }
         return settings;
     }
@@ -57,9 +59,9 @@ public sealed class McpSettings
         Port = port is > 0 and < 65536 ? port : DefaultPort;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!);
             File.WriteAllText(
-                SettingsPath,
+                _settingsPath,
                 JsonSerializer.Serialize(new { enabled = Enabled, port = Port }));
         }
         catch (Exception)

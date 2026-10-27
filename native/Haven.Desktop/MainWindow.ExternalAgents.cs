@@ -30,7 +30,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ExternalAgentsErrorText.Text = $"Could not load external agent connections: {ex.Message}";
+            ExternalAgentsErrorText.Text = $"Could not load external agent connections: {NativeFaults.Message(ex)}";
         }
     }
 
@@ -159,7 +159,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ExternalAgentsErrorText.Text = ex.Message;
+            ExternalAgentsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -180,7 +180,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ExternalAgentsErrorText.Text = ex.Message;
+            ExternalAgentsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -218,7 +218,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ExternalAgentsErrorText.Text = ex.Message;
+            ExternalAgentsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -242,7 +242,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ExternalAgentsErrorText.Text = ex.Message;
+            ExternalAgentsErrorText.Text = NativeFaults.Message(ex);
             return;
         }
 
@@ -265,7 +265,7 @@ public sealed partial class MainWindow
             Style = (Style)Application.Current.Resources["HavenSectionTextStyle"],
         });
         var subjectKey = new TextBox { PlaceholderText = "subject key (from the connection's own identity)" };
-        var subjectLabel = new TextBox { PlaceholderText = "label, e.g. \"Gerron's voice profile\"" };
+        var subjectLabel = new TextBox { PlaceholderText = "label, e.g. \"Sample Owner's voice profile\"" };
         var personBox = new ComboBox { MinWidth = 200 };
         var personIds = new List<string>();
         foreach (var person in Enumerate(people))
@@ -330,7 +330,7 @@ public sealed partial class MainWindow
             }
             catch (Exception ex)
             {
-                addError.Text = ex.Message;
+                addError.Text = NativeFaults.Message(ex);
             }
         };
         content.Children.Add(subjectKey);
@@ -380,7 +380,7 @@ public sealed partial class MainWindow
             }
             catch (Exception ex)
             {
-                ExternalAgentsErrorText.Text = ex.Message;
+                ExternalAgentsErrorText.Text = NativeFaults.Message(ex);
             }
         };
         Grid.SetColumn(revoke, 1);

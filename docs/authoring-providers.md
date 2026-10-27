@@ -260,6 +260,28 @@ backend.
 
 ## Registering your provider
 
+### Installed-package browsing and execution
+
+Entry-point discovery and Settings inspection do not import installed package
+code. Publish bounded `haven-provider.json` metadata in dist-info:
+
+```json
+{"schema":"haven-provider.v1","entries":{"example":{"provider_id":"example","kind":"observation","capabilities":["observe"],"display_name":"Example provider","description":"Declared capabilities","permissions":[],"config_fields":[]}}}
+```
+
+Optional `version`, `homepage` and `operational` fields follow `ProviderManifest`.
+These are untrusted declarations for review; they grant no authority. Missing or
+invalid metadata blocks inspection rather than executing `describe()`.
+
+`build_provider` and `DiscoveredProviderPackage.load_plugin` default to blocked
+for unknown packages. An internal, explicit host review may opt into trusted
+in-process construction with `trusted_in_process=True`. Never derive that
+argument from metadata, request bodies or saved enablement. HAVEN does not
+provide isolation for untrusted Python. The bundled Ring simulator uses its
+fixed first-party factory, not the entry-point loader. Live-provider prerequisites
+remain blocked until separately reviewed and configured; browsing or product
+installation supplies no credentials.
+
 However you implement one of the protocols above, registration is the same
 shape everywhere: construct a `ProviderCapabilities` (`provider_id`, `kind`,
 and the capability strings your instance actually supports) and register

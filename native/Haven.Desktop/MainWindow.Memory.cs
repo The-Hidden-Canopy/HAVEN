@@ -35,6 +35,7 @@ public sealed partial class MainWindow
         }
         try
         {
+            await RenderDecisionRegisterAsync();
             var result = await _client.GetKnowledgeClaimsAsync();
             MemoryClaims.Items.Clear();
             _selectedClaimId = null;
@@ -97,7 +98,7 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             MemoryClaims.Items.Clear();
-            MemoryClaims.Items.Add(new TextBlock { Text = ex.Message, TextWrapping = TextWrapping.Wrap });
+            MemoryClaims.Items.Add(new TextBlock { Text = NativeFaults.Message(ex), TextWrapping = TextWrapping.Wrap });
             MemoryDetailText.Text = "HAVEN could not load memory evidence.";
             MemoryActionStatus.Text = "";
         }
@@ -122,7 +123,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            MemoryDetailText.Text = ex.Message;
+            MemoryDetailText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -212,7 +213,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            MemoryActionStatus.Text = ex.Message;
+            MemoryActionStatus.Text = NativeFaults.Message(ex);
             SetMemoryActionButtons(!string.IsNullOrWhiteSpace(_selectedClaimId));
         }
     }

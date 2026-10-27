@@ -145,7 +145,7 @@ def test_native_memory_mutations_are_owner_bound_and_preserve_correction_lineage
             assert denied["ok"] is False
             assert "owner" in denied["error"]
 
-            declared = server.setup.declare_person(name="Gerron", role="owner")
+            declared = server.setup.declare_person(name="Sample Owner", role="owner")
             assert declared["ok"] is True
             server.claims.save(original)
             dispatcher = server.build_ipc_dispatcher()
@@ -164,7 +164,7 @@ def test_native_memory_mutations_are_owner_bound_and_preserve_correction_lineage
             assert corrected["ok"] is True
             replacement = corrected["result"]["claim"]
             assert replacement["source_refs"] == ["file:proposal"]
-            assert replacement["evidence_refs"] == ["claim:original", "user:gerron"]
+            assert replacement["evidence_refs"] == ["claim:original", "user:sample_owner"]
             assert replacement["supersedes"] == ["claim:original"]
             assert server.claims.get(original.claim_id).state is ClaimState.STALE
 
@@ -189,7 +189,7 @@ def test_native_memory_mutations_are_owner_bound_and_preserve_correction_lineage
             assert server.claims.get(replacement["claim_id"]).state is ClaimState.STALE
             audit = server.claims.list_audit(scope_id=household_id)
             assert [event.action.value for event in audit] == ["correct", "mark_stale", "forget"]
-            assert {event.actor_id for event in audit} == {"gerron"}
+            assert {event.actor_id for event in audit} == {"sample_owner"}
         finally:
             server.server_close()
 
@@ -204,7 +204,7 @@ def test_native_setup_household_authoring_round_trips_through_the_same_service()
                 request_message(
                     "req-add-person",
                     "setup.household.people.add",
-                    {"name": "Gerron Smith", "role": "owner"},
+                    {"name": "Sample Owner Smith", "role": "owner"},
                 )
             )
             assert added["ok"] is True
@@ -212,7 +212,7 @@ def test_native_setup_household_authoring_round_trips_through_the_same_service()
             person_id = next(
                 person["person_id"]
                 for person in added["result"]["setup"]["household"]["people"]
-                if person["name"] == "Gerron Smith"
+                if person["name"] == "Sample Owner Smith"
             )
 
             removed = dispatcher(
@@ -273,7 +273,7 @@ def test_native_setup_preferences_and_lifecycle_delegate_to_setup_service():
                 request_message(
                     "req-owner",
                     "setup.household.people.add",
-                    {"name": "Gerron Smith", "role": "owner"},
+                    {"name": "Sample Owner Smith", "role": "owner"},
                 )
             )
             assert owner["ok"] is True

@@ -35,7 +35,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            RoomsErrorText.Text = $"Could not load contexts: {ex.Message}";
+            RoomsErrorText.Text = $"Could not load contexts: {NativeFaults.Message(ex)}";
         }
     }
 
@@ -56,7 +56,7 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             PeopleStatusText.Text = "";
-            PeopleErrorText.Text = $"Could not load people: {ex.Message} Use Refresh to retry.";
+            PeopleErrorText.Text = $"Could not load people: {NativeFaults.Message(ex)} Use Refresh to retry.";
         }
     }
 
@@ -279,7 +279,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            PeopleErrorText.Text = ex.Message;
+            PeopleErrorText.Text = NativeFaults.Message(ex);
         }
     }
 

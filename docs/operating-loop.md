@@ -68,8 +68,16 @@ the action detail to distinguish a requested action from a completed effect.
 ### 7. Remember
 
 Projects, tasks, claims, rules, receipts, and installation state persist in the
-local installation. That lets the next loop begin with continuity rather than
-requiring you to repeat the context every time HAVEN restarts.
+local installation. The scoped [decision register](decision-memory.md) also
+retains questions, options, concise rationale, evidence revisions and review
+history. A proposed choice becomes accepted only through owner review.
+
+Before reusing a decision, HAVEN checks its current evidence and dependencies.
+When a choice affects documentation, revise the existing document and
+re-observe it before marking that work reconciled. Changed sources, challenged
+assumptions or document drift send the decision back for review. Remembered
+choices provide continuity; each consequential action still needs current
+authority and consent.
 
 ## A practical daily rhythm
 

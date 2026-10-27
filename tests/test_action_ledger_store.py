@@ -20,7 +20,7 @@ def _entry(entry_id="entry-1", *, household_id="haven-1", status=DecisionStatus.
         provider_id="local_filesystem",
         action="filesystem.create_folder",
         resource_id=None,
-        requested_by="person:gerron",
+        requested_by="person:sample_owner",
         justification="user requested via System > Files",
         parameters=(("path", "C:/Docs/New Folder"),),
         status=status,

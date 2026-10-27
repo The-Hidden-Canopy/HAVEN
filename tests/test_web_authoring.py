@@ -32,7 +32,7 @@ def _seed_installation(data_dir: Path) -> None:
                 "version": 1,
                 "rooms": [],
                 "people": [
-                    {"person_id": "gerron", "name": "Gerron", "role": "owner", "sources": []}
+                    {"person_id": "sample_owner", "name": "Sample Owner", "role": "owner", "sources": []}
                 ],
                 "contexts": [],
             }
@@ -127,11 +127,11 @@ def test_real_installation_can_author_rooms_people_and_contexts_over_http() -> N
 
             status, people = _request(port, "GET", "/api/people")
             assert status == 200
-            assert {person["person_id"] for person in people["people"]} == {"gerron", "ada"}
+            assert {person["person_id"] for person in people["people"]} == {"sample_owner", "ada"}
 
             status, body = _request(port, "DELETE", "/api/people/ada")
             assert status == 200
-            assert [person["person_id"] for person in body["setup"]["household"]["people"]] == ["gerron"]
+            assert [person["person_id"] for person in body["setup"]["household"]["people"]] == ["sample_owner"]
 
             status, body = _request(port, "DELETE", "/api/rooms/office")
             assert status == 200
@@ -201,7 +201,7 @@ def test_composer_applies_declaration_proposals_through_authoring_service() -> N
             # authoritative surface for the declaration.
             status, people = _request(port, "GET", "/api/people")
             assert status == 200
-            assert {row["person_id"] for row in people["people"]} == {"gerron", "bryan"}
+            assert {row["person_id"] for row in people["people"]} == {"sample_owner", "bryan"}
 
             context_text = "Add a context called Working late using input_boolean.working_late."
             status, body = _request(port, "POST", "/api/chat", {"text": context_text})
@@ -344,9 +344,9 @@ def test_automation_authoring_is_proposed_edited_approved_and_revoked() -> None:
             assert status == 200
             assert body["ok"] is True
             assert body["automation"]["status"] == "approved"
-            assert body["automation"]["approved_by"] == "gerron"
+            assert body["automation"]["approved_by"] == "sample_owner"
 
-            status, body = _request(port, "DELETE", "/api/people/gerron")
+            status, body = _request(port, "DELETE", "/api/people/sample_owner")
             assert status == 400
             assert "revoke approved automations" in body["error"]
 
@@ -359,7 +359,7 @@ def test_automation_authoring_is_proposed_edited_approved_and_revoked() -> None:
             assert status == 200
             assert body["ok"] is True
             assert body["automation"]["status"] == "revoked"
-            assert body["automation"]["revoked_by"] == "gerron"
+            assert body["automation"]["revoked_by"] == "sample_owner"
             assert any(row["event_type"] == "rule_revoked" for row in body["state"]["activity"])
 
             status, body = _request(

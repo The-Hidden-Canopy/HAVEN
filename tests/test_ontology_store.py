@@ -76,7 +76,7 @@ def test_edges_from_finds_outgoing_edges_by_subject():
     with tempfile.TemporaryDirectory() as tmp:
         store = OntologyStore(Path(tmp) / "ontology.db")
         store.save(_assertion("a1", subject="resource:proposal-v7", predicate=predicates.BELONGS_TO, object="project:nasa-livei"))
-        store.save(_assertion("a2", subject="resource:proposal-v7", predicate=predicates.CREATED_BY, object="person:gerron"))
+        store.save(_assertion("a2", subject="resource:proposal-v7", predicate=predicates.CREATED_BY, object="person:sample_owner"))
         store.save(_assertion("a3", subject="resource:other-doc", predicate=predicates.BELONGS_TO, object="project:nasa-livei"))
 
         edges = store.edges_from("resource:proposal-v7")

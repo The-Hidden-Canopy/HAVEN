@@ -25,7 +25,7 @@ def _record(
         capabilities=("filesystem.read",),
         observed_at=NOW,
         content_hash="deadbeef",
-        metadata=(("author", "gerron"),),
+        metadata=(("author", "sample_owner"),),
     )
 
 

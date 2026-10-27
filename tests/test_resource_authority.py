@@ -24,7 +24,7 @@ def _request(
     *,
     action="filesystem.create_folder",
     household_id="haven-1",
-    requested_by="person:gerron",
+    requested_by="person:sample_owner",
     resource_id=None,
     justification="user requested via System > Files",
     confirmation_token=None,
@@ -43,7 +43,7 @@ def _request(
     )
 
 
-def _principal(*, actor_id="person:gerron", household_id="haven-1", role_tier=RoleTier.MEMBER) -> Principal:
+def _principal(*, actor_id="person:sample_owner", household_id="haven-1", role_tier=RoleTier.MEMBER) -> Principal:
     return Principal(actor_id=actor_id, household_id=household_id, role_tier=role_tier)
 
 
@@ -65,7 +65,7 @@ def test_cross_household_request_is_denied():
 
 def test_actor_mismatch_is_denied():
     decision = _engine().decide(
-        _request(requested_by="person:gerron"), principal=_principal(actor_id="person:someone-else"), now=NOW
+        _request(requested_by="person:sample_owner"), principal=_principal(actor_id="person:someone-else"), now=NOW
     )
     assert decision.status == DecisionStatus.DENY
 
@@ -103,7 +103,7 @@ def test_confirmation_required_action_with_a_valid_token_is_allowed():
         household_id="haven-1",
         rule_id="req-1",
         request_id="req-1",
-        confirmed_by="person:gerron",
+        confirmed_by="person:sample_owner",
         issued_at=NOW,
         expires_at=NOW + timedelta(minutes=5),
     )
@@ -119,7 +119,7 @@ def test_confirmation_required_action_with_an_expired_token_asks_again():
         household_id="haven-1",
         rule_id="req-1",
         request_id="req-1",
-        confirmed_by="person:gerron",
+        confirmed_by="person:sample_owner",
         issued_at=NOW - timedelta(minutes=10),
         expires_at=NOW - timedelta(minutes=5),
     )
@@ -135,7 +135,7 @@ def test_a_reused_confirmation_is_denied():
         household_id="haven-1",
         rule_id="req-1",
         request_id="req-1",
-        confirmed_by="person:gerron",
+        confirmed_by="person:sample_owner",
         issued_at=NOW,
         expires_at=NOW + timedelta(minutes=5),
     )
@@ -154,7 +154,7 @@ def test_a_token_bound_to_a_different_request_does_not_satisfy_this_one():
         household_id="haven-1",
         rule_id="some-other-request",
         request_id="some-other-request",
-        confirmed_by="person:gerron",
+        confirmed_by="person:sample_owner",
         issued_at=NOW,
         expires_at=NOW + timedelta(minutes=5),
     )

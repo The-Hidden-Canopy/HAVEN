@@ -28,7 +28,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            DiscoveryErrorText.Text = $"Could not load discovered devices: {ex.Message}";
+            DiscoveryErrorText.Text = $"Could not load discovered devices: {NativeFaults.Message(ex)}";
         }
     }
 
@@ -50,7 +50,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            DiscoveryErrorText.Text = $"Scan failed: {ex.Message}";
+            DiscoveryErrorText.Text = $"Scan failed: {NativeFaults.Message(ex)}";
         }
         finally
         {
@@ -300,7 +300,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            DiscoveryErrorText.Text = ex.Message;
+            DiscoveryErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -331,7 +331,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            DiscoveryErrorText.Text = ex.Message;
+            DiscoveryErrorText.Text = NativeFaults.Message(ex);
         }
     }
 }

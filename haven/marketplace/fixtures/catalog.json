@@ -1,0 +1,48 @@
+{
+  "catalog_version": "local-welcome-1",
+  "expires_at": "2099-01-01T00:00:00Z",
+  "issued_at": "2026-10-26T00:00:00Z",
+  "items": [
+    {
+      "categories": [
+        "local_content"
+      ],
+      "display_name": "HAVEN Welcome",
+      "distribution": [
+        {
+          "kind": "local_content",
+          "platforms": [
+            "any"
+          ],
+          "release_id": "1.0.0",
+          "sha256": "939f378cb6a54393d694d1c2551b020c539a9c8f12e5d5e57447989f01b50e54",
+          "size_bytes": 305
+        },
+        {
+          "kind": "local_content",
+          "platforms": [
+            "any"
+          ],
+          "release_id": "1.1.0",
+          "sha256": "df8d7b11bc9317700226ecf3a74707c23831489412a67e71ee24e38810d4e45a",
+          "size_bytes": 317
+        }
+      ],
+      "execution": "content_only",
+      "kind": "app",
+      "license": "Apache-2.0",
+      "platforms": [
+        "any"
+      ],
+      "product_id": "haven-welcome",
+      "release_state": "available"
+    }
+  ],
+  "publisher": "The Hidden Canopy LLC",
+  "schema_version": "haven-marketplace-catalog.v1",
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "rfc8032-local-fixture-only",
+    "value": "R0+n3nssV/cQ+ugHVRMJO1khIDjOEvn4WmNFEDCoH/Gp4xo0WA5DN0m+Xtvy2ZdcqD+/CTLQqAhi6x0Sg3uxBA=="
+  }
+}

@@ -27,6 +27,7 @@ import os
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 from typing import Callable
 
 from ..core.domain import RuleStatus
@@ -44,7 +45,7 @@ from .computer_provider import (
     load_computer_provider_config,
     save_computer_provider_config,
 )
-from .installation_files import installation_file_names
+from .installation_files import installation_file_names, installation_directory_names
 from .provider_install import (
     find_installed_provider,
     is_real_installation,
@@ -218,7 +219,7 @@ class HouseholdDeclarations:
 
 
 def _derived_declared_id(text: str) -> str:
-    """`text` lowercased, non-alphanumerics as `_`, runs collapsed: "Gerron Smith" -> "gerron_smith"."""
+    """`text` lowercased, non-alphanumerics as `_`, runs collapsed: "Sample Owner" -> "sample_owner"."""
 
     collapsed: list[str] = []
     for char in text.lower():
@@ -740,11 +741,21 @@ class SetupService:
             resolved = Path(path).expanduser().resolve()
             if resolved.is_file():
                 return {"ok": False, "error": f"data dir exists as a file: {resolved}"}
+        current_dir = self._config_dir()
+        moving = resolved != current_dir.resolve()
+        if moving and resolved.exists():
+            try:
+                occupied = any((resolved / name).exists() for name in installation_file_names(resolved))
+                occupied = occupied or any((resolved / name).exists() for name in (*installation_directory_names(), "backups"))
+            except (ValueError, OSError):
+                return {"ok": False, "error": "the target installation directory cannot be safely inspected"}
+            if occupied:
+                return {"ok": False, "error": "the target contains existing HAVEN state; choose an empty installation directory"}
         try:
             resolved.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             return {"ok": False, "error": f"could not create data dir {resolved}: {exc}"}
-        probe = resolved / ".haven-write-probe"
+        probe = resolved / f".haven-write-probe-{uuid4().hex}"
         try:
             probe.write_text("ok", encoding="utf-8")
             probe.unlink()
@@ -759,8 +770,6 @@ class SetupService:
         # all move to the new root, and the store rebinds to the moved
         # haven.json so every path derived from store.path.parent is in the
         # new root immediately.
-        current_dir = self._config_dir()
-        moving = resolved != current_dir.resolve()
         reserved = False
         if moving and self._before_data_dir_changed is not None:
             try:
@@ -784,13 +793,20 @@ class SetupService:
                 pass
 
         if moving:
-            names = installation_file_names(current_dir) + ("backups",)
+            # Validate nested content before moving anything, then move each
+            # installation directory as one unit rather than splitting it.
+            try:
+                names = tuple(name for name in installation_file_names(current_dir) if "/" not in name)
+            except (ValueError, OSError):
+                abort_reserved_change()
+                return {"ok": False, "error": "installation content cannot be safely moved"}
+            names += installation_directory_names() + ("backups",)
             for name in names:
                 source = current_dir / name
                 if not source.exists():
                     continue
                 try:
-                    os.replace(source, resolved / name)
+                    os.rename(source, resolved / name)
                 except OSError as exc:
                     abort_reserved_change()
                     return {"ok": False, "error": f"could not move {name} to {resolved}: {exc}"}
@@ -1052,7 +1068,7 @@ class SetupService:
             # `approved_by` must name a real person: a real household with
             # nobody declared yet has no one to attribute enrollment to, and
             # falling back to a fixture identity is exactly the silent
-            # gerron-as-default this refuses.
+            # sample_owner-as-default this refuses.
             return {"ok": False, "error": "declare a household owner before enrolling devices"}
         candidate = self._lookup_candidate(candidate_id)
         if candidate is None:
@@ -1440,7 +1456,7 @@ class SetupService:
         later one. `entity_id` and `room_id` are a pair: give both or
         neither.
 
-        The person_id is derived from the name ("Gerron Smith" -> "gerron_smith").
+        The person_id is derived from the name ("Sample Owner" -> "sample_owner").
         Re-declaring the same (person_id, entity_id) pair is idempotent; the
         same person_id under a different name is a conflict, because the
         declaration says who the person is, not just how to spell the id.

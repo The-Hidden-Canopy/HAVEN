@@ -293,6 +293,12 @@ def test_native_shell_starts_the_winui_client_with_named_pipe_credentials():
             assert processes[0].stdin.closed is True
             assert shell.server_thread is None
             assert shell.server.socket.fileno() == -1
+            # Detaching HTTP must not close services behind the native pipe.
+            assert shell.server.local_workflows._closed is False
+            assert shell.server.local_workflows.feature_catalog({})["ok"] is True
+            assert shell.server.local_workflows.products_view({})["ok"] is True
+            assert processes[0].kwargs["env"]["HAVEN_DATA_DIR"] == str(Path(tmp) / "data")
+            assert processes[0].kwargs["env"]["HAVEN_DESKTOP_DATA_DIR"] == str(Path(tmp) / "data" / "desktop")
             assert not any(argument.startswith("--app=") for argument in args)
         finally:
             shell.close()

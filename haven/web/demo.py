@@ -5,7 +5,7 @@ controller -- chat, permissions, voice, scheduling, state projection,
 persistence -- shared by every real household. This module adds exactly
 what the local demo needs on top of it: a mutable in-memory house, its own
 registry of five fixture devices, a scripted three-rule scenario, and the
-`gerron` fixture identity. `DemoDirector` is the thin subclass; nothing in
+`sample_owner` fixture identity. `DemoDirector` is the thin subclass; nothing in
 `HavenApplication` imports anything from this file.
 """
 
@@ -57,7 +57,7 @@ from .history_persist import HistoryStore
 from .rules_persist import RulesPersistence
 
 HOUSEHOLD_ID = "household-demo"
-PERSON_ID = "gerron"
+PERSON_ID = "sample_owner"
 PROVIDER_ID = "simulated_house"
 
 DRIVEWAY_CAM_ID = "driveway_cam"
@@ -331,7 +331,7 @@ class DemoDirector(HavenApplication):
 
     Adds exactly three things `HavenApplication` doesn't have: a mutable
     in-memory house (and its own five-device registry/execution adapter),
-    the `gerron` fixture identity, and the garage/camera/office-light demo
+    the `sample_owner` fixture identity, and the garage/camera/office-light demo
     scenario. Everything else -- chat, permissions, voice, scheduling, state
     projection -- is inherited unchanged.
     """

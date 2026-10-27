@@ -52,6 +52,7 @@ class NativeIpcHost:
                 pipe_name=self.pipe_name,
                 auth_token=self.auth_token,
                 handler=self.server.build_ipc_dispatcher(),
+                fault_journal=lambda: getattr(self.server, "faults", None),
             ).start()
         if self._events_pipe is None:
             publisher = getattr(self.server, "events", None)

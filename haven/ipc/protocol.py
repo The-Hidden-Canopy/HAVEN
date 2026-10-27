@@ -132,6 +132,11 @@ def response_message(
         message["result"] = result
     else:
         message["error"] = error or "HAVEN IPC request failed"
+    if not ok:
+        from ..faults import public_failure
+        failure = public_failure({"ok": False, "error": message["error"]}, "ipc.request", correlation_id=request_id)
+        message["error"] = failure["error"]
+        message["fault"] = failure["fault"]
     return _validate_message(message)
 
 

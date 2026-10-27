@@ -44,7 +44,7 @@ def _spec(*, household_id: str = "household-a") -> AutomationSpec:
             parameters={"resource_id": "file-1", "destination": "/archive"},
         ),
         source_text="archive the downloads folder every night at 9pm",
-        created_by="gerron",
+        created_by="sample_owner",
     )
 
 

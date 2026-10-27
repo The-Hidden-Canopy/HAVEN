@@ -59,6 +59,9 @@ from .service_manager import StartupManager
 from .folder_picker import choose_folder
 from .setup_config import SetupConfigStore, default_data_dir
 from .setup_service import SetupService
+from .local_workflows import LocalWorkflows
+from ..faults import FaultJournal, describe, public_failure
+from ..decisions.attention import DecisionSource
 from .computer_actions import ComputerActionService
 from .discovery_service import DiscoveryService, default_discovery_bundle
 from ..external_agents import (
@@ -158,7 +161,15 @@ def _bind_request_correlation(handler):
             else new_correlation_id()
         )
         with bind_correlation(correlation_id):
-            return handler(self, *args, **kwargs)
+            try:
+                return handler(self, *args, **kwargs)
+            except (BrokenPipeError, ConnectionResetError):
+                return None
+            except Exception as exc:
+                error = "outcome_uncertain" if self.command == "POST" else "operation_failed"
+                payload = public_failure({"ok": False, "error": error, "detail": str(exc)}, self.path.split("?", 1)[0],
+                                         journal=self.server.faults, exception=exc, correlation_id=correlation_id)
+                self._send_json(500, payload)
 
     return wrapped
 
@@ -408,6 +419,7 @@ class HavenWebServer(ThreadingHTTPServer):
             claims=self.claims,
             clock=scope_clock,
         )
+        self._bind_local_workflows(Path(resolved_data_dir))
         # Projects + tasks (milestone D): scope-keyed life domains hosted by
         # application services, projected into the resource/ontology
         # substrate so search and relationships see them.
@@ -589,7 +601,7 @@ class HavenWebServer(ThreadingHTTPServer):
             message_event_listener=self.email_automation_events.new_messages,
             clock=scope_clock,
         )
-        # Today reads calendar commitments through the comms façade.
+        # Today reads calendar commitments through the comms faÃ§ade.
         self.today._comms = self.comms  # noqa: SLF001 -- same-package composition seam
         self.setup = SetupService(
             store=self.setup_store,
@@ -712,6 +724,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 ProjectSource(projects_store=self.projects_store, tasks_store=self.tasks_store, identity=self.identity),
                 KnowledgeSource(knowledge=self.knowledge, identity=self.identity),
                 ProviderSource(credentials=self.credentials, identity=self.identity),
+                DecisionSource(decisions=self.decisions),
             ],
             identity=self.identity,
             state_path=Path(resolved_data_dir) / "needs_you.json",
@@ -732,7 +745,7 @@ class HavenWebServer(ThreadingHTTPServer):
             port_getter=lambda: self.server_address[1],
         )
         # Real-mode boot: let the setup discovery scan list live Home
-        # Assistant entities. Demo directors carry no source (None) — the
+        # Assistant entities. Demo directors carry no source (None) â€” the
         # scan then lists only local demo candidates.
         if getattr(self.director, "ha_states_source", None) is not None:
             self.setup.attach_ha_states_source(self.director.ha_states_source)
@@ -759,6 +772,11 @@ class HavenWebServer(ThreadingHTTPServer):
 
     def _on_model_job_transition(self, job) -> None:
         state = getattr(job.state, "value", job.state)
+        if state == "failed" and job.error and hasattr(self, "faults"):
+            seen = getattr(self, "_reported_model_jobs", set())
+            if job.job_id not in seen:
+                self.faults.record(describe("download_failed", "models.download", correlation_id=job.error_correlation_id), job.error)
+                self._reported_model_jobs = (seen | {job.job_id}) if len(seen) < 128 else {job.job_id}
         self._emit_event("model.job.progress", job_id=job.job_id, state=state)
 
     def _on_provider_health_change(self, **kwargs):
@@ -2788,6 +2806,8 @@ class HavenWebServer(ThreadingHTTPServer):
                 "models.job.cancel": _models_job_cancel,
                 "system.diagnostics": lambda _params: self.diagnostics.collect(),
                 "system.diagnostics.export": lambda _params: self.diagnostics.export(),
+                "system.receipts": lambda _params: self.diagnostics.receipts(),
+                "system.errors": lambda _params: {"ok": True, "schema_version": 1, "incidents": self.faults.summary()},
                 "system.probe": lambda _params: self.diagnostics.probe_provider(),
                 "system.backups": lambda _params: {"ok": True, "backups": self.backups.list()["backups"]},
                 "system.backup.create": lambda _params: {"ok": True, "backup": self.backups.create()},
@@ -2872,6 +2892,10 @@ class HavenWebServer(ThreadingHTTPServer):
         # surface (`/api/external-agents/*`) -- one validation implementation
         # behind both adapters (spec page 17: adapters never fork validation).
         handlers.update(self._external_agents_handlers())
+        # Resolve the current service on every call. An IPC dispatcher can
+        # outlive a setup rebuild and must never retain the old data root.
+        for name in self.local_workflows.handlers():
+            handlers[name] = lambda params, name=name: self.local_workflows.handlers()[name](params)
 
         def _with_event(event_name: str, handler):
             def _wrapped(params: dict):
@@ -2890,7 +2914,16 @@ class HavenWebServer(ThreadingHTTPServer):
         for _method, _event_name in _IPC_METHOD_EVENTS.items():
             if _method in handlers:
                 handlers[_method] = _with_event(_event_name, handlers[_method])
-        return IpcDispatcher(handlers)
+        return IpcDispatcher(handlers, fault_journal=lambda: self.faults)
+
+    def _bind_local_workflows(self, data_dir: Path) -> None:
+        previous = getattr(self, "local_workflows", None)
+        if previous is not None:
+            previous.close()
+        self.faults = FaultJournal(data_dir / "diagnostics")
+        self.local_workflows = LocalWorkflows(self, data_dir)
+        self.decisions = self.local_workflows.decisions
+        self.director.set_decision_context_provider(self.local_workflows.agent_context)
 
     def _build_director(self) -> HavenApplication:
         # Keep rebuilds on the same explicit mode: normal boot remains a real
@@ -2921,6 +2954,7 @@ class HavenWebServer(ThreadingHTTPServer):
         """
 
         old = self.director
+        self.local_workflows.close()
         # Stopped and flushed before the new director builds: `_build_director`
         # opens its own connection to the same history.db and loads from it
         # immediately, so old's history must be fully durable and its
@@ -2979,6 +3013,7 @@ class HavenWebServer(ThreadingHTTPServer):
             scope_store=self.scope_store,
             clock=self._director_clock or (lambda: datetime.now(timezone.utc)),
         )
+        self._bind_local_workflows(data_dir)
         self.projects_store = ProjectStore(data_dir / "projects.db")
         self.tasks_store = TaskStore(data_dir / "tasks.db")
         self.projects_service = ProjectService(
@@ -3038,6 +3073,7 @@ class HavenWebServer(ThreadingHTTPServer):
                 ProjectSource(projects_store=self.projects_store, tasks_store=self.tasks_store, identity=self.identity),
                 KnowledgeSource(knowledge=self.knowledge, identity=self.identity),
                 ProviderSource(credentials=self.credentials, identity=self.identity),
+                DecisionSource(decisions=self.decisions),
             ],
             identity=self.identity,
             state_path=data_dir / "needs_you.json",
@@ -3050,7 +3086,12 @@ class HavenWebServer(ThreadingHTTPServer):
         new.start_scheduler()
         new.start_voice()
 
+    def close_http_listener(self) -> None:
+        """Detach the compatibility socket while native services stay alive."""
+        ThreadingHTTPServer.server_close(self)
+
     def server_close(self) -> None:
+        self.local_workflows.close()
         try:
             self.resource_automations.close()
         except Exception:
@@ -3249,6 +3290,19 @@ class _Handler(BaseHTTPRequestHandler):
                     release_state=query.get("release_state", [None])[0],
                 ),
             )
+        elif path in ("/api/decisions", "/api/decisions/context", "/api/features", "/api/marketplace/products"):
+            method = {"/api/decisions": "decisions.snapshot", "/api/decisions/context": "decisions.context",
+                      "/api/features": "features.list", "/api/marketplace/products": "marketplace.products"}[path]
+            query = parse_qs(urlsplit(self.path).query)
+            params = {key: values[0] for key, values in query.items()}
+            if "limit" in params:
+                try:
+                    params["limit"] = int(params["limit"])
+                except ValueError:
+                    self._send_json(400, {"ok": False, "error": "invalid limit"})
+                    return
+            result = self.server.local_workflows.handlers()[method](params)
+            self._send_json(200 if result.get("ok") else 400, result)
         elif path == "/api/plugins":
             self._send_json(200, plugins_current_payload(self.plugins))
         elif path == "/api/setup":
@@ -3257,6 +3311,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, self.setup_service.list_provider_packages())
         elif path == "/api/system/diagnostics":
             self._send_json(200, self.diagnostics.collect())
+        elif path == "/api/system/receipts":
+            result = self.diagnostics.receipts()
+            self._send_json(200 if result.get("ok") else 403, result)
         elif path == "/api/system/diagnostics/export":
             self._send_json(200, self.diagnostics.export())
         elif path == "/api/system/backups":
@@ -3489,7 +3546,27 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(200, assign_payload(self.models, role, body.get("id")))
             return
+        if path.startswith("/api/decisions/") or path == "/api/features/action" or path.startswith("/api/marketplace/products/"):
+            body = self._read_json()
+            if body is None:
+                return
+            if path.startswith("/api/decisions/"):
+                method = "decisions." + path.rsplit("/", 1)[1]
+            elif path == "/api/features/action":
+                method = "features.action"
+            else:
+                method = "marketplace.product"
+                body["action"] = path.rsplit("/", 1)[1]
+            handler = self.server.local_workflows.handlers().get(method)
+            if handler is None:
+                self._send_json(404, {"ok": False, "error": "unknown workflow action"})
+                return
+            result = handler(body)
+            self._send_json(200 if result.get("ok") else 400, result)
+            return
         if path == "/api/marketplace/refresh":
+            if self._read_json(optional=True) is None:
+                return
             self._send_json(200, marketplace_refresh_payload(self.server.marketplace))
             return
         if path == "/api/models" or path.startswith("/api/models/"):
@@ -4196,6 +4273,11 @@ class _Handler(BaseHTTPRequestHandler):
         return models_payload(self.models)
 
     def _handle_plugins_post(self, path: str) -> None:
+        # Finish reading the declared request before closing an HTTP/1.0
+        # response. Closing with unread POST bytes can reset the connection
+        # on Windows, hiding an otherwise valid catalog result.
+        if self._read_json(optional=True) is None:
+            return
         if path == "/api/plugins/refresh":
             try:
                 self._send_json(200, plugins_refresh_payload(self.plugins))
@@ -4257,6 +4339,7 @@ class _Handler(BaseHTTPRequestHandler):
         return body
 
     def _send_json(self, status: int, payload: dict) -> None:
+        payload = public_failure(payload, self.path.split("?", 1)[0], journal=self.server.faults, status=status, correlation_id=current_correlation())
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")

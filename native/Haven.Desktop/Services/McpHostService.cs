@@ -59,7 +59,7 @@ public sealed class McpHostService : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            StatusText = $"Could not start: {ex.Message}";
+            StatusText = $"Could not start: {NativeFaults.Message(ex)}";
         }
     }
 
@@ -126,7 +126,19 @@ public sealed class McpHostService : IAsyncDisposable
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsync("{\"error\":\"a bearer credential is required\"}");
+            await context.Response.WriteAsync(JsonSerializer.Serialize(new
+            {
+                ok = false, error = "unauthenticated",
+                fault = new
+                {
+                    schema_version = 1, code = "HAVEN.AUTHORITY.UNAUTHENTICATED", subsystem = "authority",
+                    operation = "authority.authenticate", severity = "error", retryable = false,
+                    message = "An authenticated session or connection credential is required.",
+                    recovery_action = "Use the current connection's credential; do not create a broader grant.",
+                    correlation_id = Guid.NewGuid().ToString("N"), evidence = new { confirmed = "operation_failed" },
+                    probable_causes = new[] { new { explanation = "The client may have omitted its credential.", confidence = "possible" } }
+                }
+            }));
             return;
         }
         context.Items["haven.credential"] = credential;
@@ -176,14 +188,17 @@ public sealed class HavenMcpCoreBridge
         object? arguments,
         CancellationToken cancellationToken)
     {
+        // Reconnect reuses the request identity, so Core can reconcile an
+        // admitted effect whose response was lost rather than repeating it.
+        var externalRequestId = $"mcp-{Guid.NewGuid():N}";
         try
         {
-            return await CallOnceAsync(credential, subject, subjectLabel, sessionId, tool, arguments, cancellationToken);
+            return await CallOnceAsync(credential, subject, subjectLabel, sessionId, tool, arguments, externalRequestId, cancellationToken);
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or EndOfStreamException)
         {
             await ResetClientAsync();
-            return await CallOnceAsync(credential, subject, subjectLabel, sessionId, tool, arguments, cancellationToken);
+            return await CallOnceAsync(credential, subject, subjectLabel, sessionId, tool, arguments, externalRequestId, cancellationToken);
         }
     }
 
@@ -194,13 +209,14 @@ public sealed class HavenMcpCoreBridge
         string? sessionId,
         string tool,
         object? arguments,
+        string externalRequestId,
         CancellationToken cancellationToken)
     {
         var client = await GetClientAsync(cancellationToken);
         return await client.CallExternalAgentToolAsync(
             credential,
             tool,
-            $"mcp-{Guid.NewGuid():N}",
+            externalRequestId,
             subject,
             subjectLabel,
             sessionId,

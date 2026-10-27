@@ -148,7 +148,7 @@ public sealed partial class MainWindow
                     }
                     catch (Exception ex)
                     {
-                        ComputerErrorText.Text = ex.Message;
+                        ComputerErrorText.Text = NativeFaults.Message(ex);
                     }
                 };
                 header.Children.Add(toggle);
@@ -230,7 +230,7 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             ComputerStatusText.Text = "";
-            ComputerErrorText.Text = $"Could not load computer state: {ex.Message} Use Refresh to retry.";
+            ComputerErrorText.Text = $"Could not load computer state: {NativeFaults.Message(ex)} Use Refresh to retry.";
         }
     }
 
@@ -279,7 +279,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ComputerErrorText.Text = $"Could not load files: {ex.Message} Use Refresh to retry.";
+            ComputerErrorText.Text = $"Could not load files: {NativeFaults.Message(ex)} Use Refresh to retry.";
         }
     }
 
@@ -421,7 +421,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ComputerErrorText.Text = ex.Message;
+            ComputerErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -506,7 +506,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ComputerErrorText.Text = ex.Message;
+            ComputerErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -546,7 +546,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ComputerErrorText.Text = ex.Message;
+            ComputerErrorText.Text = NativeFaults.Message(ex);
         }
     }
 

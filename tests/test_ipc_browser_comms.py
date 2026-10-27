@@ -53,7 +53,7 @@ def _dispatch(instance, method: str, params: dict) -> dict:
 
 def test_browser_full_lifecycle_over_ipc(server) -> None:
     instance, commands = server
-    instance.setup.declare_person(name="Gerron Smith", role="owner")
+    instance.setup.declare_person(name="Sample Owner Smith", role="owner")
 
     empty = _dispatch(instance, "browser.tabs.list", {})["result"]
     assert empty["status"]["connected_browsers"] == ["chrome"]
@@ -109,7 +109,7 @@ def test_browser_full_lifecycle_over_ipc(server) -> None:
 
 def test_calendar_lifecycle_proposal_attachment_and_verified_write(server, tmp_path) -> None:
     instance, _commands = server
-    instance.setup.declare_person(name="Gerron Smith", role="owner")
+    instance.setup.declare_person(name="Sample Owner Smith", role="owner")
     ics = tmp_path / "cal.ics"
     ics.write_text(ICS, encoding="utf-8")
     added = _dispatch(instance, "calendar.sources.add", {"path": str(ics)})["result"]
@@ -197,7 +197,7 @@ def test_email_unconfigured_then_local_maildir(server, tmp_path) -> None:
     assert "configured" in messages["error"]
 
     (tmp_path / "msg-1.eml").write_text(
-        "Message-ID: <m1@example.org>\nFrom: ada@example.org\nTo: gerron@example.org\n"
+        "Message-ID: <m1@example.org>\nFrom: ada@example.org\nTo: sample_owner@example.org\n"
         "Subject: Model results\nDate: Wed, 24 Sep 2026 08:30:00 +0000\n\nBody text here.\n",
         encoding="utf-8",
     )
@@ -245,7 +245,7 @@ def test_email_unconfigured_then_local_maildir(server, tmp_path) -> None:
 
 def test_credentialed_email_configuration_uses_store_and_governed_send(server, monkeypatch) -> None:
     instance, _commands = server
-    instance.setup.declare_person(name="Gerron Smith", role="owner")
+    instance.setup.declare_person(name="Sample Owner Smith", role="owner")
 
     configured = _dispatch(
         instance,
@@ -253,14 +253,14 @@ def test_credentialed_email_configuration_uses_store_and_governed_send(server, m
         {
             "imap_host": "imap.example.org",
             "smtp_host": "smtp.example.org",
-            "username": "gerron@example.org",
+            "username": "sample_owner@example.org",
             "secret": "mail-secret",
         },
     )["result"]
     assert configured == {
         "ok": True,
         "provider": "haven.email.imap_smtp",
-        "username": "gerron@example.org",
+        "username": "sample_owner@example.org",
     }
     metadata = instance.credentials.list_metadata(provider="haven.email.imap_smtp")
     assert len(metadata) == 1

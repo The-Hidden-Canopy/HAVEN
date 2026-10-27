@@ -50,7 +50,7 @@ def test_chain_sections_for_an_approved_garage_close(director) -> None:
     assert request["target_device_id"] == "garage_door"
     assert request["origin"] == "rule"
     assert request["rule_id"] == director.garage_rule_id
-    assert request["actor"] == "gerron"
+    assert request["actor"] == "sample_owner"
     assert request["confirmation_present"] is True
     assert request["requested_at"] == FIXED_NOW.isoformat()
     assert request["requested_seconds_ago"] == 0.0

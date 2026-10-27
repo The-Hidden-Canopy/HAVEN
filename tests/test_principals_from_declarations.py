@@ -3,7 +3,7 @@
 HAVEN acts as the household's declared people: a declared person's id is the
 actor on governed flows, and the declared owner (or the first declared person,
 in a one-person household) supplies the approving tier. The demo household
-declares gerron by construction, so a bare director keeps the bootstrap
+declares sample_owner by construction, so a bare director keeps the bootstrap
 identity.
 """
 
@@ -180,9 +180,9 @@ def test_old_sidecar_without_role_keys_loads_as_member() -> None:
                     "version": 1,
                     "people": [
                         {
-                            "person_id": "gerron",
-                            "name": "Gerron",
-                            "sources": [{"entity_id": "binary_sensor.gerron_office", "room_id": "office"}],
+                            "person_id": "sample_owner",
+                            "name": "Sample Owner",
+                            "sources": [{"entity_id": "binary_sensor.sample_owner_office", "room_id": "office"}],
                         }
                     ],
                     "contexts": [],
@@ -212,16 +212,16 @@ def test_injected_principals_are_the_actor_on_a_direct_command() -> None:
     _direct_light_off(director)
     action = next(a for a in director.store.state.actions if a.status.value == "executed")
     assert action.request.requested_by == "ada"
-    assert action.request.requested_by != "gerron"
+    assert action.request.requested_by != "sample_owner"
 
 
 def test_default_director_keeps_the_demo_identity() -> None:
     director = DemoDirector(clock=lambda: NOW)
-    assert director.resident.actor_id == "gerron"
-    assert director.owner.actor_id == "gerron"
+    assert director.resident.actor_id == "sample_owner"
+    assert director.owner.actor_id == "sample_owner"
     _direct_light_off(director)
     action = next(a for a in director.store.state.actions if a.status.value == "executed")
-    assert action.request.requested_by == "gerron"
+    assert action.request.requested_by == "sample_owner"
 
 
 # -- factory acceptance: HAVEN acts as the declared person ------------------------
@@ -257,14 +257,14 @@ def test_factory_derives_the_actor_from_the_declared_owner() -> None:
             assert body["ok"] is True
             # HAVEN acted as the declared person, not the demo bootstrap identity.
             assert body["chain"]["request"]["actor"] == "ada_lovelace"
-            assert body["chain"]["request"]["actor"] != "gerron"
+            assert body["chain"]["request"]["actor"] != "sample_owner"
 
 
 def test_factory_refuses_governed_actions_without_a_declared_owner() -> None:
     """A real household with nobody declared must never act as a fixture identity.
 
     Before this behavior existed, an undeclared real household silently
-    executed every action as `gerron` -- the demo fixture's person. Now
+    executed every action as `sample_owner` -- the demo fixture's person. Now
     `has_declared_owner` is false in exactly this state, and
     `DemoDirector.device_command` refuses instead of falling back.
     """

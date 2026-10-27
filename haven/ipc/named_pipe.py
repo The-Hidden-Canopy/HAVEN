@@ -132,6 +132,7 @@ class NamedPipeServer:
         pipe_name: str,
         auth_token: str,
         handler: Callable[[Mapping[str, Any]], Mapping[str, Any] | None],
+        fault_journal=None,
     ) -> None:
         _require_windows()
         if not isinstance(pipe_name, str) or not pipe_name.startswith(_PIPE_PREFIX):
@@ -143,6 +144,7 @@ class NamedPipeServer:
         self.pipe_name = pipe_name
         self._auth_token = auth_token
         self._handler = handler
+        self._fault_journal = fault_journal
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._handles: set[int] = set()
@@ -252,10 +254,15 @@ class NamedPipeServer:
                     params["token"], self._auth_token
                 ):
                     try:
-                        self._write_message(
-                            handle,
-                            response_message(request_id, ok=False, error="native IPC authentication failed"),
-                        )
+                        response = response_message(request_id, ok=False, error="native IPC authentication failed")
+                        if self._fault_journal is not None:
+                            try:
+                                journal = self._fault_journal() if callable(self._fault_journal) else self._fault_journal
+                                if journal is not None:
+                                    journal.record(response["fault"], "Native IPC authentication failed; token material omitted.")
+                            except (OSError, ValueError, KeyError, TypeError):
+                                pass  # Diagnostic storage cannot bypass authentication rejection.
+                        self._write_message(handle, response)
                     except (EOFError, OSError):
                         # A client may disconnect immediately after sending a
                         # bad token.  That is a normal transport race, not an

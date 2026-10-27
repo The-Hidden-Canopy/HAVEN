@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.dotnet-cli/
 .venv/
 venv/
 dist/
@@ -16,6 +17,8 @@ native/Haven.Core.Client/bin/
 native/Haven.Core.Client/obj/
 native/Haven.Desktop.Tests/bin/
 native/Haven.Desktop.Tests/obj/
+native/Haven.Launcher/bin/
+native/Haven.Launcher/obj/
 # Screenshot/publish snapshots are generated output, not source.
 native/Haven.Desktop/bin-shot/
 # Root-level one-off repair scripts are local scratch, not product code.
@@ -42,11 +45,6 @@ scripts/*.wav
 verification.json
 TASKS.md
 bin-verify*/
-TASKS.md
-TASKS.md
-<<<<<<< Updated upstream
-/.codex-remote-attachments
-/.codex-remote-attachments
-=======
-.codex-remote-attachments/01a0e747-8e25-70c1-9754-3324bce4e0c2/df23b3ab-c7ba-4506-92b5-3c92479d46c5/1-HAVEN_Marketplace_Docuseries.zip
->>>>>>> Stashed changes
+
+# Operational task lists, evidence and coordination remain owner-local.
+/.haven-local/

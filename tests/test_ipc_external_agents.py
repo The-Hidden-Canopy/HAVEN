@@ -143,7 +143,7 @@ def test_binding_upsert_requires_a_known_household_principal(server) -> None:
         {
             "connection_id": created["connection_id"],
             "subject_key": "subj-1",
-            "subject_label": "Gerron's voice",
+            "subject_label": "Sample Owner's voice",
             "principal_id": "not-a-real-person",
             "scopes": ["world.read"],
         },

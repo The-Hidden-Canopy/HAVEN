@@ -4,15 +4,17 @@ HAVEN Marketplace is the curated product-discovery surface for The Hidden
 Canopy portfolio. It is deliberately broader than the existing Export
 Consumer catalog and deliberately narrower than a repository browser.
 
-The current implementation is the discovery slice from the Marketplace
-Docuseries roadmap:
+The product catalog supports discovery:
 
 ```text
 fetch -> verify -> cache -> list/filter -> inspect state
 ```
 
-It does not install software, launch arbitrary commands, grant household
-authority, or replace the existing model/plugin contracts.
+The separate local product lifecycle can download, install, enable, open,
+update, roll back, and remove the free bundled **HAVEN Welcome** content
+fixture. It renders an inert welcome card through a fixed host adapter. It
+does not install executables, grant household authority, or replace the
+existing model/plugin contracts.
 
 ## What is separate
 
@@ -27,7 +29,7 @@ contracts:
 
 The Marketplace cannot create a new extension class or widen any of these
 boundaries. A product may be listed without an integration, and installing a
-future product will not automatically enable its optional HAVEN integration.
+product never automatically enables its optional HAVEN integration.
 
 ## Current discovery behavior
 
@@ -74,19 +76,103 @@ silently replaced with an empty catalog. Marketplace failure never prevents
 HAVEN from booting. A verified refresh whose `issued_at` moves backward is
 treated as a replay and cannot replace the newer accepted catalog.
 
-## Deliberately not built yet
+## Local product acquisition
+
+`LocalProductManager` is configured by the host with exact product/version,
+platform, size, digest, source path, dependencies, and an approved adapter.
+Neither a catalog nor a client request can register a source path or adapter.
+Only `local_content` distributions with a first-party `content_only` product
+and an exact numeric version are accepted. Other distribution kinds remain
+discovery metadata.
+
+The acquisition sequence is explicit:
+
+```text
+available -> downloaded -> installed -> enabled -> observed healthy
+```
+
+Each state has a separate status field. Downloading only caches verified
+bytes. Installing atomically stages the package and changes the installed
+version pointer; it leaves the product disabled. Enabling rechecks its
+integrity and dependencies. Opening the product invokes the fixed welcome
+card adapter and records observed health for that activation. A restart does
+not report observed health until the adapter is opened again.
+
+All mutations and launches consult the host's current authorization callback.
+Every acquisition, enable, and open re-verifies the current signed catalog
+against the host's current key map, expiration, release state, exact version,
+platform, size, and digest pins. Removing a trusted key, withdrawing the
+release, or marking it `security_hold` blocks a previously installed/enabled
+product. Disabling and removing remain possible under current authorization
+even when catalog trust has expired. No permission grant is stored in the
+installation registry.
+
+Local packages are small JSON records with a closed field set. They cannot
+contain scripts, file lists, archives, imports, shell commands, executable
+entry points, or integration enablement. Storage paths reject symlinks,
+junctions, reparse points, traversal, and unapproved identifiers. Immutable
+version directories and atomic registry replacement preserve the active
+installation on corrupt or interrupted updates. Thread and OS file locks
+serialize duplicate operations. A cancelled download never commits partial
+bytes; a process interruption leaves only inert, unregistered candidates.
+
+Rollback requires an exact previously installed version that remains allowed
+by current catalog and host trust. It disables the restored version until an
+explicit enable. Uninstall unregisters and disables first, then removes
+release and download bytes. `data_policy=preserve` is the default; explicit
+`data_policy=delete` removes only the product's dedicated data directory.
+Interrupted removal is recorded as `removal_pending` and resumes only while
+the requesting principal still passes current host authorization. A revoked
+or legacy checkpoint cannot resume deleting saved data; explicit removal
+under current authorization is required.
+Dependencies are exact and checked without automatic installation or feature
+activation.
+
+The bundled fixture catalog is signed with the **published RFC 8032 test
+vector** and is additionally pinned to its exact shipped envelope hash.
+Artifact digests are independently pinned in host code. This public test key
+is confined to the local fixture and is **never** added to remote catalog
+trust. There is no operational signing key, credential, or runtime key
+generation. The fixture proves the local lifecycle; it is not evidence of a
+live release service.
+
+The composition root exposes `GET /api/marketplace/products` and IPC
+`marketplace.products`. Explicit actions use
+`POST /api/marketplace/products/<action>` and IPC `marketplace.product`,
+both through `haven.web.marketplace_lifecycle_api.product_action`.
+The authenticated principal comes from the host; a request
+body cannot choose its principal. Actions are `download`, `install`,
+`update`, `rollback`, `enable`, `disable`, `launch`, `uninstall`, and `cancel`.
+Download/install/update/rollback require exact `product_id` and `version`.
+Cancellation uses an operation correlation ID owned by the current principal.
+The content launch result is rendered as text, never interpreted as HTML.
+
+The native Marketplace page provides these local lifecycle controls and
+reports enablement separately from an observed successful open in the current
+session. Removal offers an explicit keep-data choice and a separately
+confirmed delete-data choice. Current identity and owner membership are
+checked for every action. Catalog browsing cannot activate a release.
+
+The product registry and content follow installation data-directory moves
+and backups. OS lock files are recreated, rather than backed up. Domain
+state is authoritative if history publication fails: the adapter reports
+`outcome_uncertain`, and the caller must inspect current product state before
+retrying. Download correlation IDs identify duplicate attempts; they confer
+no permission to resume after revocation.
+
+## Remaining service gates
 
 The following remain later roadmap phases:
 
-- product installation and uninstall;
-- release artifact downloads, hashes, signatures, and revocations;
-- local installed-product identity and launch registration;
-- optional integration enablement after standalone installation;
-- updates and rollback;
+- remote artifact download and executable/archive installation;
+- production catalog and artifact signing keys, release service, and
+  revocation publication;
+- additional product-specific launch adapters reviewed by the host;
+- optional integrations through the separate feature lifecycle;
 - commerce, entitlements, and publisher payouts; and
 - community publishing.
 
-Those features require separate contracts. In particular, remote metadata will
+These require configuration and separate approval. In particular, remote metadata will
 never become an arbitrary shell command, and a signed catalog will never be
 treated as proof that downloaded bytes or a local integration are safe by
 themselves.

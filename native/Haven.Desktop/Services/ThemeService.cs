@@ -23,11 +23,13 @@ public sealed class ThemeService
     public static readonly string[] Densities = { "comfortable", "compact" };
     public static readonly string[] Motions = { "system", "reduced" };
 
-    private static string SettingsPath =>
-        Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Haven.Desktop",
-            "settings.json");
+    private readonly string? _settingsPathOverride;
+    private string _settingsPath => _settingsPathOverride ?? DesktopPaths.File("settings.json");
+
+    public ThemeService(string? settingsPath = null)
+    {
+        _settingsPathOverride = settingsPath;
+    }
 
     public string Theme { get; private set; } = DefaultTheme;
     public string Mode { get; private set; } = DefaultMode;
@@ -42,11 +44,11 @@ public sealed class ThemeService
     {
         try
         {
-            if (!File.Exists(SettingsPath))
+            if (!File.Exists(_settingsPath))
             {
                 return;
             }
-            using var document = JsonDocument.Parse(File.ReadAllText(SettingsPath));
+            using var document = JsonDocument.Parse(File.ReadAllText(_settingsPath));
             ApplyChoices(document.RootElement);
         }
         catch (Exception)
@@ -186,14 +188,14 @@ public sealed class ThemeService
     {
         try
         {
-            var directory = Path.GetDirectoryName(SettingsPath);
+            var directory = Path.GetDirectoryName(_settingsPath);
             if (directory is not null)
             {
                 Directory.CreateDirectory(directory);
             }
             var payload = JsonSerializer.Serialize(
                 new { mode = Mode, theme = Theme, density = Density, motion = Motion });
-            await File.WriteAllTextAsync(SettingsPath, payload);
+            await File.WriteAllTextAsync(_settingsPath, payload);
         }
         catch (Exception)
         {

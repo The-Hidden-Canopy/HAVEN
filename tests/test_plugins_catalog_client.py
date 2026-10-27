@@ -21,7 +21,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey 
 from haven.plugins import catalog_client
 from haven.plugins.catalog_client import CatalogFetchError, parse_and_verify_catalog
 
-NOW = datetime(2026, 9, 22, tzinfo=timezone.utc)
+# One fresh test epoch keeps signed fixtures valid independently of run date.
+NOW = datetime.now(timezone.utc)
 
 
 def _base_catalog(*, issued=None, expires=None) -> dict:

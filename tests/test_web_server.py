@@ -1,3 +1,4 @@
+from conftest import assert_fault
 """HTTP contract for the web surface: JSON API over a live threaded server,
 plus the SSE stream.
 """
@@ -130,7 +131,7 @@ def test_get_state_matches_the_wire_contract(server) -> None:
 
     office = _room(state, "office")
     assert office["name"] == "Office"
-    assert office["people"] == ["Gerron"]
+    assert office["people"] == ["Sample Owner"]
     light = _device(state, "office", "office_light")
     assert light["is_on"] is True
     assert light["brightness_pct"] == 70
@@ -141,7 +142,7 @@ def test_get_state_matches_the_wire_contract(server) -> None:
     assert _room(state, "garage")["camera"] is None
 
     assert {context["id"] for context in state["contexts"]} == {"working_late", "vacation_mode"}
-    assert state["people"] == [{"id": "gerron", "name": "Gerron", "room": "office"}]
+    assert state["people"] == [{"id": "sample_owner", "name": "Sample Owner", "room": "office"}]
     assert len(state["pending"]) == 1
     assert state["status"]["core"] == "Local Core"
     assert state["status"]["devices"] == 5
@@ -222,7 +223,7 @@ def test_email_full_body_http_surface_is_explicit_and_scope_aware(server, tmp_pa
     instance, _director, port = server
     (tmp_path / "message.eml").write_text(
         "Message-ID: <http-body@example.org>\nFrom: ada@example.org\n"
-        "To: gerron@example.org\nSubject: HTTP body\n"
+        "To: sample_owner@example.org\nSubject: HTTP body\n"
         "Date: Wed, 16 Sep 2026 08:30:00 +0000\n\nFull body through HTTP.\n",
         encoding="utf-8",
     )
@@ -287,11 +288,11 @@ def test_unknown_request_approve_and_deny_return_404(server) -> None:
     _, _, port = server
     status, body = _post(port, "/api/requests/nope/approve", {})
     assert status == 404
-    assert body == {"error": "unknown request"}
+    assert_fault(body, 'HAVEN.AUTHORITY.NOT_FOUND', error='unknown request')
 
     status, body = _post(port, "/api/requests/nope/deny")
     assert status == 404
-    assert body == {"error": "unknown request"}
+    assert_fault(body, 'HAVEN.AUTHORITY.NOT_FOUND', error='unknown request')
 
 
 def test_deny_over_http_dismisses_the_pending_request(server) -> None:
@@ -593,7 +594,7 @@ def test_scheduler_enabled_toggle_endpoint_flips_and_refreshes(server):
 
     status, body = _post(port, "/api/scheduler/rules/nope/enabled", {"enabled": True})
     assert status == 404
-    assert body == {"error": "unknown rule"}
+    assert_fault(body, 'HAVEN.SCHEDULER.NOT_FOUND', error='unknown rule')
 
 
 def test_scheduler_state_rides_the_sse_stream(server):

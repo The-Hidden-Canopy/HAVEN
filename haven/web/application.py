@@ -4,7 +4,7 @@ Normal boot always builds the user's real installation. A fresh installation
 with no providers yet gets a persistent identity and an empty, truthful world
 whose live evidence is unavailable; it never gets fictional devices or a
 fixture household. The simulated household (``SimulatedHouse``, the
-garage/camera/office-light scenario, and the ``gerron`` fixture identity) is
+garage/camera/office-light scenario, and the ``sample_owner`` fixture identity) is
 available only through the explicit ``demo=True``/``--demo`` path. Agents are
 optional; with intelligence disabled HAVEN runs its deterministic floor.
 

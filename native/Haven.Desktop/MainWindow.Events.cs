@@ -230,7 +230,7 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             // Setup status is best-effort: the main window stays usable without it.
-            ComposerStatus.Text = ex.Message;
+            ComposerStatus.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -280,7 +280,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            ComposerStatus.Text = ex.Message;
+            ComposerStatus.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -359,7 +359,7 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             SearchResults.Items.Clear();
-            SearchStatusText.Text = $"Could not search: {ex.Message}";
+            SearchStatusText.Text = $"Could not search: {NativeFaults.Message(ex)}";
         }
     }
 

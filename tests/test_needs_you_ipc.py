@@ -32,7 +32,7 @@ def _dispatch(instance, method: str, params: dict) -> dict:
 
 
 def _seed_blocked_task(instance) -> str:
-    instance.setup.declare_person(name="Gerron Smith", role="owner")
+    instance.setup.declare_person(name="Sample Owner Smith", role="owner")
     dispatcher = instance.build_ipc_dispatcher()
     project = dispatcher(request_message("p", "projects.create", {"title": "VANTA architecture"}))["result"][
         "project"
@@ -118,7 +118,7 @@ def test_pending_computer_authority_request_is_not_dismissible(server, tmp_path)
     dispatcher = server.build_ipc_dispatcher()
     dispatcher(request_message("root", "setup.computer.roots.add", {"path": str(allowed)}))
     dispatcher(request_message("enable", "setup.computer", {"enabled": True, "read_only": False}))
-    dispatcher(request_message("owner", "setup.household.people.add", {"name": "Gerron Smith", "role": "owner"}))
+    dispatcher(request_message("owner", "setup.household.people.add", {"name": "Sample Owner Smith", "role": "owner"}))
     dispatcher(request_message("scan", "setup.computer.scan", {}))
 
     search = dispatcher(request_message("search", "search.query", {"text": "notes"}))["result"]

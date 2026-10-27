@@ -57,7 +57,7 @@ def _enable_and_scan(port: int, allowed: Path) -> None:
     assert _post(
         port,
         "/api/setup/household/people",
-        {"name": "Gerron", "role": "owner"},
+        {"name": "Sample Owner", "role": "owner"},
     )[1]["ok"]
     assert _post(port, "/api/setup/computer/scan", {})[1]["ok"]
 
@@ -171,7 +171,7 @@ def test_knowledge_correction_uses_declared_owner_not_first_member():
             assert _post(
                 port,
                 "/api/setup/household/people",
-                {"name": "Gerron", "role": "owner"},
+                {"name": "Sample Owner", "role": "owner"},
             )[1]["ok"]
             assert _post(port, "/api/setup/computer/scan", {})[1]["ok"]
             claim_id = _get(port, "/api/knowledge/claims")[1]["claims"][0]["claim_id"]
@@ -182,7 +182,7 @@ def test_knowledge_correction_uses_declared_owner_not_first_member():
                 {"proposition": "The owner corrected this statement."},
             )
             assert status == 200 and body["ok"] is True
-            assert "user:gerron" in body["claim"]["evidence_refs"]
+            assert "user:sample_owner" in body["claim"]["evidence_refs"]
             assert "user:bryan" not in body["claim"]["evidence_refs"]
             expected_source = f"file:{(root / 'notes.txt').resolve().as_posix()}"
             assert body["claim"]["source_refs"] == [expected_source]
@@ -193,7 +193,7 @@ def test_knowledge_correction_uses_declared_owner_not_first_member():
             )
             assert status == 200
             assert detail["claim"]["audit"][0]["action"] == "correct"
-            assert detail["claim"]["audit"][0]["actor_id"] == "gerron"
+            assert detail["claim"]["audit"][0]["actor_id"] == "sample_owner"
 
             status, search = _get(
                 port,

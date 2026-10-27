@@ -1,3 +1,4 @@
+from conftest import assert_fault
 """HTTP contract for the Model Manager API: ok-envelope payloads over a live
 threaded server, with tempfile.TemporaryDirectory as the models root.
 """
@@ -212,7 +213,8 @@ def test_add_root_scan_classifies_broken_and_register_activates(server) -> None:
     status, body = _post(port, "/api/models/register", {"path": str(bad)})
     assert status == 200
     assert body["ok"] is False
-    assert "weights.bin" in body["error"]
+    assert body["fault"]["code"].startswith("HAVEN.MODELS.")
+    assert "weights.bin" not in body["error"]
 
 
 def test_load_without_backend_records_state_and_remove_clears_it(server) -> None:
@@ -224,7 +226,8 @@ def test_load_without_backend_records_state_and_remove_clears_it(server) -> None
     status, body = _post(port, "/api/models/load", {"id": "nobackend"})
     assert status == 200
     assert body["ok"] is False
-    assert "unregistered-backend" in body["error"]
+    assert body["fault"]["code"] == "HAVEN.MODELS.BACKEND_UNAVAILABLE"
+    assert "unregistered-backend" not in body["error"]
     # the failure is recorded on the record and reflected in the lists
     assert _row(body, "nobackend")["state"] == "backend_missing"
     assert body["roots"] == []
@@ -270,7 +273,7 @@ def test_malformed_json_returns_400(server) -> None:
     status, body = _post_raw(port, "/api/models/install-url", "not json")
 
     assert status == 400
-    assert body == {"error": "invalid JSON body"}
+    assert_fault(body, 'HAVEN.IPC.INVALID_REQUEST', error='invalid JSON body')
 
 
 def test_missing_required_field_is_an_ok_false_envelope(server) -> None:
@@ -279,7 +282,7 @@ def test_missing_required_field_is_an_ok_false_envelope(server) -> None:
     status, body = _post(port, "/api/models/install-url", {})
 
     assert status == 200
-    assert body == {"ok": False, "error": "a non-empty 'url' is required"}
+    assert_fault(body, 'HAVEN.MODELS.INVALID_INPUT', error="a non-empty 'url' is required")
 
 
 def test_models_root_env_var_overrides_the_passed_default(monkeypatch) -> None:
@@ -356,4 +359,4 @@ def test_assign_requires_a_role_field(server) -> None:
     status, body = _post(port, "/api/models/assign", {"id": "anything"})
 
     assert status == 200
-    assert body == {"ok": False, "error": "a non-empty 'role' is required"}
+    assert_fault(body, 'HAVEN.MODELS.INVALID_INPUT', error="a non-empty 'role' is required")

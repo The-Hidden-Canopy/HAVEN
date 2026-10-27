@@ -48,23 +48,32 @@ public sealed partial class MainWindow
                 ? $"Voice is enabled (state: {GetString(voice, "state") ?? "unknown"})"
                 : "Voice is off. Models, routing and downloads live on the Models page.";
             var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
-            AboutVersionText.Text = $"HAVEN Desktop {version?.Major}.{version?.Minor}.{version?.Build} — local-first; your data stays on this machine.";
+            AboutVersionText.Text = $"HAVEN Desktop {version?.Major}.{version?.Minor}.{version?.Build} â€” local-first; your data stays on this machine.";
             RenderDiagnostics();
+            var errors = await _client.GetErrorSummaryAsync();
+            foreach (var incident in Enumerate(errors, "incidents"))
+            {
+                DiagnosticsList.Children.Add(new TextBlock
+                {
+                    Text = $"{GetString(incident, "code")} - {GetInt(incident, "count")} occurrence(s); last {GetString(incident, "last_seen")}",
+                    TextWrapping = TextWrapping.Wrap,
+                });
+            }
         }
         catch (Exception ex)
         {
-            SettingsErrorText.Text = $"Could not load diagnostics: {ex.Message} Use Refresh to retry.";
+            SettingsErrorText.Text = $"Could not load diagnostics: {NativeFaults.Message(ex)} Use Refresh to retry.";
         }
 
         try
         {
-            var export = await _client.ExportDiagnosticsAsync();
-            RenderUnifiedReceipts(export);
+            var receipts = await _client.GetPrivateReceiptsAsync();
+            RenderUnifiedReceipts(receipts);
         }
         catch (Exception ex)
         {
             ReceiptsList.Children.Clear();
-            ReceiptsErrorText.Text = $"Could not load recent governed actions: {ex.Message}";
+            ReceiptsErrorText.Text = $"Could not load recent governed actions: {NativeFaults.Message(ex)}";
             ReceiptsList.Children.Add(new TextBlock
             {
                 Text = "Recent governed actions are unavailable until HAVEN Core reconnects.",
@@ -79,7 +88,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            SettingsErrorText.Text = $"Could not load extensions: {ex.Message}";
+            SettingsErrorText.Text = $"Could not load extensions: {NativeFaults.Message(ex)}";
         }
 
         try
@@ -88,7 +97,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            SettingsErrorText.Text = $"Could not load backups: {ex.Message} Use Refresh to retry.";
+            SettingsErrorText.Text = $"Could not load backups: {NativeFaults.Message(ex)} Use Refresh to retry.";
         }
         try
         {
@@ -96,7 +105,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            SettingsErrorText.Text = $"Could not load the startup service: {ex.Message} Use Refresh to retry.";
+            SettingsErrorText.Text = $"Could not load the startup service: {NativeFaults.Message(ex)} Use Refresh to retry.";
         }
         if (backups is not null)
         {
@@ -113,9 +122,7 @@ public sealed partial class MainWindow
         ReceiptsList.Children.Clear();
         ReceiptsErrorText.Text = "";
         if (response.ValueKind != JsonValueKind.Object
-            || !response.TryGetProperty("export", out var export)
-            || export.ValueKind != JsonValueKind.Object
-            || !export.TryGetProperty("unified_receipts", out var receipts)
+            || !response.TryGetProperty("unified_receipts", out var receipts)
             || receipts.ValueKind != JsonValueKind.Array)
         {
             ReceiptsList.Children.Add(new TextBlock
@@ -151,7 +158,7 @@ public sealed partial class MainWindow
             var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
             head.Children.Add(new TextBlock
             {
-                Text = $"{Sentence(GetString(receipt, "domain") ?? "action")} · {GetString(receipt, "action") ?? "unknown"}",
+                Text = $"{Sentence(GetString(receipt, "domain") ?? "action")} Â· {GetString(receipt, "action") ?? "unknown"}",
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 TextWrapping = TextWrapping.Wrap,
             });
@@ -187,7 +194,7 @@ public sealed partial class MainWindow
             {
                 card.Children.Add(new TextBlock
                 {
-                    Text = string.Join(" · ", metadata),
+                    Text = string.Join(" Â· ", metadata),
                     Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
                     TextWrapping = TextWrapping.Wrap,
                 });
@@ -239,7 +246,7 @@ public sealed partial class MainWindow
                     {
                         "feature" => "None yet. Feature modules will extend HAVEN through explicit contracts, calling application services only.",
                         "provider" => "No provider plugins are installed. Provider packages declare themselves through the haven.providers entry point.",
-                        "export_consumer" => "Nothing in the catalog yet. Export consumers read only explicitly exported, redacted receipts — never live state.",
+                        "export_consumer" => "Nothing in the catalog yet. Export consumers read only explicitly exported, redacted receipts â€” never live state.",
                         _ => "None registered.",
                     },
                     Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
@@ -273,7 +280,7 @@ public sealed partial class MainWindow
                 row.Children.Add(head);
                 row.Children.Add(new TextBlock
                 {
-                    Text = $"{GetString(extension, "run_location")} · {GetString(extension, "access_boundary")}",
+                    Text = $"{GetString(extension, "run_location")} Â· {GetString(extension, "access_boundary")}",
                     Style = (Style)Application.Current.Resources["HavenMetadataTextStyle"],
                     TextWrapping = TextWrapping.Wrap,
                 });
@@ -314,7 +321,7 @@ public sealed partial class MainWindow
                         }
                         catch (Exception ex)
                         {
-                            SettingsErrorText.Text = ex.Message;
+                            SettingsErrorText.Text = NativeFaults.Message(ex);
                         }
                     };
                     row.Children.Add(toggle);
@@ -323,6 +330,7 @@ public sealed partial class MainWindow
             }
             ExtensionsHost.Children.Add(card);
         }
+        await RenderBundledFeaturesAsync();
     }
 
     private void OnOpenModelsClicked(object sender, RoutedEventArgs args)
@@ -351,17 +359,17 @@ public sealed partial class MainWindow
             DiagnosticsList.Children.Add(new TextBlock { Text = "Diagnostics unavailable.", Opacity = 0.72 });
             return;
         }
-        Row("Data directory", GetString(_diagnostics, "data_dir") ?? "—");
+        Row("Data directory", GetString(_diagnostics, "data_dir") ?? "â€”");
         var world = GetString(_diagnostics, "world", "mode");
-        Row("World mode", world ?? "—");
+        Row("World mode", world ?? "â€”");
         var provider = _diagnostics.TryGetProperty("provider", out var providerValue) && providerValue.ValueKind == JsonValueKind.Object
             ? providerValue
             : default;
         Row("Provider", provider.ValueKind == JsonValueKind.Object
             ? (provider.TryGetProperty("configured", out var configured) && configured.GetBoolean()
-                ? $"{GetString(provider, "kind")} · {GetString(provider, "base_url")}"
+                ? $"{GetString(provider, "kind")} Â· {GetString(provider, "base_url")}"
                 : "not configured")
-            : "—");
+            : "â€”");
         var operational = provider.ValueKind == JsonValueKind.Object
             && provider.TryGetProperty("operational", out var operationalValue)
             && operationalValue.ValueKind == JsonValueKind.Object
@@ -410,28 +418,28 @@ public sealed partial class MainWindow
             : default;
         if (household.ValueKind == JsonValueKind.Object)
         {
-            Row("Household", $"{GetInt(household, "people")} people · {GetInt(household, "contexts")} contexts");
+            Row("Household", $"{GetInt(household, "people")} people Â· {GetInt(household, "contexts")} contexts");
         }
         var devices = _diagnostics.TryGetProperty("devices", out var devicesValue) && devicesValue.ValueKind == JsonValueKind.Object
             ? devicesValue
             : default;
         if (devices.ValueKind == JsonValueKind.Object)
         {
-            Row("Devices", $"{GetInt(devices, "enrolled")} enrolled · {GetInt(devices, "registered")} registered");
+            Row("Devices", $"{GetInt(devices, "enrolled")} enrolled Â· {GetInt(devices, "registered")} registered");
         }
         var rules = _diagnostics.TryGetProperty("rules", out var rulesValue) && rulesValue.ValueKind == JsonValueKind.Object
             ? rulesValue
             : default;
         if (rules.ValueKind == JsonValueKind.Object)
         {
-            Row("Rules", $"{GetInt(rules, "total")} total · {GetInt(rules, "approved")} approved · {GetInt(rules, "proposed")} proposed");
+            Row("Rules", $"{GetInt(rules, "total")} total Â· {GetInt(rules, "approved")} approved Â· {GetInt(rules, "proposed")} proposed");
         }
         var models = _diagnostics.TryGetProperty("models", out var modelsValue) && modelsValue.ValueKind == JsonValueKind.Object
             ? modelsValue
             : default;
         if (models.ValueKind == JsonValueKind.Object)
         {
-            Row("Models", $"{GetInt(models, "registered")} registered · {GetInt(models, "loaded")} loaded");
+            Row("Models", $"{GetInt(models, "registered")} registered Â· {GetInt(models, "loaded")} loaded");
         }
         var voice = _diagnostics.TryGetProperty("voice", out var voiceValue) && voiceValue.ValueKind == JsonValueKind.Object
             ? voiceValue
@@ -439,7 +447,7 @@ public sealed partial class MainWindow
         if (voice.ValueKind == JsonValueKind.Object)
         {
             var enabled = voice.TryGetProperty("enabled", out var voiceEnabled) && voiceEnabled.GetBoolean();
-            Row("Voice", enabled ? $"enabled · {GetString(voice, "state") ?? "?"}" : "disabled");
+            Row("Voice", enabled ? $"enabled Â· {GetString(voice, "state") ?? "?"}" : "disabled");
         }
         Row("Uptime", $"{GetInt(_diagnostics, "uptime_seconds")} s");
     }
@@ -465,12 +473,12 @@ public sealed partial class MainWindow
             var reachable = result.TryGetProperty("reachable", out var reachableValue) && reachableValue.GetBoolean();
             ProbeResultText.Text = (reachable ? "Provider reachable" : "Provider unreachable")
                 + (result.TryGetProperty("detail", out var detail) && detail.ValueKind == JsonValueKind.String
-                    ? $" — {detail.GetString()}"
+                    ? $" â€” {detail.GetString()}"
                     : "");
         }
         catch (Exception ex)
         {
-            ProbeResultText.Text = ex.Message;
+            ProbeResultText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -490,7 +498,7 @@ public sealed partial class MainWindow
             var files = Enumerate(backup, "files").Count();
             card.Children.Add(new TextBlock
             {
-                Text = $"{created ?? "unknown time"} · {files} files",
+                Text = $"{created ?? "unknown time"} Â· {files} files",
                 Opacity = 0.72,
             });
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
@@ -536,7 +544,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            SettingsErrorText.Text = ex.Message;
+            SettingsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -579,7 +587,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            SettingsErrorText.Text = ex.Message;
+            SettingsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -619,12 +627,12 @@ public sealed partial class MainWindow
                     : "Restore failed.";
                 return;
             }
-            SettingsErrorText.Text = "Restore complete — restart HAVEN to apply it to the running process.";
+            SettingsErrorText.Text = "Restore complete â€” restart HAVEN to apply it to the running process.";
             await LoadSettingsAsync();
         }
         catch (Exception ex)
         {
-            SettingsErrorText.Text = ex.Message;
+            SettingsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -667,7 +675,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            SettingsErrorText.Text = ex.Message;
+            SettingsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 
@@ -728,7 +736,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            SettingsErrorText.Text = ex.Message;
+            SettingsErrorText.Text = NativeFaults.Message(ex);
         }
     }
 

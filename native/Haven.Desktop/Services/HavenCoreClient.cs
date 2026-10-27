@@ -104,8 +104,16 @@ public sealed class HavenCoreClient : IAsyncDisposable
     public Task<JsonElement> GetSetupStatusAsync(CancellationToken cancellationToken = default) =>
         RequestResultAsync("setup.status", new { }, cancellationToken);
 
-    public Task<JsonElement> ChooseSetupDataDirAsync(string path, CancellationToken cancellationToken = default) =>
-        RequestResultAsync("setup.data_dir", new { path }, cancellationToken);
+    public async Task<JsonElement> ChooseSetupDataDirAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var result = await RequestResultAsync("setup.data_dir", new { path }, cancellationToken);
+        if (result.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True)
+        {
+            DesktopPaths.BeginInstallationMove();
+            await GetSystemDiagnosticsAsync(cancellationToken);
+        }
+        return result;
+    }
 
     public Task<JsonElement> ConnectSetupProviderAsync(
         string baseUrl,
@@ -624,8 +632,19 @@ public sealed class HavenCoreClient : IAsyncDisposable
         CancellationToken cancellationToken = default) =>
         RequestResultAsync("models.assign", new { role, id = modelId }, cancellationToken);
 
-    public Task<JsonElement> GetSystemDiagnosticsAsync(CancellationToken cancellationToken = default) =>
-        RequestResultAsync("system.diagnostics", new { }, cancellationToken);
+    public async Task<JsonElement> GetSystemDiagnosticsAsync(CancellationToken cancellationToken = default)
+    {
+        var result = await RequestResultAsync("system.diagnostics", new { }, cancellationToken);
+        if (DesktopPaths.AwaitingInstallation)
+            DesktopPaths.ConfirmInstallation(result.GetProperty("diagnostics").GetProperty("data_dir").GetString()!);
+        return result;
+    }
+
+    public Task<JsonElement> GetErrorSummaryAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("system.errors", new { }, cancellationToken);
+
+    public Task<JsonElement> GetPrivateReceiptsAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync("system.receipts", new { }, cancellationToken);
 
     public Task<JsonElement> ExportDiagnosticsAsync(CancellationToken cancellationToken = default) =>
         RequestResultAsync("system.diagnostics.export", new { }, cancellationToken);
@@ -965,6 +984,9 @@ public sealed class HavenCoreClient : IAsyncDisposable
     public Task<JsonElement> GetExtensionsAsync(CancellationToken cancellationToken = default) =>
         RequestResultAsync("extensions.list", new { }, cancellationToken);
 
+    public Task<JsonElement> LocalWorkflowAsync(string method, object parameters, CancellationToken cancellationToken = default) =>
+        RequestResultAsync(method, parameters, cancellationToken);
+
     public Task<JsonElement> GetMarketplaceAsync(
         string? query = null,
         string? category = null,
@@ -1076,10 +1098,7 @@ public sealed class HavenCoreClient : IAsyncDisposable
         var root = response.RootElement;
         if (!root.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
         {
-            var error = root.TryGetProperty("error", out var errorValue)
-                ? errorValue.GetString()
-                : "HAVEN Core rejected the IPC request.";
-            throw new InvalidOperationException(error);
+            throw new NativeFaults.ReportedFaultException(root);
         }
     }
 

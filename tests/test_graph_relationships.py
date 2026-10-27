@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from conftest import assert_fault
+
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -102,7 +104,7 @@ def test_deterministic_task_claim_and_room_edges(stack) -> None:
         TaskRecord(
             task_id="task:t1", scope_id="scope:personal", title="t", detail="",
             state="open", created_at=NOW, updated_at=NOW, created_by="p",
-            project_id="project:p1", assignee_person_id="gerron",
+            project_id="project:p1", assignee_person_id="sample_owner",
         )
     )
     projects.save(
@@ -127,7 +129,7 @@ def test_deterministic_task_claim_and_room_edges(stack) -> None:
     projector.project_all(visible_scopes=VISIBLE)
 
     assert ontology.get(assertion_id("project:project:p1", CONTAINS, "task:task:t1")) is not None
-    assert any(edge.object == "person:gerron" for edge in ontology.edges_from("task:task:t1"))
+    assert any(edge.object == "person:sample_owner" for edge in ontology.edges_from("task:task:t1"))
     assert any(edge.object == "file:notes.txt" for edge in ontology.edges_from("claim:claim:c1"))
     assert any(edge.object == "claim:c0" for edge in ontology.edges_from("claim:claim:c1"))
     assert any(edge.object == "room:office" for edge in ontology.edges_from("device:office_light"))
@@ -311,7 +313,7 @@ def test_server_does_not_grant_graph_owner_power_before_onboarding(stack) -> Non
                 {"candidate_id": candidates[0]["candidate_id"], "justification": "try before setup"},
             )
         )["result"]
-        assert denied == {"ok": False, "error": "only an owner can admit a household relationship"}
+        assert_fault(denied, 'HAVEN.AUTHORITY.OWNER_REQUIRED', error='only an owner can admit a household relationship')
         assert server.director.store.events == ()
 
         server.setup.declare_person(name="Owner", role="owner")

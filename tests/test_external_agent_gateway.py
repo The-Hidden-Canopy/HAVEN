@@ -77,8 +77,8 @@ def _binding(store, **overrides) -> PrincipalBinding:
         binding_id="bind-1",
         connection_id="extconn-1",
         subject_key="subj-1",
-        subject_label="Gerron's voice",
-        principal_id="person-gerron",
+        subject_label="Sample Owner's voice",
+        principal_id="person-sample_owner",
         scopes=frozenset({ExternalScope.WORLD_READ}),
         created_by="owner-1",
         created_at=NOW,
@@ -170,7 +170,7 @@ def test_no_subject_at_all_follows_the_unbound_path(store):
 def test_bound_subject_maps_to_the_resolved_principal(store):
     _connection(store)
     _binding(store, scopes=frozenset({ExternalScope.WORLD_READ, ExternalScope.ACTIONS_REQUEST}))
-    resident = Principal(actor_id="person-gerron", household_id=HOUSEHOLD, role_tier=RoleTier.OWNER)
+    resident = Principal(actor_id="person-sample_owner", household_id=HOUSEHOLD, role_tier=RoleTier.OWNER)
     gateway = _gateway(store, resolve_principal=_principal_registry(resident))
 
     admitted = gateway.admit(_request(subject="subj-1", required_scope=ExternalScope.ACTIONS_REQUEST))
@@ -178,14 +178,14 @@ def test_bound_subject_maps_to_the_resolved_principal(store):
     assert admitted.bound is True
     assert admitted.principal == resident
     assert admitted.binding.binding_id == "bind-1"
-    assert admitted.provenance.principal_id == "person-gerron"
+    assert admitted.provenance.principal_id == "person-sample_owner"
     assert admitted.provenance.binding_id == "bind-1"
 
 
 def test_bound_subject_missing_the_required_scope_is_denied(store):
     _connection(store)
     _binding(store, scopes=frozenset({ExternalScope.WORLD_READ}))
-    resident = Principal(actor_id="person-gerron", household_id=HOUSEHOLD, role_tier=RoleTier.OWNER)
+    resident = Principal(actor_id="person-sample_owner", household_id=HOUSEHOLD, role_tier=RoleTier.OWNER)
     gateway = _gateway(store, resolve_principal=_principal_registry(resident))
 
     with pytest.raises(ExternalDenied) as exc:
@@ -291,8 +291,8 @@ def test_service_upsert_and_revoke_binding_round_trip(store):
     binding = service.upsert_binding(
         connection_id=connection.connection_id,
         subject_key="subj-1",
-        subject_label="Gerron's voice",
-        principal_id="person-gerron",
+        subject_label="Sample Owner's voice",
+        principal_id="person-sample_owner",
         scopes=frozenset({ExternalScope.WORLD_READ}),
         created_by="owner-1",
     )

@@ -1,9 +1,7 @@
-"""Curated HAVEN Marketplace discovery, kept separate from extensions.
+"""Curated product discovery and host-approved inert local content lifecycle.
 
-The marketplace is a read-only discovery surface in this slice. It describes
-products and optional HAVEN relationships; it does not install software,
-execute launch commands, or grant authority. The existing ``haven.plugins``
-package remains the narrow Export Consumer catalog.
+Export Consumers, feature activation, and models retain separate contracts.
+Product metadata never grants authority or supplies executable commands.
 """
 
 from .cache import MarketplaceCache, MarketplaceCacheError
@@ -25,9 +23,15 @@ from .contracts import (
     MarketplaceRelationship,
     safe_product_id,
 )
+from .lifecycle import LocalProductManager, LocalRelease, ProductError
+from .local_fixture import create_local_fixture_manager
 
 __all__ = [
     "CatalogFetchError",
+    "LocalProductManager",
+    "LocalRelease",
+    "ProductError",
+    "create_local_fixture_manager",
     "MarketplaceCache",
     "MarketplaceCacheError",
     "MarketplaceCatalogClient",

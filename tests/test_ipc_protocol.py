@@ -55,10 +55,10 @@ def test_dispatcher_preserves_request_id_and_returns_input_errors():
 
     response = dispatcher(request_message("req-3", "safe.read", {}))
 
-    assert response == {
-        "version": IPC_PROTOCOL_VERSION,
-        "kind": "response",
-        "request_id": "req-3",
-        "ok": False,
-        "error": "'required'",
-    }
+    assert response["version"] == IPC_PROTOCOL_VERSION
+    assert response["kind"] == "response"
+    assert response["request_id"] == "req-3"
+    assert response["ok"] is False
+    assert response["error"] == "operation_failed"
+    assert response["fault"]["code"] == "HAVEN.IPC.INVALID_REQUEST"
+    assert response["fault"]["correlation_id"] == "req-3"

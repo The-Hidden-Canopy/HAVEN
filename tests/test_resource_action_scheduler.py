@@ -68,7 +68,7 @@ def _spec(
         selector=Selector(),
         action=ActionTarget(domain=domain, action=action, consequence_class=ConsequenceClass.REVERSIBLE_LOCAL, parameters=params),
         source_text="do the thing every night at 9pm",
-        created_by="gerron",
+        created_by="sample_owner",
     )
 
 
@@ -171,7 +171,7 @@ def test_a_non_time_trigger_is_never_due_this_pass():
         selector=Selector(),
         action=ActionTarget(domain="computer", action="computer.noop", consequence_class=ConsequenceClass.REVERSIBLE_LOCAL),
         source_text="when a file arrives",
-        created_by="gerron",
+        created_by="sample_owner",
     )
     rule = _approved_rule(spec)
     assert scheduler.due_rules([rule], now=NOW) == []
@@ -331,7 +331,7 @@ def test_next_run_is_none_for_a_non_time_trigger():
         selector=Selector(),
         action=ActionTarget(domain="tasks", action="task.escalate", consequence_class=ConsequenceClass.REVERSIBLE_LOCAL),
         source_text="escalate overdue tasks",
-        created_by="gerron",
+        created_by="sample_owner",
     )
     rule = _approved_rule(spec)
     assert scheduler.next_run(rule, after=NOW) is None
@@ -359,7 +359,7 @@ def test_status_includes_event_triggered_rules_with_no_time_projection():
         selector=Selector(),
         action=ActionTarget(domain="computer", action="computer.noop", consequence_class=ConsequenceClass.REVERSIBLE_LOCAL),
         source_text="when a file arrives",
-        created_by="gerron",
+        created_by="sample_owner",
     )
     rule = _approved_rule(spec)
     rows = scheduler.status([rule], now=NOW)
@@ -378,7 +378,7 @@ def test_status_includes_reactive_evidence_and_external_condition_triggers():
             selector=Selector(),
             action=ActionTarget(domain="tasks", action="task.escalate", consequence_class=ConsequenceClass.REVERSIBLE_LOCAL),
             source_text="not yet handled",
-            created_by="gerron",
+            created_by="sample_owner",
         )
         rule = _approved_rule(spec)
         rows = scheduler.status([rule], now=NOW)
@@ -604,7 +604,7 @@ def _event_spec(
         selector=Selector(parameters=selector_filters or {}),
         action=ActionTarget(domain=domain, action=action, consequence_class=ConsequenceClass.REVERSIBLE_LOCAL),
         source_text="react to an event",
-        created_by="gerron",
+        created_by="sample_owner",
     )
 
 

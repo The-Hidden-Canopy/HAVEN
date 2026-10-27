@@ -30,7 +30,7 @@ def _event(event_id: str = "knowledge-audit:one") -> KnowledgeAuditEvent:
         scope_id="household-a",
         claim_id="claim:one",
         action=KnowledgeAuditAction.CORRECT,
-        actor_id="gerron",
+        actor_id="sample_owner",
         occurred_at=NOW,
         details=(("replacement_claim_id", "claim:two"),),
     )
@@ -47,7 +47,7 @@ def test_knowledge_audit_is_append_only_indexed_and_survives_reopen():
                 scope_id="household-a",
                 claim_id="claim:one",
                 action=KnowledgeAuditAction.FORGET,
-                actor_id="gerron",
+                actor_id="sample_owner",
                 occurred_at=NOW,
             )
         )
@@ -99,7 +99,7 @@ def test_correction_rolls_back_claim_replacement_when_audit_write_fails(monkeypa
             service.correct_claim(
                 "claim:one",
                 proposition="The launch date is October 2.",
-                actor="gerron",
+                actor="sample_owner",
             )
 
         assert claims.get("claim:one").state is ClaimState.REPORTED
@@ -125,9 +125,9 @@ def test_stale_and_forget_roll_back_claim_when_audit_write_fails(monkeypatch, op
         monkeypatch.setattr(ClaimStore, "_append_audit_on_connection", staticmethod(fail))
         with pytest.raises(OSError, match="audit database unavailable"):
             if operation == "stale":
-                service.mark_claim_stale(original.claim_id, actor="gerron")
+                service.mark_claim_stale(original.claim_id, actor="sample_owner")
             else:
-                service.forget_claim(original, forgotten_by="gerron")
+                service.forget_claim(original, forgotten_by="sample_owner")
 
         assert claims.get(original.claim_id).state is ClaimState.REPORTED
         assert claims.is_forgotten(claim_fingerprint(original)) is False

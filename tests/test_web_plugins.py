@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import socket
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -96,6 +97,44 @@ def test_plugins_are_empty_until_the_first_refresh(tmp_path):
         assert body["catalog_error"] is None
 
 
+def test_refresh_waits_for_the_complete_declared_body(tmp_path):
+    with _boot(tmp_path) as (_instance, port):
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            connection.putrequest("POST", "/api/plugins/refresh")
+            connection.putheader("Content-Type", "application/json")
+            connection.putheader("Content-Length", "2")
+            connection.endheaders()
+            connection.send(b"{")
+            connection.sock.settimeout(0.15)
+            with pytest.raises(socket.timeout):
+                connection.sock.recv(1)
+            connection.sock.settimeout(5)
+            connection.send(b"}")
+            response = connection.getresponse()
+            assert response.status == 200
+            assert json.loads(response.read())["ok"]
+        finally:
+            connection.close()
+
+
+def test_malformed_refresh_body_does_not_fetch_or_change_the_catalog(tmp_path, monkeypatch):
+    import haven.plugins.manager as manager_module
+    calls = []
+    monkeypatch.setattr(manager_module, "fetch_catalog", lambda _: calls.append(True))
+    with _boot(tmp_path) as (_instance, port):
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            connection.request("POST", "/api/plugins/refresh", body=b"{", headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            assert response.status == 400
+            assert json.loads(response.read())["fault"]["code"] == "HAVEN.IPC.INVALID_REQUEST"
+            assert calls == []
+            assert _get(port, "/api/plugins")[1]["plugins"] == []
+        finally:
+            connection.close()
+
+
 def test_refresh_populates_the_catalog_and_a_plain_get_then_sees_it(tmp_path):
     with _boot(tmp_path) as (_instance, port):
         status, body = _post(port, "/api/plugins/refresh")
@@ -131,7 +170,8 @@ def test_enabling_an_unlisted_plugin_id_fails_cleanly_not_with_a_traceback(tmp_p
         status, body = _post(port, "/api/plugins/not-a-real-plugin/enable")
         assert status == 200
         assert body["ok"] is False
-        assert "not-a-real-plugin" in body["error"]
+        assert body["fault"]["code"].startswith("HAVEN.PLUGINS.")
+        assert "not-a-real-plugin" not in body["error"]
 
 
 def test_enablement_survives_a_server_restart(tmp_path):

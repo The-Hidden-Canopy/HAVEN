@@ -7,13 +7,11 @@ public partial class App : Application
 {
     private Window? _window;
 
-    private static string DbgPath => System.IO.Path.Combine(System.IO.Path.GetTempPath(), "haven-dbg.txt");
-
     public App()
     {
         UnhandledException += (_, e) =>
         {
-            System.IO.File.AppendAllText(DbgPath, "UNHANDLED: " + e.Exception + System.Environment.NewLine);
+            DesktopPaths.AppendDiagnostic("UNHANDLED: " + e.Exception + System.Environment.NewLine);
         };
         InitializeComponent();
     }
@@ -36,7 +34,7 @@ public partial class App : Application
     {
         // App.xaml cannot know the system theme at parse time, so the first
         // flat theme dictionary is merged here; ThemeService swaps it live
-        // afterwards (flat dictionaries only — swapping ThemeDictionaries
+        // afterwards (flat dictionaries only â€” swapping ThemeDictionaries
         // dictionaries at runtime breaks framework resource caching).
         //
         // Must be called from OnLaunched, never from this constructor:

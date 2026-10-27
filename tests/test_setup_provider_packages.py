@@ -6,6 +6,9 @@ the setup-wizard-facing half of `haven/providers/loader.py`.
 from __future__ import annotations
 
 import tempfile
+import json
+from dataclasses import asdict
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
@@ -92,8 +95,19 @@ def _service(data_dir: Path) -> SetupService:
 
 
 def _patch_entry_points(monkeypatch, *entry_points):
+    prepared = []
+    for entry in entry_points:
+        plugin = {"philips_hue": FAKE_HUE_PLUGIN, "fake_mail": FAKE_COMMS_PLUGIN}.get(entry.name)
+        if plugin is not None:
+            # The fixture author supplies static metadata; listing never
+            # imports the provider to obtain this description.
+            raw = json.dumps({"schema": "haven-provider.v1", "entries": {entry.name: asdict(plugin.describe())}},
+                             default=lambda value: value.value if hasattr(value, "value") else list(value))
+            entry = entry._for(SimpleNamespace(name="synthetic-provider-fixture", version="1.0.0",
+                                               read_text=lambda _name, raw=raw: raw))
+        prepared.append(entry)
     monkeypatch.setattr(
-        metadata, "entry_points", lambda *, group: entry_points if group == "haven.providers" else ()
+        metadata, "entry_points", lambda *, group: tuple(prepared) if group == "haven.providers" else ()
     )
 
 
@@ -168,11 +182,8 @@ def test_list_provider_packages_reports_a_broken_package_without_crashing(monkey
     assert "manifest" not in result["providers"][0]
 
 
-def test_install_provider_package_activates_it_without_touching_provider_kind(monkeypatch):
-    """Regression: installing a community provider must never overwrite
-    `provider_kind` -- that used to silently unplug Home Assistant's own
-    wiring on the next rebuild once a second provider was installed (see
-    `is_real_installation` in `haven/web/provider_install.py`)."""
+def test_unreviewed_provider_install_is_blocked_without_touching_provider_kind(monkeypatch):
+    """Static inspection cannot authorize importing third-party code."""
 
     ep = metadata.EntryPoint(name="philips_hue", value=f"{__name__}:FAKE_HUE_PLUGIN", group="haven.providers")
     _patch_entry_points(monkeypatch, ep)
@@ -180,15 +191,13 @@ def test_install_provider_package_activates_it_without_touching_provider_kind(mo
         data_dir = Path(tmp)
         service = _service(data_dir)
         result = service.install_provider_package(entry_point_name="philips_hue", config={"bridge_ip": "10.0.0.5"})
-        assert result["ok"] is True
-        assert result["provider_id"] == "philips_hue"
+        assert result["ok"] is False
+        assert "in-process provider loading blocked" in result["error"]
 
         store = SetupConfigStore(data_dir / "haven.json")
         assert store.load().provider_kind is None
         installed = find_installed_provider(store, "philips_hue")
-        assert installed is not None
-        assert installed.enabled is True
-        assert load_installed_provider_config(store, "philips_hue") == {"bridge_ip": "10.0.0.5"}
+        assert installed is None
 
 
 def test_install_provider_package_surfaces_a_build_failure_without_persisting(monkeypatch):
@@ -199,7 +208,7 @@ def test_install_provider_package_surfaces_a_build_failure_without_persisting(mo
         service = _service(data_dir)
         result = service.install_provider_package(entry_point_name="philips_hue", config={})
         assert result["ok"] is False
-        assert "bridge_ip" in result["error"]
+        assert "in-process provider loading blocked" in result["error"]
 
         store = SetupConfigStore(data_dir / "haven.json")
         assert store.load().provider_kind is None
@@ -221,7 +230,8 @@ def test_set_provider_package_enabled_toggles_without_losing_config(monkeypatch)
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         service = _service(data_dir)
-        service.install_provider_package(entry_point_name="philips_hue", config={"bridge_ip": "10.0.0.5"})
+        save_installed_provider(service._store, provider_id="philips_hue", entry_point_name="philips_hue",
+                                config={"bridge_ip": "10.0.0.5"})
 
         result = service.set_provider_package_enabled(provider_id="philips_hue", enabled=False)
         assert result["ok"] is True

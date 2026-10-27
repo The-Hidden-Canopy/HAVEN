@@ -237,7 +237,7 @@ class FakeHuePluginForApplicationTest:
 FAKE_HUE_PLUGIN = FakeHuePluginForApplicationTest()
 
 
-def test_activated_community_provider_supplies_real_world_and_execution(monkeypatch):
+def test_persisted_unreviewed_provider_cannot_supply_world_or_execution(monkeypatch):
     fake_entry_point = metadata.EntryPoint(
         name="philips_hue", value=f"{__name__}:FAKE_HUE_PLUGIN", group="haven.providers"
     )
@@ -256,8 +256,8 @@ def test_activated_community_provider_supplies_real_world_and_execution(monkeypa
 
     assert director.house is None
     snapshot = director.world.observe(NOW)
-    assert [d.device_id for d in snapshot.devices] == ["hue.living_room"]
-    assert director.runtime.execution_providers.get("philips_hue") is not None
+    assert snapshot.devices == ()
+    assert not director.runtime.execution_providers.is_registered("philips_hue")
 
 
 def test_uninstalling_last_provider_never_returns_real_installation_to_demo(monkeypatch):
@@ -265,7 +265,7 @@ def test_uninstalling_last_provider_never_returns_real_installation_to_demo(monk
     signals alone. A household that installed its only provider, was
     minted a real `household_id`, declared people, and enrolled devices --
     then uninstalled that provider -- stays real: no live evidence, never
-    the demo fixture reappearing with its fictional `gerron`/garage/camera
+    the demo fixture reappearing with its fictional `sample_owner`/garage/camera
     scenario."""
 
     fake_entry_point = metadata.EntryPoint(
@@ -301,10 +301,8 @@ def test_uninstalling_last_provider_never_returns_real_installation_to_demo(monk
     assert second.runtime.execution_providers.is_registered("philips_hue") is False
 
 
-def test_home_assistant_and_a_community_provider_are_both_active_at_once(monkeypatch):
-    """The whole point of the multi-provider composition: connecting Home
-    Assistant does not exclude an installed community provider (or vice
-    versa) -- both contribute observation and execution simultaneously."""
+def test_unreviewed_provider_metadata_cannot_replace_a_connected_provider(monkeypatch):
+    """Persisted enablement never turns unreviewed code into a trusted provider."""
 
     fake_entry_point = metadata.EntryPoint(
         name="philips_hue", value=f"{__name__}:FAKE_HUE_PLUGIN", group="haven.providers"
@@ -323,9 +321,9 @@ def test_home_assistant_and_a_community_provider_are_both_active_at_once(monkeyp
 
     snapshot = director.world.observe(NOW)
     device_ids = {d.device_id for d in snapshot.devices}
-    assert device_ids == {"light.living_room", "hue.living_room"}
+    assert device_ids == {"light.living_room"}
     assert director.runtime.execution_providers.get(HA_PROVIDER_ID) is not None
-    assert director.runtime.execution_providers.get("philips_hue") is not None
+    assert not director.runtime.execution_providers.is_registered("philips_hue")
 
 
 def test_a_disabled_installed_provider_is_treated_as_unavailable(monkeypatch):

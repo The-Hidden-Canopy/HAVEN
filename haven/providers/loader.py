@@ -13,8 +13,8 @@ philips_hue = "haven_philips_hue.plugin:PLUGIN"
 
 where `PLUGIN` is a module-level object (or a zero-argument class) that
 satisfies `HavenProviderPlugin` (`haven/providers/plugin.py`). Nothing in
-Haven Core imports the provider package until a caller explicitly asks to
-inspect or build one of its discovered entries -- `discover_provider_packages`
+Haven Core imports unknown provider code until the host explicitly approves
+an in-process build. Discovery and inspection
 touches only package *metadata*, never the package's own code, which is
 what makes it safe to run automatically (e.g. to populate a Settings ->
 Providers list) rather than only on explicit user action.
@@ -26,7 +26,9 @@ from dataclasses import dataclass, field
 from importlib import metadata
 from typing import Mapping
 
-from .plugin import HavenProviderPlugin, ProviderManifest
+from .plugin import HavenProviderPlugin, ProviderManifest, ProviderConfigField, ProviderOperationalProfile
+from ..core.consequence import ConsequenceClass
+from ..extensions.static_metadata import entry_metadata
 
 _ENTRY_POINT_GROUP = "haven.providers"
 
@@ -50,7 +52,7 @@ class DiscoveredProviderPackage:
     distribution_version: str | None
     _entry_point: metadata.EntryPoint = field(repr=False, compare=False)
 
-    def load_plugin(self) -> HavenProviderPlugin:
+    def load_plugin(self, *, trusted_in_process: bool = False) -> HavenProviderPlugin:
         """Import the package and resolve its declared plugin object.
 
         The entry point may resolve to a plugin instance directly (a module-
@@ -59,6 +61,8 @@ class DiscoveredProviderPackage:
         more natural for their package.
         """
 
+        if trusted_in_process is not True:
+            raise ProviderLoadError("in-process provider loading blocked: explicit host review or isolation required")
         try:
             target = self._entry_point.load()
         except Exception as exc:
@@ -97,25 +101,52 @@ def discover_provider_packages() -> tuple[DiscoveredProviderPackage, ...]:
 
 
 def inspect_provider_package(discovered: DiscoveredProviderPackage) -> ProviderManifest:
-    """Import the package and return its self-description, nothing built.
+    """Read declarative metadata without executing installed package code.
 
-    This is the "ask what capabilities it declares, present permissions"
-    step: a household can review `ProviderManifest.permissions` and
-    `config_fields` before anything real is constructed.
+    A missing static manifest blocks inspection. Package claims are displayed
+    as claims; neither permissions nor credentials are granted by this call.
     """
-
-    plugin = discovered.load_plugin()
+    # This built-in uses a host-owned factory, never the entry point's loader.
+    if _is_bundled(discovered):
+        from ..integrations.ring.plugin import RingSimulatorPlugin
+        return RingSimulatorPlugin().describe()
     try:
-        manifest = plugin.describe()
-    except Exception as exc:
-        raise ProviderLoadError(f"{discovered.entry_point_name!r}.describe() raised: {exc}") from exc
-    if not isinstance(manifest, ProviderManifest):
-        raise ProviderLoadError(f"{discovered.entry_point_name!r}.describe() did not return a ProviderManifest")
-    return manifest
+        row = entry_metadata(discovered._entry_point, "haven-provider.json", "haven-provider.v1")
+        for key in ("capabilities", "permissions", "config_fields"):
+            if not isinstance(row.get(key, []), list):
+                raise ValueError(f"{key} must be an array")
+        config = []
+        for item in row.get("config_fields", []):
+            if not isinstance(item, dict) or any(not isinstance(item.get(k, default), bool)
+                                               for k, default in (("required", True), ("secret", False))):
+                raise ValueError("invalid config_fields")
+            config.append(ProviderConfigField(name=item["name"], label=item["label"],
+                                              required=item.get("required", True), secret=item.get("secret", False)))
+        profile = dict(row.get("operational", {}))
+        for key in ("discovery", "observation", "read", "mutation", "webhook_push"):
+            if key in profile and not isinstance(profile[key], bool):
+                raise ValueError(f"operational {key} must be boolean")
+        if "destructive_action_classes" in profile:
+            profile["destructive_action_classes"] = tuple(ConsequenceClass(x) for x in profile["destructive_action_classes"])
+        return ProviderManifest(
+            provider_id=row["provider_id"], kind=row["kind"], capabilities=frozenset(row["capabilities"]),
+            display_name=row["display_name"], description=row["description"],
+            permissions=tuple(row.get("permissions", [])), version=row.get("version", "0.0.0"),
+            homepage=row.get("homepage"), config_fields=tuple(config),
+            operational=ProviderOperationalProfile(**profile),
+        )
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ProviderLoadError(str(exc)) from exc
+
+
+def _is_bundled(discovered: DiscoveredProviderPackage) -> bool:
+    return (discovered.entry_point_name == "haven_ring_simulator"
+            and discovered._entry_point.value == "haven.integrations.ring.plugin:PLUGIN")
 
 
 def build_provider(
-    discovered: DiscoveredProviderPackage, *, config: Mapping[str, str] | None = None
+    discovered: DiscoveredProviderPackage, *, config: Mapping[str, str] | None = None,
+    trusted_in_process: bool = False,
 ) -> tuple[ProviderManifest, object]:
     """Construct the real provider instance for a package a household approved.
 
@@ -125,7 +156,13 @@ def build_provider(
     registries" boundary (`docs/authoring-providers.md`).
     """
 
-    plugin = discovered.load_plugin()
+    if _is_bundled(discovered):
+        from ..integrations.ring.plugin import RingSimulatorPlugin
+        plugin = RingSimulatorPlugin()
+    else:
+        if trusted_in_process is not True:
+            raise ProviderLoadError("in-process provider loading blocked: explicit host review or isolation required")
+        plugin = discovered.load_plugin(trusted_in_process=True)
     try:
         manifest = plugin.describe()
     except Exception as exc:

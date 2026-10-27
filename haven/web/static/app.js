@@ -188,12 +188,15 @@ async function requestJSON(url, options) {
     const body = await res.json().catch(() => ({}));
     const envelope = body && typeof body === 'object' && !Array.isArray(body)
       ? body : {};
+    if (envelope.fault && envelope.fault.schema_version === 1) {
+      envelope.error = '[' + envelope.fault.code + '] ' + envelope.fault.message;
+    }
     return Object.assign({}, envelope, { httpOk: res.ok, status: res.status });
   } catch {
     return {
       httpOk: false,
       status: 0,
-      error: 'HAVEN could not reach the local service.',
+      error: '[HAVEN.IPC.UNAVAILABLE] HAVEN could not reach the local service.',
     };
   }
 }
@@ -1996,7 +1999,7 @@ function renderSetupHousehold(container) {
       sensorPerson.appendChild(opt);
     }
     const sensorEntity = makeSetupHouseholdInput(
-      'occupancy sensor entity id, e.g. binary_sensor.gerron_office_occupancy');
+      'occupancy sensor entity id, e.g. binary_sensor.sample_owner_office_occupancy');
     const sensorRoom = makeSetupHouseholdInput('room');
     const addSensor = document.createElement('button');
     addSensor.type = 'submit';
@@ -2677,7 +2680,7 @@ async function openAuthoringDialog(kind, record) {
     form.appendChild(actions);
   } else if (kind === 'person') {
     const personId = record && (record.person_id || record.id);
-    const name = authoringField(form, 'Name', authoringInput('authoring-name', 'text', record && record.name, 'e.g. Gerron'));
+    const name = authoringField(form, 'Name', authoringInput('authoring-name', 'text', record && record.name, 'e.g. Sample Owner'));
     const role = authoringField(form, 'Role', authoringSelect(
       'authoring-role',
       [{ value: 'member', label: 'Member' }, { value: 'owner', label: 'Owner' }],
