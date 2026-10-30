@@ -44,9 +44,13 @@
   <ItemGroup>
     <Content Include="..\..\haven\web\static\haven-logo-light.png">
       <Link>Assets\haven-logo-light.png</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
     <Content Include="..\..\haven\web\static\haven-logo-dark.png">
       <Link>Assets\haven-logo-dark.png</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
   <Import Project="$(HavenPrivateIntegrationProps)" Condition="'$(HavenPrivateIntegrationProps)' != ''" />
