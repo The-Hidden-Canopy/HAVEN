@@ -1,12 +1,12 @@
 {
-  "version": "0.1.0-preview.20261030",
+  "version": "0.1.0-preview.20261030.1",
   "platform": "windows-x64",
   "installer": "HAVENSetup.exe",
-  "bytes": 103167937,
-  "sha256": "a66cbe2907c32b0e57490c483fba231a1b382329afbd14d26a2328e2d7211f0b",
+  "bytes": 103179317,
+  "sha256": "4e044bfa1ac177a2f382b0e3d411371620c20b3619a0d18230ea514865984577",
   "authenticode": "unsigned",
-  "application_source_commit": "849eb84976016cc758e370f830587aebe62d4281",
-  "packaging_commit": "8ea56ea33f40402cf871b21f1ebb4ce3638285f1",
+  "application_source_commit": "cbb669125ff49fdcb417be6744805f6a0ef8f962",
+  "packaging_commit": "cbb669125ff49fdcb417be6744805f6a0ef8f962",
   "payload_files": 1852,
   "included_private_plugins": false,
   "upstream_notices_included": true
