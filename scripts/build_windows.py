@@ -64,6 +64,50 @@ def copy_crypto_runtime(python_root: Path, output: Path):
     return versions
 
 
+def copy_dependency_notices(source: Path, output: Path):
+    """Retain resolved NuGet licenses and notices without copying build metadata."""
+    packages = {}
+    for project in ("Haven.Desktop", "Haven.Launcher"):
+        assets = json.loads((source / "native" / project / "obj/project.assets.json").read_text(encoding="utf-8"))
+        roots = [Path(p) for p in assets["packageFolders"]]
+        for identity, record in assets["libraries"].items():
+            if record.get("type") != "package" or identity in packages:
+                continue
+            relative = Path(record["path"])
+            if relative.anchor or ".." in relative.parts:
+                raise ValueError("Unsafe dependency package path.")
+            package = next((p / relative for p in roots if (p / relative).is_dir()), None)
+            if package is None or package.is_symlink():
+                raise ValueError("Resolved dependency package is unavailable.")
+            selected = {p for p in package.rglob("*") if p.is_file() and p.name.upper().startswith(("LICENSE", "LICENCE", "NOTICE", "THIRDPARTY", "THIRD-PARTY", "COPYING"))}
+            terms = []
+            for spec in package.glob("*.nuspec"):
+                for node in ET.parse(spec).getroot().iter():
+                    if node.tag.rsplit("}", 1)[-1] != "license":
+                        continue
+                    value = (node.text or "").strip()
+                    terms.append({"type": node.attrib.get("type"), "value": value})
+                    if node.attrib.get("type") == "file":
+                        license_path = Path(value)
+                        if license_path.anchor or ".." in license_path.parts:
+                            raise ValueError("Unsafe dependency license path.")
+                        selected.add(package / license_path)
+            copied = []
+            for file in sorted(selected):
+                if not file.is_file() or file.is_symlink() or not file.resolve().is_relative_to(package.resolve()):
+                    raise ValueError("Unsafe dependency notice input.")
+                relative_file = file.relative_to(package)
+                target = output / "licenses/nuget" / relative / relative_file
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(file, target)
+                copied.append(target.relative_to(output).as_posix())
+            packages[identity] = {"licenses": terms, "notices": copied}
+    target = output / "licenses/nuget/packages.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(packages, indent=2) + "\n", encoding="utf-8")
+    return packages
+
+
 def build(output: Path, python_root: Path):
     repo = Path(__file__).resolve().parents[1]
     output = output.resolve()
@@ -146,6 +190,7 @@ def build(output: Path, python_root: Path):
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
     dependencies = copy_crypto_runtime(python_root, output)
+    dotnet_packages = copy_dependency_notices(work / "source", output)
     forbidden = {".db", ".sqlite", ".sqlite3", ".pem", ".key", ".pfx", ".pdb", ".pyc", ".log", ".patch", ".diff", ".gguf", ".safetensors", ".onnx", ".pt", ".pth"}
     files = []
     for path in sorted(output.rglob("*")):
@@ -154,7 +199,7 @@ def build(output: Path, python_root: Path):
             if path.suffix.lower() in forbidden or any(part in {".haven-local", ".git", "__pycache__"} for part in path.relative_to(output).parts):
                 raise ValueError("Unexpected private/generated artifact in package.")
             files.append({"path": relative, "bytes": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
-    manifest = {"schema_version": 1, "source_commit": commit, "architecture": "win-x64", "dependencies": dependencies, "publication": "local audit candidate; not a release", "files": files}
+    manifest = {"schema_version": 1, "source_commit": commit, "architecture": "win-x64", "dependencies": dependencies, "dotnet_packages": dotnet_packages, "publication": "unsigned preview; provider/device acceptance remains separate", "files": files}
     (output / "bundle-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
 
