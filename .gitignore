@@ -48,3 +48,7 @@ bin-verify*/
 
 # Operational task lists, evidence and coordination remain owner-local.
 /.haven-local/
+/.dotnet-home/
+/native/Haven.Desktop.Tests/TestResults/
+/native/Haven.Android/session_contract/dotnet-tests/bin/
+/native/Haven.Android/session_contract/dotnet-tests/obj/

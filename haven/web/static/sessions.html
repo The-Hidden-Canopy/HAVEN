@@ -1,0 +1,5 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shared sessions · HAVEN</title><link rel="stylesheet" href="/styles.css"><script type="module" src="/appearance.mjs"></script></head>
+<body><main style="max-width:70rem;margin:auto;padding:2rem"><a href="/">Back to HAVEN</a><h1>Shared sessions</h1><p>Providers run on the local host. Session grants control every operation.</p>
+<p id="status" role="status">Load authorized sessions to begin.</p><button id="load">Load sessions</button><select id="sessions" aria-label="Authorized session"></select><button id="snapshot">Inspect jobs and approvals</button><button id="replay">Replay messages</button><button id="reconcile">Inspect uncertain command</button>
+<div id="jobs"></div><div id="approvals"></div><pre id="messages" style="white-space:pre-wrap"></pre><label>Message <textarea id="message" maxlength="4096"></textarea></label><button id="send">Submit</button>
+</main><script type="module" src="/sessions.mjs"></script></body></html>

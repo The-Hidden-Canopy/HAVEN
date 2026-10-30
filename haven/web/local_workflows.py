@@ -27,18 +27,63 @@ class LocalWorkflows:
     def __init__(self, host, data_dir: Path):
         self.host = host
         self._closed = False
+        from haven.session_bridge.durable import DurableSessionBinding
+        from haven.session_bridge.local import LocalSessionRoutes
+        self.sessions = DurableSessionBinding(data_dir / "sessions.db",
+            member=lambda principal,scope: self.authorize(principal,scope,"features.list"))
+        self.session_routes = LocalSessionRoutes(host,self.sessions)
+        from haven.android_bridge.feature_host import FeatureGateway
+        self.feature_gateway = FeatureGateway(workflows=self,path=data_dir / "paired_features.db")
+        self._host_bindings = None
+        factory = getattr(host,"_local_host_factory",None)
+        if factory is not None:
+            self._host_bindings = factory(self,data_dir)
         self.decisions = DecisionService(
             store=DecisionStore(data_dir / "decisions.db"), identity=host.identity,
             resources=host.resources, has_declared_owner=lambda: host.director.has_declared_owner,
             clock=host._director_clock,
         )
         self.decision_api = DecisionAPI(decisions=self.decisions, default_scope=lambda: host.identity.personal_scope_id)
+        self.ghost_teacher_bindings = None
+        self._owns_ghost_teacher_bindings = False
         try:
+            releases = bundled_feature_releases()
+            operations = {"decisions.context": self.decision_context}
+            self._traceglass_routes = None
+            broker = getattr(host, "traceglass_broker", None)
+            self._traceglass_broker = broker
+            if broker is not None:
+                # This import is only enabled by the host-reviewed private integration.
+                from haven.extensions.lifecycle import BundledFeatureRelease
+                from traceglass.haven import TraceGlassFeature, OPERATIONS
+                from traceglass.haven.service import TraceGlassServices, FeatureServiceError
+                from traceglass.haven.routes import TraceGlassHostRoutes
+                service = TraceGlassServices(broker)
+                self._traceglass_routes = TraceGlassHostRoutes(broker=broker, context=self._context, authorize=self.authorize)
+                def safe(operation):
+                    def call(**params):
+                        try:
+                            return operation(**params)
+                        except FeatureServiceError as exc:
+                            raise FeatureLifecycleError(exc.code, "TraceGlass operation unavailable") from exc
+                    return call
+                releases += (BundledFeatureRelease("traceglass", "0.1.0", "TraceGlass", TraceGlassFeature,
+                            OPERATIONS, ("inspect", "verify_package", "export_package", "capture")),)
+                operations.update({OPERATIONS[0]: safe(service.inspect), OPERATIONS[1]: safe(service.verify_package),
+                                   OPERATIONS[2]: safe(service.export_package), OPERATIONS[3]: safe(service.capture)})
+            # Only a host-reviewed factory may attach private local bindings.
+            # Importable packages alone never grant activation or data access.
+            bindings = getattr(host, "ghost_teacher_bindings", None)
+            if bindings is not None:
+                from ghost_teacher.haven_host_patch import ghost_teacher_release, ghost_teacher_operations
+                self.ghost_teacher_bindings = bindings
+                releases += (ghost_teacher_release(),)
+                operations.update(ghost_teacher_operations(bindings))
             self.features = FeatureLifecycle(
-                data_dir / "features.json", releases=bundled_feature_releases(), authorize=self.authorize,
-                service_operations={"decisions.context": self.decision_context},
+                data_dir / "features.json", releases=releases, authorize=self.authorize,
+                service_operations=operations,
             )
-        except (FeatureLifecycleError, OSError) as exc:
+        except (FeatureLifecycleError, OSError, ImportError) as exc:
             self.features = None
             self._failure("feature_lifecycle_unavailable", "features.install", exc, "Feature lifecycle initialization failed.")
         try:
@@ -69,6 +114,9 @@ class LocalWorkflows:
         read = {"features.list", "features.status", "decisions.context", "products.list"}
         mutations = {f"features.{name}" for name in ("install", "enable", "disable", "run", "update", "rollback", "uninstall")}
         mutations |= {f"products.{name}" for name in ("download", "install", "update", "rollback", "enable", "disable", "launch", "uninstall", "cancel")}
+        # Keep feature invocation and all TraceGlass operations owner-only.
+        mutations |= {"traceglass.inspect", "traceglass.verify_package", "traceglass.export_package", "traceglass.capture"}
+        mutations.add("ghost_teacher.command")
         if operation not in read | mutations:
             return False
         principal = self.host.identity.current_principal()
@@ -85,6 +133,30 @@ class LocalWorkflows:
 
     def decision_context(self, *, principal_id, scope_id, **params):
         return self.decisions.context(scope_id, principal_id=principal_id, **params)
+
+    def paired_session_gateway(self):
+        """Inject into the existing paired TLS host; never starts a listener."""
+        host=self.host
+        class CurrentSessionGateway:
+            def call(self,*args):return host.local_workflows._bound_session_gateway().call(*args)
+        return CurrentSessionGateway()
+
+    def _bound_session_gateway(self):
+        from haven.session_bridge.gateway import SessionGateway
+        from haven.session_bridge.contract import AuthContext
+        def authorize(admitted, permission, session):
+            auth = AuthContext(admitted.principal.household_id, admitted.principal.actor_id,
+                               frozenset({permission}))
+            return self.sessions.allowed(auth,permission,session)
+        return SessionGateway(store=self.host._external_agents_store,
+            gateway=self.host.external_agent_gateway, authorize=authorize, provider=self.sessions)
+
+    def paired_feature_gateway(self):
+        host=self.host
+        class CurrentFeatureGateway:
+            def call(self,*args):
+                return host.local_workflows.feature_gateway.call(*args)
+        return CurrentFeatureGateway()
 
     def agent_context(self):
         identity = self.host.identity
@@ -194,11 +266,20 @@ class LocalWorkflows:
                     return self._with_receipt(name, receipt, result)
                 return result
             handlers[name] = call
-        handlers.update({"features.list": self.feature_catalog, "features.action": self.feature_action,
+        if self._traceglass_routes is not None and not self._closed:
+            handlers.update({"traceglass.entitlement": self._traceglass_routes.entitlement,
+                             "traceglass.picker": self._traceglass_routes.picker})
+        handlers.update({"sessions.call": self.session_routes.call,
+                         "features.list": self.feature_catalog, "features.action": self.feature_action,
                          "marketplace.products": self.products_view, "marketplace.product": self.products_action})
         return handlers
 
     def close(self):
         self._closed = True
+        self.sessions.close()
         if self.features is not None:
             self.features.close()
+        if self._traceglass_broker is not None:
+            self._traceglass_broker.clear()
+        if self._host_bindings is not None:
+            self._host_bindings.close()

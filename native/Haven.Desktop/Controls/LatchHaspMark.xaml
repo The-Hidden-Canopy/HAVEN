@@ -1,0 +1,47 @@
+<UserControl
+    x:Class="Haven.Desktop.Controls.LatchHaspMark"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    IsTabStop="False"
+    AutomationProperties.Name="Latch hasp mark">
+    <!-- Hinged gate-latch/hasp vector mark for the Latch plugin. The full
+         mark draws the whole hardware set (base plate, hinge barrel, strap,
+         staple, T-handle); Simplified=true keeps only the strap + staple +
+         handle silhouette for nav rows and tight headings. Every stroke and
+         fill comes from Haven* ThemeResource tokens so the mark always
+         follows ThemeService - no hardcoded competing palette. -->
+    <Viewbox Stretch="Uniform">
+        <Canvas Width="48" Height="48">
+            <!-- Base plate (post side). -->
+            <Rectangle x:Name="BasePlate" Canvas.Left="6" Canvas.Top="8" Width="9" Height="32" RadiusX="3" RadiusY="3"
+                       Fill="{ThemeResource HavenSurface2Brush}"
+                       Stroke="{ThemeResource HavenStrokeBrush}" StrokeThickness="1" />
+            <Ellipse x:Name="ScrewTop" Canvas.Left="9.2" Canvas.Top="12" Width="2.6" Height="2.6"
+                     Fill="{ThemeResource HavenMutedTextBrush}" />
+            <Ellipse x:Name="ScrewBottom" Canvas.Left="9.2" Canvas.Top="33.4" Width="2.6" Height="2.6"
+                     Fill="{ThemeResource HavenMutedTextBrush}" />
+            <!-- Hinge barrel where the strap pivots. -->
+            <Ellipse x:Name="HingeBarrel" Canvas.Left="3.5" Canvas.Top="10.5" Width="11" Height="11"
+                     Fill="{ThemeResource HavenAccentBrush}"
+                     Stroke="{ThemeResource HavenAccentBrush}" StrokeThickness="1" />
+            <Ellipse x:Name="HingePin" Canvas.Left="7.4" Canvas.Top="14.4" Width="3.2" Height="3.2"
+                     Fill="{ThemeResource HavenSurface1Brush}" />
+            <!-- Hasp strap swinging from the hinge across the staple. -->
+            <Rectangle x:Name="HaspStrap" Canvas.Left="9" Canvas.Top="12.75" Width="30" Height="6.5" RadiusX="3.25" RadiusY="3.25"
+                       Fill="{ThemeResource HavenAccentBrush}" />
+            <!-- Staple (U-shaped hasp receiver) closed over the strap slot. -->
+            <Path x:Name="Staple" Data="M 28.5 10.5 L 37.5 10.5 L 37.5 21.5 L 28.5 21.5"
+                  Stroke="{ThemeResource HavenTextBrush}" StrokeThickness="2.4"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                  Fill="Transparent" />
+            <!-- T-handle thumb lever at the strap end. -->
+            <Rectangle x:Name="HandleBar" Canvas.Left="35.5" Canvas.Top="7.5" Width="4" Height="17" RadiusX="2" RadiusY="2"
+                       Fill="{ThemeResource HavenTextBrush}" />
+            <Rectangle x:Name="HandleGrip" Canvas.Left="32.5" Canvas.Top="7" Width="10" Height="4.4" RadiusX="2.2" RadiusY="2.2"
+                       Fill="{ThemeResource HavenTextBrush}" />
+        </Canvas>
+    </Viewbox>
+</UserControl>

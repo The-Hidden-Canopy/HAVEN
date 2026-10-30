@@ -117,6 +117,13 @@ from ..attention import NeedsYouService
 from ..attention.domain import attention_item_from_projection
 from ..attention.sources import AuthoritySource, KnowledgeSource, ModelSource, ProjectSource, ProviderSource, TaskSource
 from ..integrations.computer.windows import WindowObservationProvider
+from ..integrations.latch import (
+    LatchConfigError,
+    LatchHttpError,
+    LatchPluginService,
+    LatchResponseError,
+    LatchUnavailableError,
+)
 from .browser_actions import BrowserActionService
 from .comms_service import CommsService
 from .window_actions import WindowActionService
@@ -144,6 +151,8 @@ _AUTHORING_AUTOMATION_ACTION_PATH = re.compile(r"^/api/automations/([^/]+)/(appr
 _EXTERNAL_AGENTS_CONNECTION_PATH = re.compile(r"^/api/external-agents/connections/([^/]+)/(enable|revoke|bindings|observed-subjects)$")
 _EXTERNAL_AGENTS_BINDING_REVOKE_PATH = re.compile(r"^/api/external-agents/bindings/([^/]+)/revoke$")
 _RESOURCE_AUTOMATION_PATH = re.compile(r"^/api/resource-automations/([^/]+)/(approve|revoke|enable)$")
+_LATCH_COMMITMENT_DETAIL_PATH = re.compile(r"^/api/latch/commitments/([^/]+)$")
+_LATCH_EVIDENCE_DETAIL_PATH = re.compile(r"^/api/latch/evidence/([^/]+)$")
 
 _CORRELATION_HEADER = "X-HAVEN-Correlation-ID"
 _CORRELATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -287,7 +296,9 @@ class HavenWebServer(ThreadingHTTPServer):
         before_data_dir_changed=None,
         on_data_dir_changed=None,
         on_data_dir_change_failed=None,
+        local_host_factory=None,
     ) -> None:
+        self._local_host_factory = local_host_factory
         self.static_root = static_root
         self._session_token = session_token
         # The bootstrap token travels in the Edge command line, while the
@@ -641,7 +652,7 @@ class HavenWebServer(ThreadingHTTPServer):
         self.external_agent_gateway = ExternalAgentGateway(
             store=self._external_agents_store,
             household_id=self.director.household_id,
-            resolve_principal=self.director.principal_for,
+            resolve_principal=self.paired_principal,
             clock=scope_clock,
         )
         # WP2/WP3 read path: the admitted, scope-checked read-only tools a
@@ -745,10 +756,16 @@ class HavenWebServer(ThreadingHTTPServer):
             port_getter=lambda: self.server_address[1],
         )
         # Real-mode boot: let the setup discovery scan list live Home
-        # Assistant entities. Demo directors carry no source (None) â€” the
+        # Assistant entities. Demo directors carry no source (None) — the
         # scan then lists only local demo candidates.
         if getattr(self.director, "ha_states_source", None) is not None:
             self.setup.attach_ha_states_source(self.director.ha_states_source)
+        # Latch WebUI compatibility surface (read + propose adapter to a
+        # local Latch daemon). Built lazily by the handler on first use, or
+        # injected by tests as `server.latch`; constructing it reads only the
+        # HAVEN_LATCH_* environment, so composition of every other service
+        # above is untouched either way.
+        self.latch: LatchPluginService | None = None
         super().__init__(server_address, _Handler)
         # The demo schedules for real: a daemon tick every 20 s asks the
         # runtime which approved rules are due. Stopped in server_close.
@@ -2917,6 +2934,7 @@ class HavenWebServer(ThreadingHTTPServer):
         return IpcDispatcher(handlers, fault_journal=lambda: self.faults)
 
     def _bind_local_workflows(self, data_dir: Path) -> None:
+        if getattr(self,"_owns_latch_service",False):self.latch=None
         previous = getattr(self, "local_workflows", None)
         if previous is not None:
             previous.close()
@@ -2924,6 +2942,20 @@ class HavenWebServer(ThreadingHTTPServer):
         self.local_workflows = LocalWorkflows(self, data_dir)
         self.decisions = self.local_workflows.decisions
         self.director.set_decision_context_provider(self.local_workflows.agent_context)
+
+    def paired_principal(self, principal_id):
+        """Resolve a deliberately bound installed owner without inferring identity.
+
+        Pairing must record this exact principal ID. A household member name,
+        phone unlock, or an unbound external subject cannot select it.
+        """
+        principal=self.identity.current_principal()
+        if principal_id==principal.actor_id:
+            if (principal.household_id==self.director.household_id and
+                    self.local_workflows.authorize(principal_id,self.identity.personal_scope_id,"features.run")):
+                return principal
+            return None
+        return self.director.principal_for(principal_id)
 
     def _build_director(self) -> HavenApplication:
         # Keep rebuilds on the same explicit mode: normal boot remains a real
@@ -2995,7 +3027,7 @@ class HavenWebServer(ThreadingHTTPServer):
         self.external_agent_gateway = ExternalAgentGateway(
             store=self._external_agents_store,
             household_id=new.household_id,
-            resolve_principal=new.principal_for,
+            resolve_principal=self.paired_principal,
             clock=rebuild_clock,
         )
         self.external_agent_reads = ExternalReadTools(
@@ -3152,6 +3184,212 @@ class _Handler(BaseHTTPRequestHandler):
     def computer_actions(self) -> ComputerActionService:
         return self.server.computer_actions
 
+    @property
+    def latch(self) -> LatchPluginService:
+        service = self.server.latch
+        if service is None:
+            settings=os.environ.get("HAVEN_LATCH_SETTINGS_PATH")
+            if settings is None:
+                desktop=os.environ.get("HAVEN_DESKTOP_DATA_DIR")
+                settings=Path(desktop)/"settings.json" if desktop else self.server.setup_store.path.parent/"desktop/settings.json"
+            service = LatchPluginService(settings_path=settings)
+            self.server.latch = service
+            self.server._owns_latch_service = True
+        return service
+
+    def _latch_error(self, exc: Exception) -> bool:
+        """Map adapter failures to honest HTTP envelopes; True once answered."""
+
+        if isinstance(exc, LatchConfigError):
+            self._send_json(400,{"ok":False,"error":"request_invalid"})
+        elif isinstance(exc, LatchUnavailableError):
+            self._send_json(503, {"ok": False, "error": "latch_unreachable", "detail": str(exc)})
+        elif isinstance(exc, LatchHttpError):
+            self._send_json(
+                502,
+                {
+                    "ok": False,
+                    "error": "latch_http_error",
+                    "status": exc.status,
+                    "detail": exc.detail,
+                },
+            )
+        elif isinstance(exc, LatchResponseError):
+            self._send_json(502, {"ok": False, "error": "latch_invalid_response", "detail": str(exc)})
+        else:
+            return False
+        return True
+
+    def _latch_collection(self, fetch) -> None:
+        """Run one adapter read and answer with items or an honest failure."""
+
+        try:
+            data = fetch()
+        except Exception as exc:
+            if not self._latch_error(exc):
+                raise
+            return
+        items = data.get("items") if isinstance(data, dict) else None
+        self._send_json(
+            200,
+            {
+                "ok": True,
+                "items": items if isinstance(items, list) else [],
+                "demo": self.latch.is_demo,
+                "label": self.latch.label,
+            },
+        )
+
+    # --- Latch WebUI compatibility routes (read + propose only) -------------
+
+    def _send_latch_config(self) -> None:
+        # Flat config the WebUI reads first (base_url/demo/label/available);
+        # `/api/latch/status` is kept as a legacy alias of this payload.
+        info = self.latch.describe()
+        self._send_json(
+            200,
+            {
+                "ok": True,
+                "base_url": info["base_url"],
+                "demo": info["demo"],
+                "label": info["label"],
+                "available": info["available"],
+            },
+        )
+
+    def _send_latch_record(self, fetch, not_found_error: str) -> None:
+        """One Latch record with its fields at the top level (UI reads resp.id)."""
+
+        try:
+            record = fetch()
+        except LatchHttpError as exc:
+            if exc.status == 404:
+                self._send_json(404, {"ok": False, "error": not_found_error, "detail": exc.detail})
+                return
+            if not self._latch_error(exc):
+                raise
+            return
+        except Exception as exc:
+            if not self._latch_error(exc):
+                raise
+            return
+        payload = dict(record) if isinstance(record, dict) else {}
+        payload["ok"] = True
+        self._send_json(200, payload)
+
+    def _send_latch_access(self, query: dict) -> None:
+        stale_raw = query.get("stale_only", ["0"])[0].strip().lower()
+        stale_only = stale_raw in {"1", "true", "yes"}
+        self._latch_collection(lambda: self.latch.list_access(stale_only=stale_only))
+
+    def _send_latch_actions(self, query: dict) -> None:
+        commitment_id = query.get("commitment_id", [""])[0].strip()
+        status = query.get("status", [""])[0].strip()
+        self._latch_collection(
+            lambda: self.latch.list_action_plans(
+                commitment_id=commitment_id or None,
+                status=status or None,
+            )
+        )
+
+    def _send_latch_proposals(self) -> None:
+        # Legacy combined alias: the scheduler's durable review proposals plus
+        # the action plans HAVEN has proposed (both live Latch reads; nothing
+        # is reconstructed from audit history). The canonical page route is
+        # `/api/latch/schedules/proposals` for the scheduler records.
+        try:
+            scheduler = self.latch.list_review_proposals()
+            actions = self.latch.list_action_plans()
+        except Exception as exc:
+            if not self._latch_error(exc):
+                raise
+            return
+        scheduler_items = scheduler.get("items") if isinstance(scheduler, dict) else None
+        action_items = actions.get("items") if isinstance(actions, dict) else None
+        self._send_json(
+            200,
+            {
+                "ok": True,
+                "scheduler_proposals": scheduler_items if isinstance(scheduler_items, list) else [],
+                "action_plans": action_items if isinstance(action_items, list) else [],
+                "demo": self.latch.is_demo,
+                "label": self.latch.label,
+            },
+        )
+
+    def _handle_latch_propose(self) -> None:
+        body = self._read_json()
+        if body is None:
+            return
+        commitment_id = body.get("commitment_id")
+        if not isinstance(commitment_id, str) or not commitment_id.strip():
+            self._send_json(400, {"ok": False, "error": "a non-empty 'commitment_id' is required"})
+            return
+        try:
+            plan = self.latch.propose_cancellation(commitment_id)
+        except LatchConfigError as exc:
+            self._send_json(400, {"ok": False, "error": str(exc)})
+            return
+        except Exception as exc:
+            if not self._latch_error(exc):
+                raise
+            return
+        self._send_json(200, {"ok": True, "plan": plan})
+
+    def _send_latch_evidence(self, query: dict) -> None:
+        # Legacy `?id=` alias of `/api/latch/evidence/{id}`.
+        evidence_id = query.get("id", [""])[0]
+        if not evidence_id.strip():
+            self._send_json(400, {"ok": False, "error": "an 'id' query parameter is required"})
+            return
+        self._send_latch_record(
+            lambda: self.latch.get_evidence(evidence_id, include_content=True),
+            "evidence not found",
+        )
+
+    def _send_latch_handoff(self, query: dict) -> None:
+        plan_id = query.get("plan_id", [""])[0].strip()
+        available = self.latch.is_handoff_available()
+        self._send_json(
+            200,
+            {
+                "ok": True,
+                "available": available,
+                # Without a plan_id this is the availability probe the page
+                # uses to pre-disable the button. The deep link only makes
+                # sense while Latch serves its own UI; an API-only daemon
+                # would dead-end, so the URL is null either way.
+                "url": self.latch.handoff_url(plan_id) if available and plan_id else None,
+            },
+        )
+
+    def _send_latch_appearance(self) -> None:
+        appearance = self.latch.read_appearance()
+        # `mode` at top level (the WebUI reads resp.mode); the full record is
+        # nested for clients that also want theme/density/motion.
+        self._send_json(200, {"ok": True, "mode": appearance["mode"], "appearance": appearance})
+
+    def _handle_latch_appearance_write(self, *, allow_palette=False) -> None:
+        body = self._read_json()
+        if body is None:
+            return
+        if not isinstance(body, dict) or set(body) - ({"mode","theme"} if allow_palette else {"mode"}):
+            self._send_json(
+                400,
+                {"ok": False, "error": "only a 'mode' of light|dark|system may be set"},
+            )
+            return
+        try:
+            appearance = self.latch.write_appearance_preferences(body)
+        except LatchConfigError as exc:
+            self._send_json(400, {"ok": False, "error": str(exc)})
+            return
+        except OSError as exc:
+            self._send_json(500, {"ok": False, "error": "appearance_save_failed", "detail": str(exc)})
+            return
+        self._send_json(200, {"ok": True, "mode": appearance["mode"], "appearance": appearance})
+
+
     def _authorize_session(self) -> bool:
         expected = self.server._session_token
         if expected is None:
@@ -3166,6 +3404,22 @@ class _Handler(BaseHTTPRequestHandler):
             return True
         self._send_json(401, {"ok": False, "error": "HAVEN desktop session required"})
         return False
+
+    def _authorize_local_surface(self, *, mutation=False) -> bool:
+        """Keep local plugin/session routes on the authenticated loopback origin."""
+        hosts=self.headers.get_all("Host",[])
+        expected_port=self.server.server_address[1]
+        allowed={f"127.0.0.1:{expected_port}",f"localhost:{expected_port}"}
+        if self.server._session_token is None or len(hosts)!=1 or hosts[0].lower() not in allowed:
+            self._send_json(403,{"ok":False,"error":"scope_denied"})
+            return False
+        origin=self.headers.get("Origin")
+        if ((origin is not None and origin.lower()!="http://"+hosts[0].lower())
+                or self.headers.get("Sec-Fetch-Site", "same-origin") not in {"same-origin","none"}
+                or (mutation and self.headers.get_content_type()!="application/json")):
+            self._send_json(403,{"ok":False,"error":"scope_denied"})
+            return False
+        return True
 
     def _visible_scope_ids(self, params: dict, *, key: str) -> tuple[str, ...] | None:
         """Resolve the local visible-scope boundary for a web request.
@@ -3269,6 +3523,30 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if not self._authorize_session():
             return
+        if (path.startswith("/api/latch/") or path.startswith("/api/traceglass/")
+                or path == "/api/sessions/call" or path == "/api/features/action" or path == "/api/appearance"
+                or path.startswith("/features/") or path.startswith("/traceglass/")):
+            if not self._authorize_local_surface(mutation=False): return
+        if path in ("/traceglass/traceglass.js", "/traceglass/bridge.js", "/traceglass/chooser.js", "/traceglass/mount-web.js", "/traceglass/traceglass.css"):
+            if self.server._session_token is None or getattr(self.server, "traceglass_broker", None) is None:
+                self._send_json(403, {"ok": False, "error": "service_unavailable"})
+                return
+            from importlib.resources import files
+            name = path.rsplit("/", 1)[1]
+            try:
+                body = files("traceglass.haven").joinpath("static", name).read_bytes()
+            except (OSError, ModuleNotFoundError):
+                self._send_json(404, {"ok": False, "error": "service_unavailable"})
+                return
+            if len(body) > 262144:
+                self._send_json(500, {"ok": False, "error": "service_unavailable"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/css; charset=utf-8" if name.endswith(".css") else "text/javascript; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path == "/api/state":
             self._send_json(200, self.director.state())
         elif path == "/api/host/capabilities":
@@ -3367,6 +3645,39 @@ class _Handler(BaseHTTPRequestHandler):
                 self._call_external_agents("external_agents.observed_subjects", {"connection_id": connection_id})
             else:
                 self._send_json(404, {"error": "not found"})
+        elif path == "/api/latch/config":
+            self._send_latch_config()
+        elif path == "/api/latch/status":
+            self._send_latch_config()
+        elif path == "/api/latch/commitments":
+            self._latch_collection(self.latch.list_commitments)
+        elif _LATCH_COMMITMENT_DETAIL_PATH.match(path):
+            match = _LATCH_COMMITMENT_DETAIL_PATH.match(path)
+            self._send_latch_record(
+                lambda: self.latch.get_commitment(unquote(match.group(1))),
+                "commitment not found",
+            )
+        elif path == "/api/latch/access":
+            self._send_latch_access(parse_qs(urlsplit(self.path).query))
+        elif path == "/api/latch/schedules/proposals":
+            self._latch_collection(self.latch.list_review_proposals)
+        elif path == "/api/latch/proposals":
+            self._send_latch_proposals()
+        elif path == "/api/latch/actions":
+            self._send_latch_actions(parse_qs(urlsplit(self.path).query))
+        elif _LATCH_EVIDENCE_DETAIL_PATH.match(path):
+            match = _LATCH_EVIDENCE_DETAIL_PATH.match(path)
+            include_content = "content" in parse_qs(urlsplit(self.path).query)
+            self._send_latch_record(
+                lambda: self.latch.get_evidence(unquote(match.group(1)), include_content=include_content),
+                "evidence not found",
+            )
+        elif path == "/api/latch/evidence":
+            self._send_latch_evidence(parse_qs(urlsplit(self.path).query))
+        elif path == "/api/latch/handoff":
+            self._send_latch_handoff(parse_qs(urlsplit(self.path).query))
+        elif path in {"/api/latch/appearance","/api/appearance"}:
+            self._send_latch_appearance()
         else:
             match = _KNOWLEDGE_CLAIM_PATH.match(path)
             if match:
@@ -3395,6 +3706,39 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_desktop_activate()
             return
         if not self._authorize_session():
+            return
+        if (path.startswith("/api/latch/") or path.startswith("/api/traceglass/")
+                or path == "/api/sessions/call" or path == "/api/features/action" or path == "/api/appearance"
+                or path.startswith("/features/") or path.startswith("/traceglass/")):
+            if not self._authorize_local_surface(mutation=True): return
+        if path in ("/api/traceglass/entitlement", "/api/traceglass/picker"):
+            # Require a configured authenticated local session for this private surface.
+            if self.server._session_token is None:
+                self._send_json(403, {"ok": False, "error": "service_unavailable"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                length = 0
+            if not 0 < length <= 4096:
+                self._send_json(400, {"ok": False, "error": "request_invalid"})
+                return
+            body = self._read_json()
+            if body is None:
+                return
+            method = "traceglass." + path.rsplit("/", 1)[1]
+            handler = self.server.local_workflows.handlers().get(method)
+            result = handler(body) if handler else {"ok": False, "error": "service_unavailable"}
+            self._send_json(200 if result.get("ok") else 400, result)
+            return
+        if path == "/api/sessions/call":
+            if self.server._session_token is None:
+                self._send_json(403, {"ok": False, "code": "access_denied"})
+                return
+            body = self._read_json()
+            if body is None: return
+            result = self.server.local_workflows.session_routes.call(body)
+            self._send_json(200 if result.get("ok") else 400, result)
             return
         if path == "/api/chat":
             body = self._read_json()
@@ -3550,9 +3894,15 @@ class _Handler(BaseHTTPRequestHandler):
             body = self._read_json()
             if body is None:
                 return
+            if path == "/api/features/action" and body.get("feature_id") == "haven.ghost-teacher" and self.server._session_token is None:
+                self._send_json(403, {"ok": False, "error": "authenticated HAVEN session required"})
+                return
             if path.startswith("/api/decisions/"):
                 method = "decisions." + path.rsplit("/", 1)[1]
             elif path == "/api/features/action":
+                if body.get("feature_id") == "traceglass" and self.server._session_token is None:
+                    self._send_json(403, {"ok": False, "error": "service_unavailable"})
+                    return
                 method = "features.action"
             else:
                 method = "marketplace.product"
@@ -3621,6 +3971,15 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(200, {"ok": True, "result": result})
             return
+        if path == "/api/latch/actions/plan":
+            self._handle_latch_propose()
+            return
+        if path == "/api/latch/proposals":
+            self._handle_latch_propose()
+            return
+        if path in {"/api/latch/appearance","/api/appearance"}:
+            self._handle_latch_appearance_write(allow_palette=path=="/api/appearance")
+            return
         self._send_json(404, {"error": "not found"})
 
     @_bind_request_correlation
@@ -3642,6 +4001,20 @@ class _Handler(BaseHTTPRequestHandler):
         if body is None:
             return
         self._handle_authoring_delete(path, body)
+
+    @_bind_request_correlation
+    def do_PUT(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if not self._authorize_session():
+            return
+        if (path.startswith("/api/latch/") or path.startswith("/api/traceglass/")
+                or path == "/api/sessions/call" or path == "/api/features/action" or path == "/api/appearance"
+                or path.startswith("/features/") or path.startswith("/traceglass/")):
+            if not self._authorize_local_surface(mutation=True): return
+        if path in {"/api/latch/appearance","/api/appearance"}:
+            self._handle_latch_appearance_write(allow_palette=path=="/api/appearance")
+            return
+        self._send_json(404, {"error": "not found"})
 
     def _people_payload(self) -> dict:
         household = self.setup_service.status()["setup"]["household"]
@@ -4322,6 +4695,10 @@ class _Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0") or "0")
         except ValueError:
             length = 0
+        if (length < 0 or length > 1048576 or len(self.headers.get_all("Content-Length",[])) > 1
+                or self.headers.get_all("Transfer-Encoding",[])):
+            self._send_json(400,{"ok":False,"error":"request_invalid"})
+            return None
         raw = self.rfile.read(length) if length > 0 else b""
         if not raw.strip():
             if optional:
@@ -4349,6 +4726,39 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
     def _serve_static(self, path: str) -> None:
+        if path == "/features/traceglass/":
+            if self.server._session_token is None or getattr(self.server,"traceglass_broker",None) is None:
+                self._send_json(403,{"ok":False,"error":"service_unavailable"})
+                return
+            path = "/traceglass-page.html"
+        feature_assets = {
+            "/features/ghost-teacher/": ("ghost-teacher.html", "text/html; charset=utf-8"),
+            "/features/ghost-teacher/ghost-teacher.js": ("ghost-teacher.js", "text/javascript; charset=utf-8"),
+            "/features/ghost-teacher/ghost-teacher-host.js": ("ghost-teacher-host.js", "text/javascript; charset=utf-8"),
+            "/features/ghost-teacher/ghost-teacher-page.js": ("ghost-teacher-page.js", "text/javascript; charset=utf-8"),
+            "/features/ghost-teacher/ghost-teacher.css": ("ghost-teacher.css", "text/css; charset=utf-8"),
+        }
+        if path in feature_assets:
+            if self.server._session_token is None:
+                self._send_json(403, {"ok": False, "error": "authenticated HAVEN session required"})
+                return
+            if getattr(self.server.local_workflows, "ghost_teacher_bindings", None) is None:
+                self._send_json(404, {"error": "not found"})
+                return
+            try:
+                from importlib.resources import files
+                name, content_type = feature_assets[path]
+                body = files("ghost_teacher").joinpath("frontend", name).read_bytes()
+            except (ImportError, OSError):
+                self._send_json(404, {"error": "not found"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path == "/":
             path = "/index.html"
         relative = posixpath.normpath(path).lstrip("/")
@@ -4696,6 +5106,7 @@ def make_server(
     before_data_dir_changed=None,
     on_data_dir_changed=None,
     on_data_dir_change_failed=None,
+    local_host_factory=None,
 ) -> tuple[HavenWebServer, HavenApplication]:
     root = Path(static_root) if static_root is not None else Path(__file__).parent / "static"
     server = HavenWebServer(
@@ -4707,6 +5118,7 @@ def make_server(
         before_data_dir_changed=before_data_dir_changed,
         on_data_dir_changed=on_data_dir_changed,
         on_data_dir_change_failed=on_data_dir_change_failed,
+        local_host_factory=local_host_factory,
     )
     return server, server.director
 

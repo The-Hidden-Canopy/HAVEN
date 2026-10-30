@@ -25,7 +25,7 @@ SUBSYSTEMS = (
     "identity", "intelligence", "integrations", "ipc", "knowledge", "marketplace",
     "memory", "models", "network", "ontology", "perception", "plugins", "providers",
     "projects", "recovery", "resources", "rooms", "people", "contexts", "scheduler", "scopes", "search", "speech",
-    "storage", "sync", "tasks", "today", "trace", "web", "windows",
+    "storage", "sync", "tasks", "today", "trace", "web", "windows", "android_bridge", "session_bridge",
 )
 
 
@@ -88,6 +88,8 @@ _register("NETWORK.TIMEOUT", "network", "The network operation timed out.", "Rev
 _register("UNKNOWN.UNEXPECTED", "core", "An unexpected failure interrupted the operation.", "Inspect the private diagnostic record using the correlation ID; the cause is not established.")
 
 ALIASES = {
+    "latch_unreachable": "PLUGINS.UNAVAILABLE", "latch_http_error": "PLUGINS.UNAVAILABLE",
+    "latch_invalid_response": "IPC.INVALID_REQUEST",
     "storage_unavailable": "STORAGE.IO_FAILED",
     "only an owner can admit a household relationship": "AUTHORITY.OWNER_REQUIRED",
     "scope_denied": "AUTHORITY.SCOPE_DENIED", "scope_not_visible": "AUTHORITY.SCOPE_DENIED",
@@ -280,7 +282,7 @@ SAFE_MESSAGES = frozenset(ALIASES) | frozenset(("'enabled' must be a boolean",
 
 # Existing service exception codes, frozen as a versioned compatibility set.
 CODE_NAMES = frozenset(('action_invalid', 'activation_failed', 'artifact_invalid', 'busy', 'cancelled', 'clock_invalid', 'dependency_in_use', 'dependency_missing', 'digest_mismatch', 'disabled', 'download_required', 'expired', 'fixture_catalog_invalid', 'forbidden', 'hb_context_create', 'hb_gatt_read', 'interrupted', 'invalid_payload', 'not_configured', 'not_enabled', 'not_installed', 'not_staged', 'operation_invalid', 'platform', 'platform_mismatch', 'registry_invalid', 'release_invalid', 'release_not_approved', 'release_revoked', 'removal_pending', 'replay', 'request_invalid', 'response_too_large', 'rollback_unavailable', 'schema_invalid', 'scope_denied', 'service_unavailable', 'signature_invalid', 'signature_missing', 'signature_untrusted', 'stale_handle', 'state_invalid', 'timeout', 'unknown_command', 'unreachable', 'unsafe_path', 'untrusted_release', 'update_required', 'verification_unavailable', 'version_mismatch'))
-SAFE_MESSAGES = SAFE_MESSAGES | CODE_NAMES | frozenset(('external.authentication_failed', 'external.binding_expired', 'external.connection_disabled', 'external.connection_unknown', 'external.cross_household', 'external.not_authorized', 'external.pending_consumed', 'external.pending_expired', 'external.pending_principal_mismatch', 'external.pending_unknown', 'external.principal_unavailable', 'external.rate_limited', 'external.scope_missing', 'external.subject_unbound'))
+SAFE_MESSAGES = SAFE_MESSAGES | {"not_licensed"} | CODE_NAMES | frozenset(('external.authentication_failed', 'external.binding_expired', 'external.connection_disabled', 'external.connection_unknown', 'external.cross_household', 'external.not_authorized', 'external.pending_consumed', 'external.pending_expired', 'external.pending_principal_mismatch', 'external.pending_unknown', 'external.principal_unavailable', 'external.rate_limited', 'external.scope_missing', 'external.subject_unbound'))
 SOURCE_CODES = {'integrations': ('hb_context_create', 'hb_gatt_read', 'timeout'),
  'marketplace': ('artifact_invalid',
                  'busy',

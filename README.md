@@ -13,6 +13,8 @@ check authority -> act -> observe consequence -> remember
 
 ## Start here
 
+On Windows x64, use the [standalone installer](downloads/windows/README.md). It includes the runtime and native client; no source checkout or developer tools are needed. This is an unsigned preview.
+
 New to HAVEN? Begin with the [getting started guide](docs/getting-started.md),
 then keep the [operating loop](docs/operating-loop.md) nearby as you make the
 installation your own. Connections are optional and can be started from the

@@ -15,7 +15,7 @@
   <meta name="apple-mobile-web-app-title" content="HAVEN">
   <link rel="apple-touch-icon" href="/icon.svg">
   <link rel="stylesheet" href="/styles.css">
-</head>
+<script type="module" src="/appearance.mjs"></script></head>
 <body data-glow="idle">
   <div class="app">
     <header class="topbar">
@@ -29,6 +29,12 @@
         <span class="brand-sub">Local&nbsp;&middot;&nbsp;<span id="local-time">&mdash;</span></span>
       </div>
       <div class="topbar-right">
+<label>Palette <select id="theme-palette"><option value="haven">Haven</option><option value="canopy">Canopy</option><option value="ember">Ember</option><option value="mono">Mono</option></select></label>
+        <div id="theme-segmented" class="theme-segmented" role="radiogroup" aria-label="Appearance mode">
+          <button type="button" role="radio" data-appearance-mode="system" aria-checked="true">System</button>
+          <button type="button" role="radio" data-appearance-mode="light" aria-checked="false">Light</button>
+          <button type="button" role="radio" data-appearance-mode="dark" aria-checked="false">Dark</button>
+        </div>
         <span id="state-pill" class="pill pill-dormant">DORMANT</span>
       </div>
     </header>
@@ -69,6 +75,12 @@
           <a href="#">
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 8h3l1.5-4 2.5 8 1.5-4h4"/></svg>
             <span class="nav-label">Activity</span>
+          </a>
+        </li>
+        <li data-view="latch">
+          <a href="#" aria-label="Latch">
+            <span class="nav-hasp" data-latch-hasp="simplified" aria-hidden="true"></span>
+            <span class="nav-label">Latch</span>
           </a>
         </li>
         <li class="nav-group" aria-hidden="true"><span class="micro">Settings</span></li>
@@ -126,6 +138,87 @@
           <span id="activity-count" class="muted">&mdash;</span>
         </div>
         <div id="activity-list" class="feed"></div>
+      </section>
+
+      <section class="view view-latch" aria-label="Latch">
+        <div class="center-head">
+          <h1 class="latch-heading">
+            <span class="latch-heading-hasp" data-latch-hasp="full" aria-hidden="true"></span>
+            <span>LATCH</span>
+            <span id="latch-demo-chip" class="latch-chip latch-chip-violet" hidden>Synthetic demo</span>
+          </h1>
+          <div class="center-head-actions">
+            <span id="latch-base-url" class="muted"></span>
+            <button id="latch-refresh" type="button" class="btn btn-sm">Refresh</button>
+            <button id="latch-help-toggle" type="button" class="btn btn-sm" aria-expanded="false"
+                    aria-controls="latch-help">Help</button>
+          </div>
+        </div>
+
+        <!-- Contextual help: startup guidance, configuration and the
+             read/propose-only action boundary. -->
+        <div id="latch-help" class="latch-card latch-help" hidden>
+          <h2 class="micro">GETTING LATCH DATA</h2>
+          <p>Start Latch&rsquo;s daemon from the Latch repository:
+            <code>./build/bin/latchd --socket /tmp/latchd.sock --db ~/.latch/latch.db --http-port 8787 --web-root apps/desktop</code>
+            (on Windows, <code>build\bin\latchd.exe</code> with equivalent paths). HAVEN&rsquo;s Latch
+            adapter reads from <code>http://127.0.0.1:8787</code> by default; point
+            <code>HAVEN_LATCH_BASE_URL</code> at another loopback address to override, and set
+            <code>HAVEN_LATCH_DEMO=1</code> to label synthetic demo data. Restart HAVEN after
+            changing either variable. The <code>--web-root apps/desktop</code> argument is required:
+            without a web root latchd serves only the API, and the authorization handoff has no
+            UI to open.</p>
+          <p>This page is read + propose only: HAVEN can propose a cancellation plan, but authorize,
+            execute and verify always happen in Latch&rsquo;s own desktop action flow &mdash; HAVEN opens
+            that flow for you and never holds the authority itself. Transport success is not
+            verification; a plan is only complete when Latch marks it Verified.</p>
+          <p class="muted">Keyboard: Ctrl+1 Ledger, Ctrl+2 Access review, Ctrl+3 Review proposals,
+            F5 refresh. Tab moves between tabs, lists and actions; arrow keys move inside the
+            list. This WebUI page is the compatibility verification surface for the Latch plugin;
+            the native desktop page remains the production experience.</p>
+        </div>
+
+        <!-- Honest state surfaces, never blended into each other. -->
+        <div id="latch-disconnected" class="latch-card latch-disconnected" role="alert" hidden>
+          <h2>Not connected to Latch</h2>
+          <p id="latch-disconnected-text"></p>
+          <button id="latch-retry" type="button" class="btn">Retry</button>
+        </div>
+        <div id="latch-stale-banner" class="latch-stale" hidden></div>
+        <div id="latch-loading" class="latch-loading" hidden>
+          <span class="latch-spinner" aria-hidden="true"></span>
+          <span>Loading Latch data&hellip;</span>
+        </div>
+        <p id="latch-error" class="error-text" hidden></p>
+        <p id="latch-status" class="muted latch-status" aria-live="polite"></p>
+
+        <div class="latch-tabs" role="tablist" aria-label="Latch views">
+          <button type="button" role="tab" id="latch-tab-ledger" data-latch-tab="ledger"
+                  aria-selected="true" aria-controls="latch-list-wrap">Ledger</button>
+          <button type="button" role="tab" id="latch-tab-access" data-latch-tab="access"
+                  aria-selected="false" aria-controls="latch-list-wrap" tabindex="-1">Access review</button>
+          <button type="button" role="tab" id="latch-tab-proposals" data-latch-tab="proposals"
+                  aria-selected="false" aria-controls="latch-list-wrap" tabindex="-1">Review proposals</button>
+        </div>
+
+        <div class="latch-split">
+          <div id="latch-list-wrap" class="latch-list-col" role="tabpanel" aria-labelledby="latch-tab-ledger">
+            <div id="latch-ledger-columns" class="latch-ledger-columns" aria-hidden="true">
+              <span>Provider</span>
+              <span>Cost</span>
+              <span>Renewal</span>
+              <span>Cancel by</span>
+              <span>Source observation</span>
+              <span>Confidence</span>
+            </div>
+            <div id="latch-list" class="latch-list" role="listbox" aria-label="Latch records"></div>
+            <p id="latch-empty" class="muted latch-empty" hidden></p>
+          </div>
+          <div id="latch-details" class="latch-details latch-card" aria-live="polite">
+            <p class="latch-details-hint">Select a record to see its evidence, observed dates,
+              reasoning, impact and actions.</p>
+          </div>
+        </div>
       </section>
 
       <section class="view view-memory" aria-label="Memory">
@@ -296,6 +389,10 @@
         <p class="model-note">The plugin marketplace is a preview: you can browse the Hub's catalog and record which plugins you'd want, but no data moves yet. A plugin never runs inside HAVEN and never sees live household state &mdash; when the export/relay path ships, enabling a plugin will only let the Hub relay this household's exported receipts to it, nothing else. See <a href="https://github.com/The-Hidden-Canopy/HAVEN/blob/main/docs/plugin-boundary.md" target="_blank" rel="noopener noreferrer">the plugin boundary contract</a>.</p>
         <p id="plugins-catalog-error" class="model-error" hidden></p>
         <div id="plugins-list"></div>
+        <p><a href="/sessions.html">Open shared sessions</a></p>
+        <section id="ghost-teacher-feature-link" hidden><h2>Local feature modules</h2>
+          <p><a href="/features/ghost-teacher/">Open Ghost Teacher</a></p></section>
+        <section id="traceglass-feature-link" hidden><h2>TraceGlass</h2><a href="/features/traceglass/">Open TraceGlass</a></section>
       </section>
 
       <section class="view view-placeholder" aria-label="Placeholder">

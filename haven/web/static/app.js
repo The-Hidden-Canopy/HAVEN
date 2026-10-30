@@ -17,6 +17,24 @@ const els = {
   navItems: document.querySelectorAll('.rail-nav li'),
   activityList: $('#activity-list'),
   activityCount: $('#activity-count'),
+  themeSegmented: $('#theme-segmented'),
+  latchDemoChip: $('#latch-demo-chip'),
+  latchBaseUrl: $('#latch-base-url'),
+  latchRefresh: $('#latch-refresh'),
+  latchHelpToggle: $('#latch-help-toggle'),
+  latchHelp: $('#latch-help'),
+  latchDisconnected: $('#latch-disconnected'),
+  latchDisconnectedText: $('#latch-disconnected-text'),
+  latchRetry: $('#latch-retry'),
+  latchStaleBanner: $('#latch-stale-banner'),
+  latchLoading: $('#latch-loading'),
+  latchError: $('#latch-error'),
+  latchStatus: $('#latch-status'),
+  latchTabs: document.querySelectorAll('[data-latch-tab]'),
+  latchLedgerColumns: $('#latch-ledger-columns'),
+  latchList: $('#latch-list'),
+  latchEmpty: $('#latch-empty'),
+  latchDetails: $('#latch-details'),
   memoryList: $('#memory-list'),
   memoryCount: $('#memory-count'),
   peopleList: $('#people-list'),
@@ -138,7 +156,7 @@ const app = {
   focus: null,      // room id or null
   automationFocus: null, // rule id or null
   selectedRoom: null, // room id selected in the rooms view, or null
-  view: 'world',    // center view: world | rooms | activity | memory | people | automations | system | models | external-agents | placeholder
+  view: 'world',    // center view: world | rooms | activity | memory | people | automations | system | models | external-agents | latch | placeholder
   knowledgeClaims: null, // null until the Memory view loads durable knowledge
   peopleDirectory: null, // declared people from the authoring endpoint
   contextsDirectory: null, // declared contexts from the authoring endpoint
@@ -5066,9 +5084,1199 @@ function renderExternalAgents() {
   }
 }
 
+/* ---------- appearance mode (System / Light / Dark) ----------
+   The segmented control in the topbar pins a mode; "System" follows the OS
+   through matchMedia. Persistence is shared with the native shell through
+   /api/latch/appearance, which reads and rewrites the same settings file
+   the native ThemeService owns (HAVEN_LATCH_SETTINGS_PATH overrides it for
+   isolated tests): the chosen mode is persisted, and theme/density/motion
+   are carried over semantically - the file is JSON, not preserved
+   byte-for-byte. There is deliberately no browser-side theme store: one
+   settings file is the single owner of appearance across native and
+   WebUI. */
+
+const appearanceState = {
+  mode: 'system', // system | light | dark
+  media: window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null,
+};
+
+function applyAppearanceMode(mode) {
+  const resolved = mode === 'system'
+    ? (appearanceState.media && appearanceState.media.matches ? 'light' : 'dark')
+    : mode;
+  document.documentElement.dataset.appearance = resolved;
+  if (els.themeSegmented) {
+    for (const button of els.themeSegmented.querySelectorAll('[data-appearance-mode]')) {
+      button.setAttribute('aria-checked', button.dataset.appearanceMode === mode ? 'true' : 'false');
+    }
+  }
+}
+
+async function setAppearanceMode(mode, { persist = true } = {}) {
+  if (!['system', 'light', 'dark'].includes(mode)) return;
+  appearanceState.mode = mode;
+  applyAppearanceMode(mode);
+  if (!persist || !els.themeSegmented) return;
+  const resp = await requestJSON('/api/latch/appearance', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: mode }),
+  });
+  // Honest persistence: when the shared appearance service cannot persist,
+  // the chosen mode still applies for this session and the control says so.
+  els.themeSegmented.dataset.persisted = resp.httpOk ? 'true' : 'false';
+  els.themeSegmented.title = resp.httpOk
+    ? ''
+    : 'Appearance applies for this session; the shared appearance service is unavailable.';
+}
+
+async function loadAppearance() {
+  const resp = await requestJSON('/api/latch/appearance');
+  const mode = resp && resp.httpOk && typeof resp.mode === 'string' ? resp.mode : 'system';
+  appearanceState.mode = ['system', 'light', 'dark'].includes(mode) ? mode : 'system';
+  applyAppearanceMode(appearanceState.mode);
+}
+
+if (appearanceState.media && appearanceState.media.addEventListener) {
+  // System mode re-resolves live when the OS flips its preference.
+  appearanceState.media.addEventListener('change', () => {
+    if (appearanceState.mode === 'system') applyAppearanceMode('system');
+  });
+}
+
+/* ---------- latch hasp mark ----------
+   One shared vector asset (latch-hasp.svg) serves the full heading mark and
+   the simplified navigation mark, injected inline so it themes from the
+   shell's CSS tokens. A failed fetch degrades to the text label only. */
+
+async function injectLatchHasp() {
+  let text = null;
+  try {
+    const res = await fetch('/latch-hasp.svg');
+    if (res.ok) text = await res.text();
+  } catch {
+    text = null;
+  }
+  if (!text) return;
+  const template = document.createElement('template');
+  template.innerHTML = text.trim();
+  const source = template.content.querySelector('svg');
+  if (!source) return;
+  // One shared style for the whole document, kept out of the injected marks
+  // so its text never leaks into links' accessible names.
+  const sharedStyle = source.querySelector('style');
+  if (sharedStyle && !document.getElementById('latch-hasp-style')) {
+    sharedStyle.id = 'latch-hasp-style';
+    document.head.appendChild(sharedStyle);
+  }
+  for (const host of document.querySelectorAll('[data-latch-hasp]')) {
+    const svg = source.cloneNode(true);
+    const cloneStyle = svg.querySelector('style');
+    if (cloneStyle) cloneStyle.remove();
+    svg.setAttribute('aria-hidden', 'true');
+    svg.removeAttribute('role');
+    svg.removeAttribute('aria-label');
+    if (host.dataset.latchHasp === 'simplified') svg.classList.add('simplified');
+    host.textContent = '';
+    host.appendChild(svg);
+  }
+}
+
+/* ---------- latch view: read + propose only ----------
+   Authority boundary: this page renders Latch API records and can propose a
+   cancellation plan. It has no authorization, execution or verification
+   path at all - authorization is handed off to Latch's own desktop action
+   flow through the /api/latch/handoff deep link (?plan_id=), and only when
+   Latch's own UI is actually served. Plan states stay distinct end to end
+   and transport success (needs_verification) is never shown as complete.
+   Every row comes from the /api/latch adapter routes - nothing is
+   fabricated and no dates are computed; Latch's fields render verbatim. */
+
+const latchState = {
+  tab: 'ledger', // ledger | access | proposals
+  records: new Map(), // "com:<id>" | "acc:<id>" | "prop:<id>" | "act:<id>" -> record
+  evidence: new Map(), // evidence id -> record Latch served (immutable)
+  evidenceUnavailable: new Set(), // evidence ids Latch could not serve
+  lastGoodAt: null,
+  loaded: false,
+  refreshSeq: 0, // refresh-race token: only the latest refresh renders
+  detailsSeq: 0, // details-selection race token: fast re-selects never cross-paint
+  planInFlight: false, // repeated-click guard for the proposal button
+  handoffAvailable: null, // null unknown | true | false (service-level probe)
+  config: null, // { base_url, demo }
+  selectedKey: null,
+};
+
+/* -- projection: pure shaping of Latch's real wire records (never
+   fabricated; renewal/cancel-by instants pass through verbatim) -- */
+
+function latchItems(root) {
+  if (Array.isArray(root)) return root;
+  if (!root || typeof root !== 'object') return [];
+  if (Array.isArray(root.items)) return root.items;
+  for (const key of ['commitments', 'access', 'grants', 'proposals', 'plans', 'actions']) {
+    if (Array.isArray(root[key])) return root[key];
+  }
+  return [];
+}
+
+function latchTryString(obj, prop) {
+  const value = obj && typeof obj === 'object' ? obj[prop] : null;
+  return typeof value === 'string' ? value : null;
+}
+
+function latchSentence(value) {
+  return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
+}
+
+function latchNormalizeState(value) {
+  let text = value.replace(/_/g, ' ').trim();
+  if (text.length > 1 && text === text.toUpperCase()) text = text.toLowerCase();
+  return latchSentence(text);
+}
+
+function latchFormatCost(commitment) {
+  const economics = commitment && commitment.economics;
+  if (economics && typeof economics === 'object') {
+    const amount = economics.amount_minor;
+    if (typeof amount !== 'number') return null;
+    const currency = latchTryString(economics, 'currency') || '';
+    const cadence = latchTryString(economics, 'cadence');
+    const cost = (amount / 100).toFixed(2) + (currency ? ' ' + currency : '');
+    return cadence ? cost + ' · ' + cadence : cost;
+  }
+  return latchTryString(commitment, 'cost') || latchTryString(commitment, 'price');
+}
+
+function latchFormatConfidence(commitment) {
+  const confidence = commitment && commitment.confidence;
+  const raw = confidence && typeof confidence === 'object'
+    ? latchTryString(confidence, 'overall')
+    : latchTryString(commitment, 'confidence_state');
+  return raw ? latchNormalizeState(raw) : 'Unknown';
+}
+
+function latchEvidenceIds(record) {
+  const ids = [];
+  const evidence = record ? record.evidence : null;
+  if (Array.isArray(evidence)) {
+    for (const entry of evidence) {
+      const id = typeof entry === 'string' ? entry
+        : entry && typeof entry === 'object' ? latchTryString(entry, 'evidence_id') : null;
+      if (id && id.trim()) ids.push(id);
+    }
+  } else if (typeof evidence === 'string') {
+    ids.push(evidence);
+  }
+  return ids;
+}
+
+function latchLedgerRow(commitment) {
+  const facts = commitment && commitment.facts;
+  const factsEvidence = [];
+  if (facts && typeof facts === 'object' && !Array.isArray(facts)) {
+    for (const predicate of Object.keys(facts)) {
+      const fact = facts[predicate];
+      if (fact && typeof fact === 'object') {
+        const id = latchTryString(fact, 'evidence_id');
+        if (id) factsEvidence.push(id);
+      }
+    }
+  }
+  const evidence = latchEvidenceIds(commitment);
+  const temporal = commitment && commitment.temporal;
+  return {
+    id: latchTryString(commitment, 'id') || '',
+    provider: latchTryString(commitment, 'provider') || latchTryString(commitment, 'subject'),
+    cost: latchFormatCost(commitment),
+    // Latch-computed instants, passed through verbatim - never recomputed here.
+    renewalAt: temporal && typeof temporal === 'object' ? latchTryString(temporal, 'renewal_at') : null,
+    cancelBefore: temporal && typeof temporal === 'object' ? latchTryString(temporal, 'cancel_before') : null,
+    confidence: latchFormatConfidence(commitment),
+    // Facts can cite the same evidence under several predicates; merge
+    // without duplicating.
+    evidenceIds: evidence.length > 0
+      ? evidence
+      : factsEvidence.filter((id, index) => factsEvidence.indexOf(id) === index),
+  };
+}
+
+function latchEntityLabel(entity) {
+  if (typeof entity === 'string') return entity.trim() ? entity : null;
+  if (!entity || typeof entity !== 'object') return null;
+  for (const key of ['display_name', 'name', 'label', 'email', 'address', 'id']) {
+    const value = latchTryString(entity, key);
+    if (value) return value;
+  }
+  return null;
+}
+
+function latchAccessRow(grant) {
+  return {
+    id: latchTryString(grant, 'id') || latchTryString(grant, 'grant_id') || '',
+    grantee: latchEntityLabel(grant && grant.grantee) || 'unknown grantee',
+    resource: latchEntityLabel(grant && grant.resource) || 'unknown resource',
+    stale: Boolean(grant && grant.stale),
+    staleReason: grant && grant.stale ? latchTryString(grant, 'stale_reason') : null,
+    sourceConnector: latchTryString(grant, 'source_connector'),
+    sourceObjectId: latchTryString(grant, 'source_object_id'),
+    updatedAt: latchTryString(grant, 'updated_at'),
+  };
+}
+
+function latchCollectTargetIds(target, ids) {
+  if (typeof target === 'string') {
+    if (target.trim() && !ids.includes(target)) ids.push(target);
+    return;
+  }
+  if (!target || typeof target !== 'object') return;
+  for (const key of ['access_grant_id', 'commitment_id', 'id', 'target_id']) {
+    const id = latchTryString(target, key);
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+}
+
+function latchProposalRow(proposal) {
+  const targets = [];
+  if (proposal && proposal.target) latchCollectTargetIds(proposal.target, targets);
+  for (const key of ['target_id', 'commitment_id', 'access_grant_id']) {
+    const id = latchTryString(proposal, key);
+    if (id && !targets.includes(id)) targets.push(id);
+  }
+  const evidence = [];
+  if (Array.isArray(proposal && proposal.evidence)) {
+    for (const entry of proposal.evidence) {
+      if (entry && typeof entry === 'object') {
+        evidence.push({
+          source: latchTryString(entry, 'source'),
+          description: latchTryString(entry, 'description'),
+          evidenceId: latchTryString(entry, 'evidence_id'),
+          acquiredAt: latchTryString(entry, 'acquired_at'),
+          freshness: latchTryString(entry, 'freshness'),
+        });
+      }
+    }
+  }
+  return {
+    id: latchTryString(proposal, 'id') || latchTryString(proposal, 'proposal_id') || '',
+    scheduleId: latchTryString(proposal, 'schedule_id'),
+    kind: latchTryString(proposal, 'kind'),
+    status: latchTryString(proposal, 'status'),
+    createdAt: latchTryString(proposal, 'created_at'),
+    reason: latchTryString(proposal, 'reason'),
+    targetIds: targets,
+    evidence: evidence,
+  };
+}
+
+/* Plan states stay distinct end to end: only succeeded/verified is complete
+   and needs_verification (transport success) is explicitly not. */
+function latchActionPresentation(raw) {
+  switch (raw) {
+    case 'proposed': return { label: 'Proposed', complete: false, state: 'proposed' };
+    case 'authorized': return { label: 'Authorized', complete: false, state: 'authorized' };
+    case 'executed': return { label: 'Executed', complete: false, state: 'executed' };
+    case 'needs_verification':
+      return { label: 'Executed — awaiting verification', complete: false, state: 'awaiting' };
+    case 'succeeded':
+    case 'verified': return { label: 'Verified', complete: true, state: 'verified' };
+    case 'failed': return { label: 'Failed', complete: false, state: 'failed' };
+    default: return { label: raw ? latchSentence(raw) : 'Unknown', complete: false, state: 'unknown' };
+  }
+}
+
+function latchStageStates(done, current) {
+  return ['Proposed', 'Authorized', 'Executed', 'Verified'].map((name, index) => ({
+    name,
+    state: index < done && index !== current ? 'done' : index === current ? 'current' : 'pending',
+  }));
+}
+
+/* The four lifecycle stages as a progress display, derived purely from
+   Latch's status: needs_verification parks on Executed with Verified still
+   pending - never shown as complete. */
+function latchActionStages(status) {
+  switch (status) {
+    case 'authorized': return latchStageStates(1, 1);
+    case 'executed':
+    case 'needs_verification': return latchStageStates(2, 2);
+    case 'succeeded':
+    case 'verified': return latchStageStates(4, -1);
+    case 'failed':
+      return [
+        { name: 'Proposed', state: 'done' },
+        { name: 'Authorized', state: 'done' },
+        { name: 'Executed', state: 'done' },
+        { name: 'Verified', state: 'failed' },
+      ];
+    default: return latchStageStates(0, 0);
+  }
+}
+
+/* -- small DOM helpers -- */
+
+function latchEl(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function latchShortId(id) { return id.length <= 16 ? id : id.slice(0, 13) + '…'; }
+
+function latchChip(text, kind) {
+  return latchEl('span', 'latch-chip latch-chip-' + kind, text);
+}
+
+function latchStatusChip(presentation) {
+  const kind = {
+    proposed: 'accent',
+    authorized: 'violet',
+    executed: 'accent',
+    awaiting: 'warning',
+    verified: 'success',
+    failed: 'danger',
+  }[presentation.state] || 'neutral';
+  return latchChip(presentation.label, kind);
+}
+
+/* -- refresh and honest state surfaces -- */
+
+function latchStartupGuidance() {
+  return "Start Latch's daemon from the Latch repository: "
+    + './build/bin/latchd --socket /tmp/latchd.sock --db ~/.latch/latch.db '
+    + '--http-port 8787 --web-root apps/desktop '
+    + '(on Windows, build\\bin\\latchd.exe with equivalent paths). The --web-root apps/desktop '
+    + "argument is what serves Latch's own desktop UI - the only place actions get authorized. "
+    + 'You can point HAVEN at another loopback address with HAVEN_LATCH_BASE_URL.';
+}
+
+function showLatchAdapterUnavailable() {
+  els.latchDisconnectedText.textContent =
+    "HAVEN's Latch adapter routes (/api/latch) are not being served, so this page cannot read "
+    + 'or propose anything yet. Start HAVEN with the Latch adapter enabled, then retry. '
+    + latchStartupGuidance();
+  showLatchDisconnectedCommon();
+}
+
+function showLatchDisconnected(detail) {
+  const base = (latchState.config && latchState.config.base_url) || 'http://127.0.0.1:8787';
+  els.latchDisconnectedText.textContent =
+    "HAVEN can't reach Latch at " + base + '. ' + latchStartupGuidance();
+  if (detail) els.latchDisconnectedText.textContent += ' (' + detail + ')';
+  showLatchDisconnectedCommon();
+}
+
+function showLatchDisconnectedCommon() {
+  els.latchLoading.hidden = true;
+  els.latchDisconnected.hidden = false;
+  if (latchState.records.size > 0 && latchState.lastGoodAt) {
+    // Disconnected with last-good data: keep it visible, say so.
+    els.latchStaleBanner.textContent = 'Disconnected - showing last successful data from '
+      + fmtClock(latchState.lastGoodAt) + '.';
+    els.latchStaleBanner.hidden = false;
+    renderLatch();
+  } else {
+    latchState.records.clear();
+    latchState.selectedKey = null;
+    renderLatch();
+    els.latchEmpty.hidden = true;
+    renderLatchDetailsBase(null);
+  }
+  els.latchStatus.textContent = 'Disconnected from Latch.';
+}
+
+function showLatchRefreshError(message) {
+  els.latchLoading.hidden = true;
+  els.latchError.textContent = 'Could not refresh Latch data: ' + message;
+  els.latchError.hidden = false;
+  if (latchState.records.size > 0 && latchState.lastGoodAt) {
+    // Last-good rule: a failed refresh never blanks good data; it is
+    // labeled stale instead.
+    els.latchStaleBanner.textContent = 'Showing last successful data from '
+      + fmtClock(latchState.lastGoodAt) + ' - this refresh failed: ' + message;
+    els.latchStaleBanner.hidden = false;
+    renderLatch();
+  } else {
+    els.latchEmpty.textContent = 'Latch data is unavailable right now.';
+    els.latchEmpty.hidden = false;
+  }
+}
+
+async function refreshLatch({ silent = false } = {}) {
+  // Every refresh claims a fresh token; any response that arrives after a
+  // newer refresh started is discarded untouched.
+  const token = ++latchState.refreshSeq;
+  els.latchError.hidden = true;
+  if (!silent) {
+    els.latchLoading.hidden = false;
+    els.latchDisconnected.hidden = true;
+  }
+  try {
+    const config = await requestJSON('/api/latch/config');
+    if (token !== latchState.refreshSeq) return;
+    if (!config.httpOk) {
+      showLatchAdapterUnavailable();
+      return;
+    }
+    latchState.config = config;
+    els.latchBaseUrl.textContent = config.base_url || '';
+    // IsDemoMode only labels synthetic demo data; the rows still come from
+    // Latch, never from here.
+    els.latchDemoChip.hidden = !config.demo;
+    const [commitments, access, proposals, actions] = await Promise.all([
+      requestJSON('/api/latch/commitments'),
+      requestJSON('/api/latch/access?stale_only=1'),
+      requestJSON('/api/latch/schedules/proposals'),
+      requestJSON('/api/latch/actions'),
+    ]);
+    if (token !== latchState.refreshSeq) return;
+    const failed = [commitments, access, proposals, actions].find((resp) => !resp.httpOk);
+    if (failed) {
+      showLatchDisconnected(failed.error || ('Latch returned HTTP ' + failed.status + '.'));
+      return;
+    }
+    adoptLatchSnapshot(commitments, access, proposals, actions);
+    latchState.lastGoodAt = new Date();
+    els.latchStaleBanner.hidden = true;
+    els.latchDisconnected.hidden = true;
+    renderLatch();
+    enrichLatchEvidence(token);
+  } finally {
+    if (token === latchState.refreshSeq) els.latchLoading.hidden = true;
+  }
+}
+
+function adoptLatchSnapshot(commitments, access, proposals, actions) {
+  latchState.records.clear();
+  for (const commitment of latchItems(commitments)) {
+    const id = latchTryString(commitment, 'id');
+    if (id) latchState.records.set('com:' + id, commitment);
+  }
+  for (const grant of latchItems(access)) {
+    const id = latchTryString(grant, 'id') || latchTryString(grant, 'grant_id');
+    if (id) latchState.records.set('acc:' + id, grant);
+  }
+  for (const proposal of latchItems(proposals)) {
+    const row = latchProposalRow(proposal);
+    const id = row.id || (row.scheduleId ? row.scheduleId + ':' + String(latchTryString(proposal, 'target_key') || 'target') : null);
+    if (id) latchState.records.set('prop:' + id, proposal);
+  }
+  for (const action of latchItems(actions)) {
+    const id = latchTryString(action, 'plan_id') || latchTryString(action, 'id');
+    if (id) latchState.records.set('act:' + id, action);
+  }
+}
+
+async function loadLatch() {
+  await refreshLatch({ silent: latchState.loaded });
+  latchState.loaded = true;
+}
+
+/* -- evidence metadata for the ledger's source-observation column --------
+   Best-effort and non-blocking: rows say "unavailable" honestly when Latch
+   can't serve a record, "loading…" while a fetch is pending, and never
+   fabricate an observation. */
+
+function latchSourceObservation(row) {
+  for (const id of row.evidenceIds) {
+    const evidence = latchState.evidence.get(id);
+    if (evidence) {
+      const connector = latchTryString(evidence, 'source_connector') || 'unknown connector';
+      const acquiredAt = latchTryString(evidence, 'acquired_at');
+      return acquiredAt ? connector + ' · ' + acquiredAt : connector;
+    }
+  }
+  if (row.evidenceIds.length === 0) return '—';
+  return row.evidenceIds.every((id) => latchState.evidenceUnavailable.has(id))
+    ? 'unavailable'
+    : 'loading…';
+}
+
+async function enrichLatchEvidence(token) {
+  const ids = [];
+  for (const [key, record] of latchState.records) {
+    if (!key.startsWith('com:')) continue;
+    for (const id of latchLedgerRow(record).evidenceIds) {
+      if (!latchState.evidence.has(id)
+        && !latchState.evidenceUnavailable.has(id)
+        && !ids.includes(id)) {
+        ids.push(id);
+      }
+    }
+  }
+  for (const id of ids.slice(0, 25)) {
+    const resp = await requestJSON('/api/latch/evidence/' + encodeURIComponent(id));
+    if (resp.httpOk && resp.id) latchState.evidence.set(id, resp);
+    else latchState.evidenceUnavailable.add(id);
+    if (token !== latchState.refreshSeq) return;
+  }
+  if (ids.length > 0 && token === latchState.refreshSeq && app.view === 'latch') {
+    const selected = latchState.selectedKey;
+    renderLatch();
+    if (selected && latchState.records.has(selected)) selectLatchRow(selected, { scroll: false });
+  }
+}
+
+/* -- tabs ---------------------------------------------------------------- */
+
+function styleLatchTabs() {
+  for (const tab of els.latchTabs) {
+    const selected = tab.dataset.latchTab === latchState.tab;
+    tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+    tab.tabIndex = selected ? 0 : -1;
+  }
+}
+
+function selectLatchTab(tab) {
+  latchState.tab = tab;
+  styleLatchTabs();
+  renderLatch();
+  const selected = latchState.selectedKey;
+  if (selected && latchState.records.has(selected)) renderLatchDetails(selected);
+}
+
+/* -- list rendering -------------------------------------------------------- */
+
+function latchCell(text, strong) {
+  return latchEl('span', 'latch-cell' + (strong ? ' latch-cell-strong' : ''), text || '—');
+}
+
+function latchProposalTargets(id) {
+  for (const [key, record] of latchState.records) {
+    if (!key.startsWith('prop:')) continue;
+    if (latchProposalRow(record).targetIds.includes(id)) return true;
+  }
+  return false;
+}
+
+function buildLedgerRow(record) {
+  const row = latchLedgerRow(record);
+  if (!row.id) return null;
+  const node = latchEl('div', 'latch-row-ledger');
+  node.appendChild(latchCell(row.provider || row.id, true));
+  node.appendChild(latchCell(row.cost));
+  node.appendChild(latchCell(row.renewalAt));
+  node.appendChild(latchCell(row.cancelBefore));
+  node.appendChild(latchCell(latchSourceObservation(row)));
+  node.appendChild(latchCell(row.confidence));
+  node.setAttribute('aria-label', 'Commitment ' + (row.provider || row.id));
+  return node;
+}
+
+function buildAccessRow(record) {
+  const row = latchAccessRow(record);
+  if (!row.id) return null;
+  const node = latchEl('div', 'latch-row-stack');
+  const headline = latchEl('div', 'latch-row-head');
+  headline.appendChild(latchEl('span', 'latch-row-title', row.grantee + ' → ' + row.resource));
+  if (row.stale) headline.appendChild(latchChip('Needs review', 'warning'));
+  if (latchProposalTargets(row.id)) headline.appendChild(latchChip('Review proposed', 'violet'));
+  const meta = [];
+  if (row.staleReason) meta.push(row.staleReason);
+  if (row.sourceConnector) {
+    meta.push(row.sourceObjectId ? row.sourceConnector + ' · ' + row.sourceObjectId : row.sourceConnector);
+  }
+  if (row.updatedAt) meta.push('observed ' + row.updatedAt);
+  node.appendChild(headline);
+  node.appendChild(latchEl('div', 'latch-row-meta',
+    meta.length > 0 ? meta.join(' · ') : 'No staleness metadata reported by Latch.'));
+  node.setAttribute('aria-label', 'Access grant ' + row.grantee + ' to ' + row.resource);
+  return node;
+}
+
+function buildProposalRow(record) {
+  const row = latchProposalRow(record);
+  if (!row.id) return null;
+  const node = latchEl('div', 'latch-row-stack');
+  const headline = latchEl('div', 'latch-row-head');
+  headline.appendChild(latchEl('span', 'latch-row-title',
+    row.kind ? latchSentence(row.kind.replace(/_/g, ' ')) : 'review'));
+  if (row.status) headline.appendChild(latchChip(latchSentence(row.status), 'accent'));
+  const meta = [];
+  if (row.scheduleId) meta.push('schedule ' + latchShortId(row.scheduleId));
+  for (const target of row.targetIds.slice(0, 3)) meta.push('target ' + latchShortId(target));
+  if (row.evidence.length > 0) meta.push(row.evidence.length + ' evidence');
+  if (row.createdAt) meta.push(row.createdAt);
+  node.appendChild(headline);
+  node.appendChild(latchEl('div', 'latch-row-meta', meta.join(' · ')));
+  node.setAttribute('aria-label', 'Review proposal ' + (row.kind || row.id));
+  return node;
+}
+
+function buildActionRow(record) {
+  const status = latchActionPresentation(latchTryString(record, 'status'));
+  const planId = latchTryString(record, 'plan_id') || latchTryString(record, 'id') || '';
+  const node = latchEl('div', 'latch-row-stack');
+  const headline = latchEl('div', 'latch-row-head');
+  headline.appendChild(latchEl('span', 'latch-row-title',
+    latchTryString(record, 'operation') || 'action plan'));
+  headline.appendChild(latchStatusChip(status));
+  const meta = [latchShortId(planId)];
+  if (latchTryString(record, 'commitment_id')) {
+    meta.push('commitment ' + latchShortId(latchTryString(record, 'commitment_id')));
+  }
+  if (latchTryString(record, 'authority_class')) {
+    meta.push(latchSentence(latchTryString(record, 'authority_class').replace(/_/g, ' ')));
+  }
+  if (!status.complete && status.state !== 'failed') {
+    meta.push(status.state === 'awaiting'
+      ? 'transport succeeded; verification pending - not complete'
+      : 'not complete');
+  }
+  node.appendChild(headline);
+  node.appendChild(latchEl('div', 'latch-row-meta', meta.join(' · ')));
+  node.setAttribute('aria-label', 'Action plan ' + (latchTryString(record, 'operation') || planId)
+    + ', ' + status.label);
+  return node;
+}
+
+function buildLatchRow(key, record) {
+  if (key.startsWith('com:')) return buildLedgerRow(record);
+  if (key.startsWith('acc:')) return buildAccessRow(record);
+  if (key.startsWith('prop:')) return buildProposalRow(record);
+  return buildActionRow(record);
+}
+
+function renderLatch() {
+  styleLatchTabs();
+  renderLatchList();
+  const counts = { com: 0, acc: 0, prop: 0, act: 0 };
+  for (const key of latchState.records.keys()) {
+    const prefix = key.split(':', 1)[0];
+    if (prefix in counts) counts[prefix] += 1;
+  }
+  const updated = latchState.lastGoodAt
+    ? 'Updated ' + fmtClock(latchState.lastGoodAt)
+    : 'Not refreshed yet';
+  els.latchStatus.textContent = updated
+    + ' · ' + counts.com + ' ledger'
+    + ' · ' + counts.acc + ' access'
+    + ' · ' + counts.prop + ' proposals'
+    + ' · ' + counts.act + ' action plans';
+}
+
+function renderLatchList() {
+  els.latchLedgerColumns.hidden = latchState.tab !== 'ledger';
+  els.latchList.textContent = '';
+  if (latchState.selectedKey && !latchState.records.has(latchState.selectedKey)) {
+    latchState.selectedKey = null;
+    renderLatchDetailsBase(null);
+  }
+  let keys;
+  if (latchState.tab === 'ledger') {
+    keys = [...latchState.records.keys()].filter((key) => key.startsWith('com:'));
+  } else if (latchState.tab === 'access') {
+    keys = [...latchState.records.keys()].filter((key) => key.startsWith('acc:'));
+  } else {
+    keys = [...latchState.records.keys()]
+      .filter((key) => key.startsWith('prop:') || key.startsWith('act:'));
+  }
+  for (const key of keys) {
+    const row = buildLatchRow(key, latchState.records.get(key));
+    if (!row) continue;
+    row.classList.add('latch-row');
+    row.dataset.latchKey = key;
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', key === latchState.selectedKey ? 'true' : 'false');
+    row.tabIndex = key === latchState.selectedKey ? 0 : -1;
+    row.addEventListener('click', () => selectLatchRow(key));
+    els.latchList.appendChild(row);
+  }
+  els.latchEmpty.textContent = {
+    ledger: 'No commitments recorded in Latch yet.',
+    access: 'No access currently needs review.',
+    proposals: 'No review proposals or action plans from Latch yet.',
+  }[latchState.tab];
+  els.latchEmpty.hidden = keys.length !== 0;
+}
+
+function selectLatchRow(key, { scroll = true } = {}) {
+  latchState.selectedKey = key;
+  for (const row of els.latchList.querySelectorAll('[data-latch-key]')) {
+    const selected = row.dataset.latchKey === key;
+    row.setAttribute('aria-selected', selected ? 'true' : 'false');
+    row.tabIndex = selected ? 0 : -1;
+  }
+  if (scroll) {
+    const active = els.latchList.querySelector('[data-latch-key="' + key + '"]');
+    if (active) active.focus();
+  }
+  renderLatchDetails(key);
+}
+
+/* -- details rendering ----------------------------------------------------- */
+
+function addLatchHeading(host, type, id) {
+  host.appendChild(latchEl('h2', null, type));
+  host.appendChild(latchEl('div', 'latch-details-id', id));
+}
+
+function addLatchSubheading(host, title) {
+  host.appendChild(latchEl('div', 'latch-detail-label', title));
+}
+
+function addLatchField(host, label, value) {
+  if (typeof value !== 'string' || !value.trim()) return;
+  addLatchSubheading(host, label);
+  host.appendChild(latchEl('div', 'latch-detail-value', value));
+}
+
+function addLatchVerbatim(host, record, skip) {
+  if (!record || typeof record !== 'object') return;
+  const skipSet = new Set((skip || []).map((name) => name.toLowerCase()));
+  for (const name of Object.keys(record)) {
+    if (skipSet.has(name.toLowerCase())) continue;
+    const value = record[name];
+    let text = null;
+    if (typeof value === 'string') text = value;
+    else if (typeof value === 'number' || typeof value === 'boolean') text = String(value);
+    else if (value && typeof value === 'object') text = JSON.stringify(value);
+    if (text && text.trim()) {
+      host.appendChild(latchEl('div', 'latch-detail-verbatim', name + ': ' + text));
+    }
+  }
+}
+
+function addLatchFacts(host, record) {
+  const facts = record && record.facts;
+  if (facts && typeof facts === 'object' && !Array.isArray(facts)) {
+    addLatchSubheading(host, 'Observed facts');
+    addLatchVerbatim(host, facts);
+  }
+}
+
+function renderLatchDetailsBase(key) {
+  els.latchDetails.textContent = '';
+  const record = key ? latchState.records.get(key) : null;
+  if (!key || !record) {
+    els.latchDetails.appendChild(latchEl('p', 'latch-details-hint',
+      'Select a record to see its evidence, observed dates, reasoning, impact and actions.'));
+    return;
+  }
+  if (key.startsWith('com:')) renderCommitmentDetails(record);
+  else if (key.startsWith('acc:')) renderAccessDetails(record);
+  else if (key.startsWith('prop:')) renderProposalDetails(record);
+  else renderActionDetails(record);
+}
+
+function renderCommitmentDetails(commitment) {
+  const host = els.latchDetails;
+  const row = latchLedgerRow(commitment);
+  addLatchHeading(host, 'Commitment', row.id);
+  addLatchField(host, 'Provider', row.provider);
+  const subject = latchTryString(commitment, 'subject');
+  const account = latchTryString(commitment, 'account');
+  addLatchField(host, 'Subject / account',
+    subject && account ? subject + ' · ' + account : subject || account);
+  addLatchField(host, 'Cost', row.cost);
+  addLatchField(host, 'Renewal (from Latch)', row.renewalAt);
+  addLatchField(host, 'Cancel by (from Latch)', row.cancelBefore);
+  const lifecycle = latchTryString(commitment, 'lifecycle');
+  addLatchField(host, 'Lifecycle', lifecycle ? latchSentence(lifecycle) : null);
+  addLatchField(host, 'Confidence', row.confidence);
+  addLatchField(host, 'Last observed', latchTryString(commitment, 'updated_at'));
+  addLatchFacts(host, commitment);
+
+  // Actual action plans Latch holds for this commitment, each with its
+  // distinct state - and the handoff into Latch's own authorization flow.
+  const plans = [];
+  for (const [key, record] of latchState.records) {
+    if (!key.startsWith('act:')) continue;
+    if (latchTryString(record, 'commitment_id') !== row.id) continue;
+    plans.push({
+      id: latchTryString(record, 'plan_id') || latchTryString(record, 'id') || 'plan',
+      status: latchActionPresentation(latchTryString(record, 'status')),
+    });
+  }
+  if (plans.length > 0) {
+    addLatchSubheading(host, 'Action plans');
+    for (const plan of plans) {
+      const line = latchEl('div', 'latch-row-head');
+      line.appendChild(latchEl('span', null, latchShortId(plan.id)));
+      line.appendChild(latchStatusChip(plan.status));
+      host.appendChild(line);
+    }
+  }
+  addLatchSubheading(host, 'Actions');
+  const actions = latchEl('div', 'latch-actions-row');
+  const propose = latchEl('button', 'btn', 'Propose cancellation');
+  propose.type = 'button';
+  propose.disabled = latchState.planInFlight;
+  propose.setAttribute('aria-label', 'Propose cancellation plan');
+  propose.addEventListener('click', () => onLatchProposeCancellation(row.id, propose));
+  actions.appendChild(propose);
+  actions.appendChild(latchEl('p', 'latch-actions-note',
+    'Proposes an idempotent cancellation plan in Latch. HAVEN cannot authorize it: use '
+    + '“Authorize in Latch…” on the proposed plan to continue in Latch\'s own desktop action flow.'));
+  host.appendChild(actions);
+}
+
+function renderAccessDetails(grant) {
+  const host = els.latchDetails;
+  const row = latchAccessRow(grant);
+  addLatchHeading(host, 'Access grant', row.id);
+  addLatchField(host, 'Grantee', row.grantee);
+  addLatchField(host, 'Resource', row.resource);
+  addLatchField(host, 'Stale', row.stale ? 'yes' : 'no');
+  addLatchField(host, 'Staleness reason', row.staleReason);
+  addLatchField(host, 'Granted', latchTryString(grant, 'granted_at'));
+  addLatchField(host, 'Last used', latchTryString(grant, 'last_used_at'));
+  addLatchField(host, 'Last reviewed', latchTryString(grant, 'last_reviewed_at'));
+  addLatchField(host, 'Parent commitment', latchTryString(grant, 'parent_commitment'));
+  addLatchVerbatim(host, grant,
+    ['grantor', 'grantee', 'resource', 'capabilities', 'stale', 'stale_reason']);
+
+  // Connector-observation-only grants carry no backing evidence record;
+  // say exactly that and show the observation itself - never invent
+  // evidence, never block on a fetch that cannot exist.
+  addLatchSubheading(host, 'Original evidence');
+  host.appendChild(latchEl('p', 'latch-actions-note',
+    'No backing evidence record - this grant is a connector observation.'));
+  addLatchField(host, 'Observed by connector', row.sourceConnector);
+  addLatchField(host, 'Source object', row.sourceObjectId);
+  addLatchField(host, 'Observed at', row.updatedAt);
+
+  const related = [];
+  for (const [key, record] of latchState.records) {
+    if (!key.startsWith('prop:')) continue;
+    const proposal = latchProposalRow(record);
+    if (proposal.targetIds.includes(row.id)) related.push(proposal);
+  }
+  if (related.length > 0) {
+    addLatchSubheading(host, 'Review proposals for this grant');
+    for (const proposal of related) {
+      host.appendChild(latchEl('div', 'latch-detail-value',
+        latchSentence((proposal.kind || 'review').replace(/_/g, ' ')) + ' · '
+        + latchSentence(proposal.status || 'proposed') + (proposal.createdAt ? ' · ' + proposal.createdAt : '')));
+    }
+  }
+}
+
+function renderProposalDetails(proposal) {
+  const host = els.latchDetails;
+  const row = latchProposalRow(proposal);
+  addLatchHeading(host, 'Scheduler review proposal', row.id);
+  addLatchField(host, 'Schedule', row.scheduleId);
+  addLatchField(host, 'Kind', row.kind ? latchSentence(row.kind.replace(/_/g, ' ')) : null);
+  addLatchField(host, 'Status', row.status ? latchSentence(row.status) : null);
+  addLatchField(host, 'Created', row.createdAt);
+  addLatchField(host, 'Reasoning', row.reason);
+  if (row.targetIds.length > 0) {
+    addLatchSubheading(host, 'Targets');
+    for (const target of row.targetIds) {
+      host.appendChild(latchEl('div', 'latch-detail-verbatim', target));
+    }
+  }
+  addLatchVerbatim(host, proposal,
+    ['id', 'proposal_id', 'schedule_id', 'kind', 'status', 'created_at', 'reason', 'target', 'evidence']);
+  // Evidence references are part of the scheduler's durable record; the
+  // backing records (where they carry an evidence_id) load asynchronously
+  // and are appended by appendLatchEvidenceDetails.
+  if (row.evidence.length > 0) {
+    addLatchSubheading(host, 'Evidence references');
+    for (const ref of row.evidence) {
+      const parts = [];
+      if (ref.source) parts.push(ref.source);
+      if (ref.acquiredAt) parts.push(ref.acquiredAt);
+      if (ref.freshness) parts.push(ref.freshness);
+      host.appendChild(latchEl('div', 'latch-detail-verbatim', parts.join(' · ')));
+      if (ref.description) host.appendChild(latchEl('div', 'latch-detail-value', ref.description));
+    }
+  }
+}
+
+function renderActionDetails(action) {
+  const host = els.latchDetails;
+  const status = latchActionPresentation(latchTryString(action, 'status'));
+  const planId = latchTryString(action, 'plan_id') || latchTryString(action, 'id') || '';
+  addLatchHeading(host, 'Action plan', planId);
+
+  // Lifecycle stages stay visually distinct: transport success parks on
+  // "Executed" with "Verified" still pending - never shown as complete.
+  const stageRow = latchEl('div', 'latch-stage-row');
+  for (const stage of latchActionStages(latchTryString(action, 'status'))) {
+    stageRow.appendChild(latchChip(stage.name, {
+      done: 'success',
+      current: 'warning',
+      failed: 'danger',
+    }[stage.state] || 'neutral'));
+  }
+  host.appendChild(stageRow);
+
+  const chipRow = latchEl('div', 'latch-row-head');
+  chipRow.appendChild(latchStatusChip(status));
+  chipRow.appendChild(latchEl('span', 'latch-row-meta',
+    status.complete
+      ? 'Latch verified the outcome; this plan is complete.'
+      : status.state === 'awaiting'
+        ? 'The provider call reported success, but transport success is not verification - '
+          + 'Latch still has to confirm the outcome. Not complete.'
+        : status.state === 'failed'
+          ? "Latch's verification found the intended change did not take effect."
+          : 'Nothing has happened in the provider yet.'));
+  host.appendChild(chipRow);
+
+  addLatchField(host, 'Operation', latchTryString(action, 'operation'));
+  addLatchField(host, 'Commitment', latchTryString(action, 'commitment_id'));
+  const authority = latchTryString(action, 'authority_class');
+  addLatchField(host, 'Authority class',
+    authority ? latchSentence(authority.replace(/_/g, ' ')) : null);
+  addLatchField(host, 'Proposed', latchTryString(action, 'created_at'));
+  addLatchField(host, 'Last observed', latchTryString(action, 'updated_at'));
+  if (action.impact && typeof action.impact === 'object') {
+    addLatchSubheading(host, 'Impact (computed by Latch)');
+    addLatchVerbatim(host, action.impact);
+  }
+  if (action.receipt && typeof action.receipt === 'object') {
+    addLatchSubheading(host, 'Receipt');
+    addLatchVerbatim(host, action.receipt);
+  }
+
+  // Authorization handoff: opens Latch's real desktop action flow, and
+  // only when that UI is actually served - otherwise the button is
+  // disabled with an honest explanation instead of opening a dead link.
+  addLatchSubheading(host, 'Actions');
+  const actions = latchEl('div', 'latch-actions-row');
+  const handoff = latchEl('button', 'btn',
+    status.state === 'proposed' ? 'Authorize in Latch…' : 'Open in Latch…');
+  handoff.type = 'button';
+  handoff.dataset.latchHandoff = planId;
+  handoff.setAttribute('aria-label', 'Open authorization handoff in Latch');
+  handoff.addEventListener('click', () => onLatchHandoff(planId, handoff));
+  actions.appendChild(handoff);
+  actions.appendChild(latchEl('p', 'latch-actions-note',
+    "Continues in Latch's own desktop action flow (authorize → execute → verify). "
+    + 'HAVEN never authorizes, executes or verifies anything itself.'));
+  host.appendChild(actions);
+  probeLatchHandoff(latchState.detailsSeq);
+}
+
+async function renderLatchDetails(key) {
+  const token = ++latchState.detailsSeq;
+  renderLatchDetailsBase(key);
+  if (!key) return;
+  let record = latchState.records.get(key);
+  if (!record) return;
+  if (key.startsWith('com:')) {
+    // Re-render from the full record Latch serves for a single commitment
+    // (richer than the list projection). A failure keeps the snapshot render.
+    const resp = await requestJSON('/api/latch/commitments/' + encodeURIComponent(key.slice(4)));
+    if (token !== latchState.detailsSeq || latchState.selectedKey !== key) return;
+    if (resp.httpOk && resp.id) {
+      latchState.records.set(key, resp);
+      record = resp;
+      renderLatchDetailsBase(key);
+    }
+  }
+  let evidenceIds = [];
+  if (key.startsWith('com:')) {
+    evidenceIds = latchLedgerRow(latchState.records.get(key) || record).evidenceIds;
+  } else if (key.startsWith('prop:')) {
+    evidenceIds = latchProposalRow(latchState.records.get(key) || record)
+      .evidence.map((ref) => ref.evidenceId).filter(Boolean);
+  }
+  if (evidenceIds.length === 0) return;
+  const loaded = [];
+  for (const id of evidenceIds.slice(0, 10)) {
+    const resp = await requestJSON('/api/latch/evidence/' + encodeURIComponent(id) + '?content=1');
+    if (token !== latchState.detailsSeq || latchState.selectedKey !== key) return;
+    loaded.push({
+      id,
+      record: resp.httpOk && resp.id ? resp : null,
+      error: resp.httpOk ? null : (resp.error || ('Latch returned HTTP ' + resp.status)),
+    });
+  }
+  if (token !== latchState.detailsSeq || latchState.selectedKey !== key) return;
+  appendLatchEvidenceDetails(loaded);
+}
+
+// Original evidence records Latch served for the selected commitment or
+// proposal: connector, acquisition time, content hash and a bounded content
+// preview. Unavailable records say so with Latch's error.
+function appendLatchEvidenceDetails(loaded) {
+  const host = els.latchDetails;
+  addLatchSubheading(host, 'Original evidence');
+  for (const item of loaded) {
+    if (!item.record) {
+      const line = latchEl('div', 'latch-detail-verbatim latch-evidence-error',
+        latchShortId(item.id) + ': unavailable (' + (item.error || 'no response') + ')');
+      host.appendChild(line);
+      continue;
+    }
+    const evidence = item.record;
+    let line = latchTryString(evidence, 'source_connector') || 'unknown connector';
+    if (latchTryString(evidence, 'acquired_at')) line += ' · ' + latchTryString(evidence, 'acquired_at');
+    host.appendChild(latchEl('div', 'latch-detail-value', line));
+    addLatchField(host, 'Evidence id', latchTryString(evidence, 'id') || item.id);
+    addLatchField(host, 'Source kind', latchTryString(evidence, 'source_kind'));
+    addLatchField(host, 'Content hash', latchTryString(evidence, 'content_hash'));
+    addLatchField(host, 'MIME type', latchTryString(evidence, 'mime_type'));
+    const content = latchTryString(evidence, 'content');
+    if (content) {
+      const previewLimit = 1200;
+      addLatchField(host, 'Content',
+        content.length > previewLimit ? content.slice(0, previewLimit) + '… (truncated)' : content);
+    }
+  }
+}
+
+/* -- actions: propose + handoff (the whole authority boundary) ------------ */
+
+async function onLatchProposeCancellation(commitmentId, button) {
+  if (latchState.planInFlight) {
+    // Repeated-click guard: one proposal in flight at a time; the plan
+    // itself is idempotent server-side, double-submitting the UI is noise.
+    return;
+  }
+  latchState.planInFlight = true;
+  button.disabled = true;
+  els.latchStatus.textContent = 'Proposing cancellation plan…';
+  try {
+    const resp = await postJSONDetailed('/api/latch/actions/plan', { commitment_id: commitmentId });
+    if (resp.httpOk !== true || resp.ok === false) {
+      els.latchError.textContent = 'Could not propose cancellation: '
+        + (resp.error || ('Latch returned HTTP ' + resp.status));
+      els.latchError.hidden = false;
+      return;
+    }
+    // actions.plan is idempotent: the result may be a plan that already
+    // advanced (Authorized/Executed/…). Say what Latch says, never assume
+    // "Proposed".
+    const plan = resp.plan && typeof resp.plan === 'object' ? resp.plan : resp;
+    const planId = latchTryString(plan, 'plan_id') || latchTryString(plan, 'id');
+    const status = latchActionPresentation(latchTryString(plan, 'status'));
+    let message = planId
+      ? 'Plan ' + planId + ' is ' + status.label + '.'
+      : 'Latch accepted the cancellation proposal (' + status.label + ').';
+    if (status.complete) message += ' Latch already verified this plan.';
+    else if (status.state === 'failed') {
+      message += " Latch's verification found it did not take effect.";
+    } else if (status.state !== 'awaiting') {
+      message += " Nothing further happens until it advances in Latch's own action flow.";
+    }
+    els.latchStatus.textContent = message;
+    await refreshLatch({ silent: true });
+    // The refresh re-renders the status line; restore the actual result so
+    // it stays visible until the next refresh.
+    els.latchStatus.textContent = message;
+  } finally {
+    latchState.planInFlight = false;
+    button.disabled = false;
+  }
+}
+
+async function onLatchHandoff(planId, button) {
+  button.disabled = true;
+  // Open the window synchronously from the click: popup blockers reject
+  // window.open calls that run after an await. The blank window is
+  // navigated to Latch's deep link only once the real handoff probe
+  // succeeds, and closed when Latch's own UI is not served.
+  const win = window.open('about:blank', '_blank');
+  if (!win) {
+    // Honest blocked-popup message: nothing was opened, nothing happened
+    // in any provider.
+    els.latchStatus.textContent = 'The browser blocked the handoff window. '
+      + 'Allow popups for HAVEN and try again.';
+    button.disabled = false;
+    return;
+  }
+  // The blank tab must not keep a reference back to HAVEN.
+  win.opener = null;
+  try {
+    // Probe Latch's own UI, not just its API: the deep link 404s unless
+    // latchd runs with --web-root, so an API-only daemon must disable the
+    // handoff with an honest message instead of opening a dead link.
+    const resp = await requestJSON('/api/latch/handoff?plan_id=' + encodeURIComponent(planId));
+    if (resp.httpOk && resp.available && resp.url) {
+      // The deep link lands in Latch's real desktop action flow; status is
+      // re-read on focus/visibility return. HAVEN never authorizes,
+      // executes or verifies anything itself.
+      win.location.replace(resp.url);
+      button.disabled = false;
+      return;
+    }
+    win.close();
+    button.textContent = 'Latch UI unavailable';
+    const base = (latchState.config && latchState.config.base_url) || 'http://127.0.0.1:8787';
+    els.latchStatus.textContent = "Latch's own desktop UI is not served at " + base + '. '
+      + 'Start latchd with --web-root apps/desktop (plus --http-port 8787) so the '
+      + 'authorization flow is served, then try again.';
+  } catch (err) {
+    win.close();
+    els.latchError.textContent = 'Could not open Latch: ' + String((err && err.message) || err);
+    els.latchError.hidden = false;
+    button.disabled = false;
+  }
+}
+
+// Service-level probe so a visibly disabled button says "unavailable"
+// before the click; the click re-probes anyway.
+async function probeLatchHandoff(token) {
+  const resp = await requestJSON('/api/latch/handoff');
+  if (token !== latchState.detailsSeq) return;
+  latchState.handoffAvailable = Boolean(resp.httpOk && resp.available);
+  const button = els.latchDetails.querySelector('[data-latch-handoff]');
+  if (button && !latchState.handoffAvailable) {
+    button.disabled = true;
+    button.textContent = 'Latch UI unavailable';
+  }
+}
+
+/* -- keyboard: Ctrl+1/2/3 tabs, F5 refresh, arrows inside the list -------- */
+
+function onLatchKeyDown(e) {
+  if (app.view !== 'latch') return;
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+    const tab = { 1: 'ledger', 2: 'access', 3: 'proposals' }[e.key];
+    if (tab) {
+      e.preventDefault();
+      selectLatchTab(tab);
+    }
+    return;
+  }
+  if (e.key === 'F5') {
+    e.preventDefault();
+    refreshLatch();
+    return;
+  }
+  if (e.target !== els.latchList && !els.latchList.contains(e.target)) return;
+  const keys = [...els.latchList.querySelectorAll('[data-latch-key]')];
+  if (keys.length === 0) return;
+  const index = keys.findIndex((row) => row.dataset.latchKey === latchState.selectedKey);
+  let next = -1;
+  if (e.key === 'ArrowDown') next = Math.min(index < 0 ? 0 : index + 1, keys.length - 1);
+  else if (e.key === 'ArrowUp') next = index <= 0 ? 0 : index - 1;
+  else if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = keys.length - 1;
+  else return;
+  e.preventDefault();
+  selectLatchRow(keys[next].dataset.latchKey, { scroll: false });
+  keys[next].focus();
+}
+
+// Returning to the window re-reads Latch: plans move Proposed → Authorized →
+// Executed → Verified in Latch's own flow, and the page must reflect what
+// Latch says now.
+function onLatchWindowReturn() {
+  if (app.view === 'latch' && latchState.loaded) refreshLatch({ silent: true });
+}
+
+async function refreshLocalFeatureLinks() {
+  const section = document.getElementById('ghost-teacher-feature-link');
+  if (!section) return;
+  section.hidden = true;
+  try {
+    const result = await (await fetch('/api/features', {credentials:'same-origin', redirect:'error'})).json();
+    section.hidden = !(result.ok && result.features?.some(row => row.feature_id === 'haven.ghost-teacher'));
+    document.getElementById('traceglass-feature-link').hidden = !(result.ok && result.features?.some(row => row.feature_id === 'traceglass'));
+  } catch (_) {}
+}
+
 /* ---------- nav views ---------- */
 
 function switchView(view, label) {
+  if (view === 'plugins') refreshLocalFeatureLinks();
   app.view = view;
   els.center.dataset.view = view;
   if (view !== 'memory') app.knowledgeClaims = null;
@@ -5082,6 +6290,7 @@ function switchView(view, label) {
   if (view === 'automations') refreshResourceAutomations();
   if (view === 'plugins') refreshPlugins({ forceCatalogFetch: true });
   if (view === 'system') refreshSystemDetails();
+  if (view === 'latch') loadLatch();
   if (view === 'placeholder') {
     els.placeholderNote.textContent = (label || 'This view') + ' is not in this slice.';
   }
@@ -5408,6 +6617,30 @@ function wireEvents() {
 
   els.pluginsRefresh.addEventListener('click', () => refreshPlugins({ forceCatalogFetch: true }));
 
+  /* appearance segmented control: shared persistence, session-honest fallback */
+  if (els.themeSegmented) {
+    for (const button of els.themeSegmented.querySelectorAll('[data-appearance-mode]')) {
+      button.addEventListener('click', () => setAppearanceMode(button.dataset.appearanceMode));
+    }
+  }
+
+  /* latch view: refresh/help/retry, tabs, list keyboard, window return */
+  els.latchRefresh.addEventListener('click', () => refreshLatch());
+  els.latchRetry.addEventListener('click', () => refreshLatch());
+  els.latchHelpToggle.addEventListener('click', () => {
+    const show = els.latchHelp.hidden;
+    els.latchHelp.hidden = !show;
+    els.latchHelpToggle.setAttribute('aria-expanded', show ? 'true' : 'false');
+  });
+  for (const tab of els.latchTabs) {
+    tab.addEventListener('click', () => selectLatchTab(tab.dataset.latchTab));
+  }
+  document.addEventListener('keydown', onLatchKeyDown);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) onLatchWindowReturn();
+  });
+  window.addEventListener('focus', onLatchWindowReturn);
+
   els.externalAgentsRefresh.addEventListener('click', () => refreshExternalAgents());
   els.externalAgentsAdd.addEventListener('click', () => {
     els.externalAgentsCreate.hidden = !els.externalAgentsCreate.hidden;
@@ -5466,6 +6699,8 @@ async function boot() {
   startClock();
   initNotifBell();
   wireEvents();
+  loadAppearance();
+  injectLatchHasp();
 
   try {
     const res = await fetch('/api/state');

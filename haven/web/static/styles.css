@@ -249,12 +249,14 @@ a {
 .center[data-view="world"] .view-world,
 .center[data-view="rooms"] .view-rooms,
 .center[data-view="activity"] .view-activity,
+.center[data-view="latch"] .view-latch,
 .center[data-view="memory"] .view-memory,
 .center[data-view="people"] .view-people,
 .center[data-view="automations"] .view-automations,
 .center[data-view="system"] .view-system,
 .center[data-view="models"] .view-models,
 .center[data-view="external-agents"] .view-external-agents,
+.center[data-view="plugins"] .view-plugins,
 .center[data-view="placeholder"] .view-placeholder {
   display: block;
 }
@@ -1936,12 +1938,52 @@ body[data-glow="interpreting"] .haven-rail {
   .card-grid {
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   }
+
+  .dev-overlay {
+    position: static;
+    margin: 12px;
+    max-width: calc(100% - 24px);
+  }
+
+  .dev-buttons { flex-wrap: wrap; }
+}
+
+/* ---------- latch view borrows the right rail's column ----------
+   At desktop widths the Latch ledger's six columns plus the inspector need
+   the room the conversation rail takes on other views. When (and only
+   when) the Latch view is active, the center spans the rail's column and
+   the rail hides for that view; every other view keeps the rail, and the
+   phone single-column layout above is untouched. */
+@media (min-width: 901px) {
+  .app:has(.center[data-view="latch"]) {
+    grid-template-columns: 200px minmax(0, 1fr);
+    grid-template-areas:
+      "top    top"
+      "nav    center"
+      "status status";
+  }
+
+  .app:has(.center[data-view="latch"]) .haven-rail {
+    display: none;
+  }
+}
+
+/* Narrower desktop keeps the icon-only nav when Latch uses the width. */
+@media (max-width: 1280px) and (min-width: 901px) {
+  .app:has(.center[data-view="latch"]) {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 520px) {
-  .topbar { padding: 0 12px; }
+  .app { grid-template-rows: auto auto auto auto auto; }
+  .topbar { padding: 8px 12px; flex-wrap: wrap; gap: 6px; }
+  .topbar-right { flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
+  .topbar-right .theme-segmented { margin-right: 0; }
   .haven-logo-frame { width: 150px; }
   .brand-sub { display: none; }
+  .statusbar { padding: 8px 12px; flex-wrap: wrap; gap: 8px; }
+  .status-left { flex-wrap: wrap; gap: 12px; }
 }
 
 /* ---------- trust chain slide-over ---------- */
@@ -2449,4 +2491,374 @@ body[data-glow="interpreting"] .haven-rail {
   flex: none;
   padding: 1px 8px;
   font-size: 9.5px;
+}
+
+/* ---------- appearance mode control (topbar) ----------
+   Light/Dark/System segmented control. Persistence is owned by the shared
+   appearance endpoint (/api/latch/appearance -> the same settings.json the
+   native ThemeService writes); this control never touches localStorage. */
+.theme-segmented {
+  display: flex;
+  align-items: center;
+  margin-right: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raise);
+  padding: 2px;
+  gap: 2px;
+}
+
+.theme-segmented button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.theme-segmented button:hover { color: var(--text); }
+
+.theme-segmented button[aria-checked="true"] {
+  background: var(--bg-raise-2);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.theme-segmented[data-persisted="false"] { border-color: var(--amber); }
+
+/* ---------- latch view ---------- */
+
+.latch-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.latch-heading-hasp { display: inline-flex; width: 30px; height: 30px; flex: none; }
+
+.nav-hasp { display: inline-flex; width: 16px; height: 16px; flex: none; }
+
+.latch-card {
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+
+.latch-help h2 { margin: 0 0 8px; }
+
+.latch-help p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.55;
+  opacity: 0.9;
+}
+
+.latch-help code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg-raise-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.latch-disconnected { border-color: var(--amber); }
+
+.latch-disconnected h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.latch-disconnected p { margin: 0 0 10px; font-size: 13px; line-height: 1.55; }
+
+.latch-stale {
+  background: var(--amber-dim);
+  border-bottom: 1px solid var(--amber);
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.latch-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 8px 0;
+}
+
+.latch-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--teal);
+  animation: latch-spin 0.9s linear infinite;
+  flex: none;
+}
+
+@keyframes latch-spin { to { transform: rotate(360deg); } }
+
+.latch-status { font-size: 12px; margin: 6px 0 10px; }
+
+.latch-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.latch-tabs [role="tab"] {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.latch-tabs [role="tab"]:hover { color: var(--text); }
+
+.latch-tabs [role="tab"][aria-selected="true"] {
+  color: var(--teal);
+  border-color: var(--teal);
+}
+
+.latch-split {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  column-gap: 18px;
+  align-items: start;
+}
+
+.latch-list-col { min-width: 0; }
+
+.latch-ledger-columns {
+  display: grid;
+  grid-template-columns: minmax(90px, 1.2fr) minmax(70px, 0.8fr) minmax(84px, 1fr) minmax(84px, 1fr) minmax(90px, 1.4fr) minmax(70px, 0.9fr);
+  column-gap: 10px;
+  padding: 0 10px 6px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.latch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 560px;
+  overflow-y: auto;
+}
+
+.latch-row {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  padding: 7px 10px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.latch-row:hover { background: var(--bg-raise); }
+
+.latch-row:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: -1px;
+}
+
+.latch-row[aria-selected="true"] {
+  background: var(--bg-raise-2);
+  border-color: var(--border-strong);
+}
+
+.latch-row-ledger {
+  display: grid;
+  grid-template-columns: minmax(90px, 1.2fr) minmax(70px, 0.8fr) minmax(84px, 1fr) minmax(84px, 1fr) minmax(90px, 1.4fr) minmax(70px, 0.9fr);
+  column-gap: 10px;
+  align-items: center;
+  font-size: 12.5px;
+  width: 100%;
+}
+
+.latch-row-ledger .latch-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.latch-row-ledger .latch-cell-strong { font-weight: 600; }
+
+.latch-row-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+
+.latch-row-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.latch-row-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 3px;
+  line-height: 1.45;
+}
+
+.latch-empty { padding: 12px 4px; font-size: 13px; }
+
+.latch-details {
+  margin-bottom: 0;
+  max-height: 620px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+.latch-details-hint { opacity: 0.85; line-height: 1.5; }
+
+.latch-details h2 {
+  margin: 0 0 2px;
+  font-size: 14px;
+}
+
+.latch-details-id {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  word-break: break-all;
+  margin-bottom: 8px;
+}
+
+.latch-detail-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 10px 0 2px;
+}
+
+.latch-detail-value { line-height: 1.5; opacity: 0.9; word-break: break-word; }
+
+.latch-detail-verbatim {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  word-break: break-all;
+  line-height: 1.5;
+  opacity: 0.9;
+}
+
+.latch-chip {
+  display: inline-block;
+  border-radius: 10px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.latch-chip-accent { background: var(--teal-dim); color: var(--teal); }
+
+.latch-chip-violet { background: var(--violet-dim); color: var(--violet); }
+
+.latch-chip-warning { background: var(--amber-dim); color: var(--amber); }
+
+.latch-chip-success { background: var(--green-dim); color: var(--green); }
+
+.latch-chip-danger { background: var(--red-dim); color: var(--red); }
+
+.latch-chip-neutral { background: var(--bg-raise-2); color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+
+.latch-stage-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; }
+
+.latch-actions-row { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; margin-top: 4px; }
+
+.latch-actions-note { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0; }
+
+.latch-evidence-error { color: var(--amber); }
+
+@media (max-width: 1100px) {
+  .latch-split { grid-template-columns: 1fr; row-gap: 14px; }
+  .latch-ledger-columns { display: none; }
+  .latch-row-ledger {
+    grid-template-columns: 1fr 1fr;
+    row-gap: 3px;
+    white-space: normal;
+  }
+  .latch-row-ledger .latch-cell { white-space: normal; }
+}
+
+/* The hidden attribute must win over the flex/grid display rules above. */
+.latch-loading[hidden],
+.latch-ledger-columns[hidden] {
+  display: none;
+}
+
+/* The page follows the operating system's light preference, unless the
+   appearance control pins a mode (data-appearance on <html>: "light" always
+   applies the light tokens, "dark" suppresses the media query). The same
+   tokens back both paths - one palette, three modes. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-appearance="dark"]) {
+    color-scheme: light;
+    --bg:            #f4f7fb;
+    --bg-raise:      #ffffff;
+    --bg-raise-2:    #edf2f7;
+    --border:        #d8e0ea;
+    --border-strong: #b7c3d1;
+    --text:          #1b2735;
+    --muted:         #657487;
+    --teal:          #087f78;
+    --amber:         #a85b17;
+    --red:           #b63d3a;
+    --cyan:          #0b7187;
+    --teal-dim:      rgba(8, 127, 120, 0.24);
+    --amber-dim:     rgba(168, 91, 23, 0.28);
+    --red-dim:       rgba(182, 61, 58, 0.30);
+    --cyan-dim:      rgba(11, 113, 135, 0.24);
+    --violet:        #6d28d9;
+    --violet-dim:    rgba(109, 40, 217, 0.14);
+    --green:         #1d7a43;
+    --green-dim:     rgba(29, 122, 67, 0.15);
+  }
+}
+
+:root[data-appearance="light"] {
+  color-scheme: light;
+  --bg:            #f4f7fb;
+  --bg-raise:      #ffffff;
+  --bg-raise-2:    #edf2f7;
+  --border:        #d8e0ea;
+  --border-strong: #b7c3d1;
+  --text:          #1b2735;
+  --muted:         #657487;
+  --teal:          #087f78;
+  --amber:         #a85b17;
+  --red:           #b63d3a;
+  --cyan:          #0b7187;
+  --teal-dim:      rgba(8, 127, 120, 0.24);
+  --amber-dim:     rgba(168, 91, 23, 0.28);
+  --red-dim:       rgba(182, 61, 58, 0.30);
+  --cyan-dim:      rgba(11, 113, 135, 0.24);
+  --violet:        #6d28d9;
+  --violet-dim:    rgba(109, 40, 217, 0.14);
+  --green:         #1d7a43;
+  --green-dim:     rgba(29, 122, 67, 0.15);
 }

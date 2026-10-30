@@ -1,0 +1,353 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HAVEN provider-neutral session request v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "tool",
+        "request_id",
+        "arguments"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "const": "haven.session.capabilities"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "arguments": {
+          "type": "object",
+          "required": [
+            "version"
+          ],
+          "properties": {
+            "version": {
+              "const": "haven-session-1"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "tool",
+        "request_id",
+        "arguments"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "const": "haven.session.sessions"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "arguments": {
+          "type": "object",
+          "required": [
+            "version"
+          ],
+          "properties": {
+            "version": {
+              "const": "haven-session-1"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "tool",
+        "request_id",
+        "arguments"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "const": "haven.session.snapshot"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "arguments": {
+          "type": "object",
+          "required": [
+            "version",
+            "session_id"
+          ],
+          "properties": {
+            "version": {
+              "const": "haven-session-1"
+            },
+            "session_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "tool",
+        "request_id",
+        "arguments"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "const": "haven.session.replay"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "arguments": {
+          "type": "object",
+          "required": [
+            "version",
+            "session_id",
+            "after",
+            "limit"
+          ],
+          "properties": {
+            "version": {
+              "const": "haven-session-1"
+            },
+            "session_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            },
+            "after": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "tool",
+        "request_id",
+        "arguments"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "const": "haven.session.memory"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "arguments": {
+          "type": "object",
+          "required": [
+            "version",
+            "session_id"
+          ],
+          "properties": {
+            "version": {
+              "const": "haven-session-1"
+            },
+            "session_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "tool",
+        "request_id",
+        "arguments"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "const": "haven.session.command_status"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "arguments": {
+          "type": "object",
+          "required": [
+            "version",
+            "session_id",
+            "command_id"
+          ],
+          "properties": {
+            "version": {
+              "const": "haven-session-1"
+            },
+            "session_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            },
+            "command_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "tool",
+        "request_id",
+        "arguments"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "const": "haven.session.submit"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "arguments": {
+          "type": "object",
+          "required": [
+            "version",
+            "session_id",
+            "text"
+          ],
+          "properties": {
+            "version": {
+              "const": "haven-session-1"
+            },
+            "session_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "\\S"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "tool",
+        "request_id",
+        "arguments"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "const": "haven.session.cancel"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "arguments": {
+          "type": "object",
+          "required": [
+            "version",
+            "session_id",
+            "job_id"
+          ],
+          "properties": {
+            "version": {
+              "const": "haven-session-1"
+            },
+            "session_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            },
+            "job_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "tool",
+        "request_id",
+        "arguments"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "const": "haven.session.decide"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "arguments": {
+          "type": "object",
+          "required": [
+            "version",
+            "session_id",
+            "approval_id",
+            "revision",
+            "allow"
+          ],
+          "properties": {
+            "version": {
+              "const": "haven-session-1"
+            },
+            "session_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            },
+            "approval_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "allow": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

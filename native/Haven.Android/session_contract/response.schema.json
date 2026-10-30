@@ -1,0 +1,551 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HAVEN provider-neutral session response v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "ok",
+        "contract",
+        "operations",
+        "guarantees"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "contract": {
+          "const": "haven-session-1"
+        },
+        "operations": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "enum": [
+              "sessions",
+              "snapshot",
+              "replay",
+              "memory",
+              "command_status",
+              "submit",
+              "cancel",
+              "decide"
+            ]
+          }
+        },
+        "guarantees": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "ok",
+        "contract",
+        "sessions"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "contract": {
+          "const": "haven-session-1"
+        },
+        "sessions": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "required": [
+              "session_id"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "session_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "ok",
+        "contract",
+        "session_id",
+        "jobs",
+        "approvals"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "contract": {
+          "const": "haven-session-1"
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "jobs": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "required": [
+              "job_id",
+              "state"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "job_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 4096
+              },
+              "state": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 4096
+              }
+            }
+          }
+        },
+        "approvals": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "required": [
+              "approval_id",
+              "revision",
+              "status",
+              "expires_at",
+              "description"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "approval_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 4096
+              },
+              "revision": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 4096
+              },
+              "expires_at": {
+                "type": [
+                  "string",
+                  "integer",
+                  "null"
+                ]
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 4096
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "ok",
+        "contract",
+        "session_id",
+        "events",
+        "next_cursor"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "contract": {
+          "const": "haven-session-1"
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "events": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "seq",
+                  "kind",
+                  "payload"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "seq": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "kind": {
+                    "const": "message"
+                  },
+                  "payload": {
+                    "type": "object",
+                    "required": [
+                      "sender",
+                      "text"
+                    ],
+                    "properties": {
+                      "sender": {
+                        "type": "string",
+                        "maxLength": 4096
+                      },
+                      "text": {
+                        "type": "string",
+                        "maxLength": 4096
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "seq",
+                  "kind",
+                  "payload"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "seq": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "kind": {
+                    "const": "job"
+                  },
+                  "payload": {
+                    "type": "object",
+                    "required": [
+                      "job_id",
+                      "state"
+                    ],
+                    "properties": {
+                      "job_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                      },
+                      "state": {
+                        "type": "string",
+                        "maxLength": 4096
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "seq",
+                  "kind",
+                  "payload"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "seq": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "kind": {
+                    "const": "approval"
+                  },
+                  "payload": {
+                    "type": "object",
+                    "required": [
+                      "approval_id",
+                      "status",
+                      "revision"
+                    ],
+                    "properties": {
+                      "approval_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                      },
+                      "status": {
+                        "type": "string",
+                        "maxLength": 4096
+                      },
+                      "revision": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "next_cursor": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "ok",
+        "contract",
+        "session_id",
+        "items"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "contract": {
+          "const": "haven-session-1"
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "required": [
+              "memory_id",
+              "text"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "memory_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 4096
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 4096
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "ok",
+        "contract",
+        "session_id",
+        "command_id",
+        "state",
+        "result"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "contract": {
+          "const": "haven-session-1"
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "command_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "state": {
+          "enum": [
+            "recorded",
+            "unknown"
+          ]
+        },
+        "result": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "job_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 4096
+            },
+            "state": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 4096
+            },
+            "approval_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 4096
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 4096
+            },
+            "revision": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "ok",
+        "contract",
+        "session_id",
+        "job_id",
+        "state"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "contract": {
+          "const": "haven-session-1"
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "job_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "state": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "ok",
+        "contract",
+        "session_id",
+        "approval_id",
+        "status",
+        "revision"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "contract": {
+          "const": "haven-session-1"
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "approval_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "status": {
+          "enum": [
+            "approved",
+            "denied"
+          ]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "ok",
+        "code"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "const": false
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "error": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      }
+    }
+  ]
+}

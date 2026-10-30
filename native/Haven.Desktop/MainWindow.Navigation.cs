@@ -43,6 +43,7 @@ public sealed partial class MainWindow
         ComputerPanel.Visibility = tag == "computer" ? Visibility.Visible : Visibility.Collapsed;
         CommunicationsPanel.Visibility = tag == "communications" ? Visibility.Visible : Visibility.Collapsed;
         MarketplacePanel.Visibility = tag == "marketplace" ? Visibility.Visible : Visibility.Collapsed;
+        LatchPanel.Visibility = tag == "latch" ? Visibility.Visible : Visibility.Collapsed;
         HomePanel.Visibility = tag == "home" ? Visibility.Visible : Visibility.Collapsed;
         ModelsPanel.Visibility = tag == "models" ? Visibility.Visible : Visibility.Collapsed;
         SettingsPanel.Visibility = tag == "settings" ? Visibility.Visible : Visibility.Collapsed;
@@ -57,6 +58,7 @@ public sealed partial class MainWindow
             "computer" => ("Computer", "Your files, applications, windows and activity."),
             "communications" => ("Communications", "Email, messages and threads with their context."),
             "marketplace" => ("Marketplace", "Curated products, experiences, and intelligence — discovery first, installation later."),
+            "latch" => ("Latch", "Subscriptions, access and review proposals — proposed in HAVEN, authorized only in Latch."),
             "home" => ("Home", "Rooms, devices, automations and contexts. Rooms are yours even without a smart-home provider."),
             "models" => ("Models", "Local, downloaded and external intelligence. HAVEN runs on any mix of them."),
             "settings" => ("Settings", "Control boundaries: startup, storage, privacy, connections, about."),
@@ -99,6 +101,9 @@ public sealed partial class MainWindow
                 break;
             case "marketplace":
                 _ = LoadMarketplaceAsync();
+                break;
+            case "latch":
+                _ = LoadLatchAsync();
                 break;
             case "home":
                 HomeStatusText.Text = "Loading…";

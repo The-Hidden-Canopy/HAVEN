@@ -8,6 +8,8 @@ public sealed partial class MainWindow
 {
     private StackPanel? _decisionRegister;
     private JsonElement _localProducts;
+    partial void AddPrivatePluginCards(StackPanel section);
+    partial void AddPrivateFeatureControls(string? id, StackPanel card);
 
     private static TextBlock WorkflowText(string text) => new() { Text = text, TextWrapping = TextWrapping.Wrap };
 
@@ -102,7 +104,7 @@ public sealed partial class MainWindow
         var response = await _client.LocalWorkflowAsync("features.list", new { });
         WorkflowSuccess(response);
         var section = new StackPanel { Spacing = 8 };
-        section.Children.Add(WorkflowText("Bundled decision inspector"));
+        section.Children.Add(WorkflowText("Bundled feature modules"));
         foreach (var release in Enumerate(response, "features"))
         {
             var id = GetString(release, "feature_id");
@@ -116,7 +118,9 @@ public sealed partial class MainWindow
             card.Children.Add(WorkflowText($"Current: {currentVersion}; staged: {GetString(state, "pending_version") ?? "none"}"));
             var output = WorkflowText("");
             var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-            foreach (var action in new[] { "stage", "install", "enable", "run", "disable", "update", "rollback", "uninstall" })
+            foreach (var action in id is "haven.ghost-teacher" or "traceglass"
+                ? new[] { "stage", "install", "enable", "disable", "update", "rollback", "uninstall" }
+                : new[] { "stage", "install", "enable", "run", "disable", "update", "rollback", "uninstall" })
             {
                 var selectedAction = action;
                 actions.Children.Add(WorkflowButton(action == "run" ? "Inspect" : Sentence(action), async () =>
@@ -129,8 +133,11 @@ public sealed partial class MainWindow
             }
             card.Children.Add(new ScrollViewer { Content = actions, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollMode = ScrollMode.Auto });
             card.Children.Add(output);
+            AddPrivateFeatureControls(id,card);
             section.Children.Add(WrapCard(card));
         }
+        AddPrivatePluginCards(section);
+        section.Children.Add(SessionControls());
         ExtensionsHost.Children.Add(section);
     }
 

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:haven:feature-ui:1:request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tool", "request_id", "arguments"],
+  "properties": {
+    "tool": {"enum": ["haven.feature.catalog", "haven.feature.call"]},
+    "request_id": {"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$"},
+    "arguments": {"type": "object"}
+  },
+  "allOf": [
+    {"if": {"properties": {"tool": {"const": "haven.feature.catalog"}}},
+     "then": {"properties": {"arguments": {"type": "object", "additionalProperties": false, "required": ["version"], "properties": {"version": {"const": "haven-feature-ui-1"}}}}}},
+    {"if": {"properties": {"tool": {"const": "haven.feature.call"}}},
+     "then": {"properties": {"arguments": {"type": "object", "additionalProperties": false,
+       "required": ["version", "scope_id", "feature_id", "action", "command", "parameters"],
+       "properties": {
+         "version": {"const": "haven-feature-ui-1"},
+         "scope_id": {"type": "string", "minLength": 1},
+         "feature_id": {"enum": ["traceglass", "haven.ghost-teacher"]},
+         "action": {"enum": ["stage", "install", "enable", "disable", "uninstall", "update", "rollback", "run", "picker", "entitlement", "status"]},
+         "command": {"type": ["string", "null"]},
+         "parameters": {"type": "object"}
+       }}}}}
+  ]
+}

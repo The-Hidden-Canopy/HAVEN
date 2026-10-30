@@ -2,6 +2,7 @@
     x:Class="Haven.Desktop.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Haven.Desktop.Controls"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:setup="using:Haven.Desktop.Setup"
@@ -104,6 +105,18 @@
                         <StackPanel Orientation="Horizontal" Spacing="11">
                             <SymbolIcon Symbol="Shop" />
                             <TextBlock Text="Marketplace" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Latch plugin: proposals only - authorization always
+                         hands off to Latch's own desktop action flow. -->
+                    <Button Tag="latch" Click="OnNavItemClicked" Style="{StaticResource HavenNavItemStyle}"
+                            AutomationProperties.Name="Latch">
+
+                        <StackPanel Orientation="Horizontal" Spacing="11">
+                            <controls:LatchHaspMark Width="16" Height="16" Simplified="True"
+                                                    AutomationProperties.AccessibilityView="Raw" />
+                            <TextBlock Text="Latch" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
 
@@ -813,6 +826,128 @@
                     <TextBlock x:Name="MarketplaceErrorText" TextWrapping="Wrap"
                                Foreground="{ThemeResource HavenWarningBrush}" />
                     <StackPanel x:Name="MarketplaceList" Spacing="10" />
+                </StackPanel>
+
+                <!-- Latch plugin (HAVEN<->Latch): read + propose only. All rows
+                     come from the LatchClient (latchd loopback HTTP); HAVEN
+                     never fabricates records. Authorization is Latch's own
+                     desktop action flow via the ?plan_id= deep link. -->
+                <StackPanel x:Name="LatchPanel" Spacing="12" Visibility="Collapsed">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <controls:LatchHaspMark Width="30" Height="30" VerticalAlignment="Center"
+                                                AutomationProperties.AccessibilityView="Raw" />
+                        <TextBlock Text="Latch" VerticalAlignment="Center"
+                                   Style="{StaticResource HavenSectionTextStyle}" />
+                        <Border x:Name="LatchDemoChip" CornerRadius="10" Padding="8,2" VerticalAlignment="Center"
+                                Background="{ThemeResource HavenVioletTintBrush}" Visibility="Collapsed"
+                                AutomationProperties.Name="Synthetic demo data">
+                            <TextBlock Text="Synthetic demo" FontSize="11.5" FontWeight="SemiBold"
+                                       Foreground="{ThemeResource HavenVioletBrush}" />
+                        </Border>
+                        <TextBlock x:Name="LatchBaseUrlText" VerticalAlignment="Center"
+                                   Style="{StaticResource HavenMetadataTextStyle}" />
+                        <Button Content="Refresh" Click="OnLatchRefreshClicked" VerticalAlignment="Center"
+                                Style="{StaticResource HavenSecondaryButtonStyle}"
+                                AutomationProperties.Name="Refresh Latch data" />
+                        <Button Content="Help" Click="OnLatchHelpClicked" VerticalAlignment="Center"
+                                Style="{StaticResource HavenQuietButtonStyle}"
+                                AutomationProperties.Name="Latch help" />
+                    </StackPanel>
+
+                    <!-- Contextual help: startup guidance, configuration and
+                         the read/propose-only action boundary. -->
+                    <Border x:Name="LatchHelpCard" Style="{StaticResource HavenCardStyle}" Visibility="Collapsed">
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="Getting Latch data" Style="{StaticResource HavenSectionTextStyle}" />
+                            <TextBlock TextWrapping="Wrap" Style="{StaticResource HavenBodyTextStyle}"
+                                       Text="Start Latch's daemon from the Latch repository: ./build/bin/latchd --socket /tmp/latchd.sock --db ~/.latch/latch.db --http-port 8787 --web-root apps/desktop (on Windows, build\bin\latchd.exe with equivalent paths). HAVEN reads from http://127.0.0.1:8787 by default; point HAVEN_LATCH_BASE_URL at another loopback address to override, and set HAVEN_LATCH_DEMO=1 to label synthetic demo data. Restart HAVEN after changing either variable." />
+                            <TextBlock TextWrapping="Wrap" Style="{StaticResource HavenBodyTextStyle}"
+                                       Text="This page is read + propose only: HAVEN can propose a cancellation plan, but authorize, execute and verify always happen in Latch's own desktop action flow - HAVEN opens that flow for you and never holds the authority itself. Transport success is not verification; a plan is only complete when Latch marks it Verified." />
+                            <TextBlock TextWrapping="Wrap" Style="{StaticResource HavenMetadataTextStyle}"
+                                       Text="Keyboard: Ctrl+1 Ledger, Ctrl+2 Access review, Ctrl+3 Review proposals, F5 refresh. Tab moves between tabs, lists and actions; arrow keys move inside lists." />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Honest state surfaces, never blended into each other. -->
+                    <Border x:Name="LatchDisconnectedCard" Style="{StaticResource HavenCardStyle}"
+                            BorderBrush="{ThemeResource HavenWarningBrush}" Visibility="Collapsed">
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="Not connected to Latch" Style="{StaticResource HavenSectionTextStyle}" />
+                            <TextBlock x:Name="LatchDisconnectedText" TextWrapping="Wrap"
+                                       Style="{StaticResource HavenBodyTextStyle}" />
+                            <Button Content="Retry" Click="OnLatchRefreshClicked"
+                                    Style="{StaticResource HavenPrimaryButtonStyle}"
+                                    AutomationProperties.Name="Retry Latch connection" />
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="LatchStaleBanner" Background="{ThemeResource HavenWarningTintBrush}"
+                            BorderBrush="{ThemeResource HavenWarningBrush}" BorderThickness="0,0,0,1"
+                            Padding="12,6" Visibility="Collapsed">
+                        <TextBlock x:Name="LatchStaleText" TextWrapping="Wrap"
+                                   Style="{StaticResource HavenBodyTextStyle}"
+                                   Foreground="{ThemeResource HavenTextBrush}" />
+                    </Border>
+                    <StackPanel x:Name="LatchLoadingPanel" Orientation="Horizontal" Spacing="10" Visibility="Collapsed">
+                        <ProgressRing Width="18" Height="18" IsActive="True" />
+                        <TextBlock Text="Loading Latch data…" VerticalAlignment="Center"
+                                   Style="{StaticResource HavenMetadataTextStyle}" />
+                    </StackPanel>
+                    <TextBlock x:Name="LatchErrorText" TextWrapping="Wrap" Foreground="{ThemeResource HavenDangerBrush}" />
+                    <TextBlock x:Name="LatchStatusText" Style="{StaticResource HavenMetadataTextStyle}" />
+
+                    <StackPanel x:Name="LatchTabs" Orientation="Horizontal" Spacing="4">
+                        <Button Content="Ledger" Tag="ledger" Click="OnLatchTabClicked"
+                                Style="{StaticResource HavenTabButtonStyle}"
+                                AutomationProperties.Name="Latch ledger tab" />
+                        <Button Content="Access review" Tag="access" Click="OnLatchTabClicked"
+                                Style="{StaticResource HavenTabButtonStyle}"
+                                AutomationProperties.Name="Latch access review tab" />
+                        <Button Content="Review proposals" Tag="proposals" Click="OnLatchTabClicked"
+                                Style="{StaticResource HavenTabButtonStyle}"
+                                AutomationProperties.Name="Latch review proposals tab" />
+                    </StackPanel>
+
+                    <Grid x:Name="LatchSplit" ColumnSpacing="18">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.5*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="6">
+                            <!-- Ledger columns are Latch field names rendered
+                                 verbatim; renewal/cancel-by instants are
+                                 Latch-computed and passed through untouched. -->
+                            <Grid x:Name="LatchColumnHeader" ColumnSpacing="10" Padding="10,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150" />
+                                    <ColumnDefinition Width="96" />
+                                    <ColumnDefinition Width="106" />
+                                    <ColumnDefinition Width="106" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="104" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Provider" Style="{StaticResource HavenMetadataTextStyle}" />
+                                <TextBlock Grid.Column="1" Text="Cost" Style="{StaticResource HavenMetadataTextStyle}" />
+                                <TextBlock Grid.Column="2" Text="Renewal" Style="{StaticResource HavenMetadataTextStyle}" />
+                                <TextBlock Grid.Column="3" Text="Cancel by" Style="{StaticResource HavenMetadataTextStyle}" />
+                                <TextBlock Grid.Column="4" Text="Source observation" Style="{StaticResource HavenMetadataTextStyle}" />
+                                <TextBlock Grid.Column="5" Text="Confidence" Style="{StaticResource HavenMetadataTextStyle}" />
+                            </Grid>
+                            <ListView x:Name="LatchList" SelectionChanged="OnLatchSelectionChanged" MaxHeight="520"
+                                      ItemContainerStyle="{StaticResource HavenListItemStyle}"
+                                      AutomationProperties.Name="Latch records" />
+                            <TextBlock x:Name="LatchEmptyText" Style="{StaticResource HavenMetadataTextStyle}"
+                                       TextWrapping="Wrap" Visibility="Collapsed" />
+                        </StackPanel>
+                        <Border Grid.Column="1" Style="{StaticResource HavenCardStyle}" Padding="18"
+                                VerticalAlignment="Top">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="560">
+                                <StackPanel x:Name="LatchDetails" Spacing="10">
+                                    <TextBlock Text="Select a record to see its evidence, observed dates, reasoning, impact and actions."
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Border>
+                    </Grid>
                 </StackPanel>
 
                 <!-- Models (spec 38): Local / Downloaded / External / Downloads. -->
