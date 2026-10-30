@@ -1,6 +1,6 @@
 # HAVEN for Windows
 
-Download [HAVENSetup.exe](https://github.com/The-Hidden-Canopy/HAVEN/raw/refs/heads/main/downloads/windows/HAVENSetup.exe), open it, and follow the installer. Then open **HAVEN** from the Start menu. Python, .NET, developer tools and a source checkout are included or unnecessary; there is no account or paid service required to start.
+Download [HAVENSetup.exe](https://github.com/The-Hidden-Canopy/HAVEN/raw/refs/heads/main/downloads/windows/HAVENSetup.exe), open it, and follow the installer. Then open **HAVEN** from the Start menu. The Python and .NET runtimes are bundled; no developer tools or source checkout are required. There is no account or paid service required to start.
 
 This unsigned preview requires Windows 10 version 1809 or later on an x64 computer. Windows may display a warning or block unsigned software. Optional models, hardware and provider connections need their own configuration; proprietary plugins are not included.
 
