@@ -80,7 +80,7 @@ def build(output: Path, python_root: Path):
     work = output.parent / (output.name + "-build")
     if work.exists():
         raise ValueError("Build workspace already exists; select another output name.")
-    work.mkdir()
+    work.mkdir(parents=True)
     output.mkdir(parents=True)
     source = work / "source"
     source.mkdir()
