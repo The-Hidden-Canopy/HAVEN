@@ -70,7 +70,15 @@ def copy_dependency_notices(source: Path, output: Path):
     for project in ("Haven.Desktop", "Haven.Launcher"):
         assets = json.loads((source / "native" / project / "obj/project.assets.json").read_text(encoding="utf-8"))
         roots = [Path(p) for p in assets["packageFolders"]]
-        for identity, record in assets["libraries"].items():
+        resolved = dict(assets["libraries"])
+        for framework in assets["project"].get("frameworks", {}).values():
+            for dependency in framework.get("downloadDependencies", []):
+                bounds = dependency["version"].strip("[]").split(",")
+                if len(bounds) != 2 or bounds[0].strip() != bounds[1].strip():
+                    raise ValueError("Runtime dependency is not pinned.")
+                identity = dependency["name"] + "/" + bounds[0].strip()
+                resolved.setdefault(identity, {"type": "package", "path": identity.lower()})
+        for identity, record in resolved.items():
             if record.get("type") != "package" or identity in packages:
                 continue
             relative = Path(record["path"])
@@ -98,6 +106,8 @@ def copy_dependency_notices(source: Path, output: Path):
                     raise ValueError("Unsafe dependency notice input.")
                 relative_file = file.relative_to(package)
                 target = output / "licenses/nuget" / relative / relative_file
+                if not target.resolve().is_relative_to(output.resolve()):
+                    raise ValueError("Unsafe dependency notice destination.")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(file, target)
                 copied.append(target.relative_to(output).as_posix())
