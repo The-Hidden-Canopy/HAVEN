@@ -449,7 +449,7 @@ public sealed partial class MainWindow
             var enabled = voice.TryGetProperty("enabled", out var voiceEnabled) && voiceEnabled.GetBoolean();
             Row("Voice", enabled ? $"enabled Â· {GetString(voice, "state") ?? "?"}" : "disabled");
         }
-        Row("Uptime", $"{GetInt(_diagnostics, "uptime_seconds")} s");
+        Row("Uptime", DiagnosticsFormatting.Uptime(_diagnostics));
     }
 
     private async void OnProbeProviderClicked(object sender, RoutedEventArgs args)

@@ -8,4 +8,6 @@ The installer runs for your Windows account and defaults to `%LOCALAPPDATA%\Prog
 
 The package contains the native WinUI desktop client, the public HAVEN Core, its Python runtime, the .NET/Windows App SDK runtime, and upstream license notices. `bundle-manifest.json` in the install folder records the source revision and payload hashes. `SHA256SUMS.txt` beside this file records the installer hash.
 
+Preview `0.1.0-preview.20261030.1` fixes Settings diagnostics when Core reports a fractional uptime. It retains the original light and dark logos.
+
 Real providers, security enrollment and physical Android pairing are separate acceptance steps. Installation does not enroll credentials, enable paid accounts or grant a provider authority.

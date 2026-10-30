@@ -4,8 +4,8 @@
 [Setup]
 AppId={{CEE22DD7-A850-4C71-A08D-F3AFC7969AA4}
 AppName=HAVEN
-AppVersion=0.1.0-preview.20261030
-VersionInfoVersion=0.1.0.0
+AppVersion=0.1.0-preview.20261030.1
+VersionInfoVersion=0.1.0.1
 AppPublisher=The Hidden Canopy LLC
 AppPublisherURL=https://github.com/The-Hidden-Canopy/HAVEN
 DefaultDirName={localappdata}\Programs\HAVEN
