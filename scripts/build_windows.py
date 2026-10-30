@@ -199,6 +199,11 @@ def build(output: Path, python_root: Path):
         target = output / "runtime" / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
+    for logo in ("haven-logo-light.png", "haven-logo-dark.png"):
+        native_logo = output / "native/Assets" / logo
+        original_logo = output / "haven/web/static" / logo
+        if not native_logo.is_file() or native_logo.read_bytes() != original_logo.read_bytes():
+            raise ValueError("Native publish omitted or changed an approved theme logo.")
     dependencies = copy_crypto_runtime(python_root, output)
     dotnet_packages = copy_dependency_notices(work / "source", output)
     forbidden = {".db", ".sqlite", ".sqlite3", ".pem", ".key", ".pfx", ".pdb", ".pyc", ".log", ".patch", ".diff", ".gguf", ".safetensors", ".onnx", ".pt", ".pth"}
