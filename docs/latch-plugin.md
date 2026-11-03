@@ -1,6 +1,6 @@
 # Latch plugin (HAVEN)
 
-The Latch page is a read + propose window into [Latch](../../Latch/README.md):
+The Latch page is a read + propose window into Latch:
 subscriptions (the ledger), access grants under review, the scheduler's
 durable review proposals, and the action plans that flow from them. It ships
 in two shells that share one boundary:

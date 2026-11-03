@@ -7,7 +7,7 @@ standalone executable is not treated as a connected plugin.
 
 ## Source inventory
 
-- **Latch:** The Hidden Canopy LLC's [Latch reference adapter](E:/HiddenCanopy/Latch/integrations/haven/adapter.py) uses the Latch Python SDK and
+- **Latch:** The Hidden Canopy LLC's Latch reference adapter (`integrations/haven/adapter.py` in the Latch source) uses the Latch Python SDK and
   `latch.ipc` version 1. It reads commitments, access grants, review proposals,
   action plans and evidence; its cancellation method calls `actions.plan` and
   intentionally has no authorize/execute/verify method. It has not been wired
@@ -17,7 +17,7 @@ standalone executable is not treated as a connected plugin.
   phone projection. A real deployment needs a bounded, authenticated local
   transport and verified version compatibility; the existing reference SDK's
   socket has no timeout by default and does not itself establish that here.
-- **Harbor:** The Hidden Canopy LLC's [Harbor HAVEN adapter](C:/Users/envyn/Documents/Codex/2026-10-29/task/harbor/clients/haven-plugin/README.md) is a WinUI owner surface;
+- **Harbor:** The Hidden Canopy LLC's Harbor HAVEN adapter (`clients/haven-plugin` in the Harbor source) is a WinUI owner surface;
   its currently deployed owner pipe is deny-only. Harbor's `harbor-ui` models
   have bounded metadata snapshots for vault objects, request audit, app grants
   and history. Request audit is not a pending approval queue. `HarborAdapter`
